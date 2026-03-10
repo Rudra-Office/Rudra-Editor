@@ -1,0 +1,15 @@
+[package]
+name = "s1-format-pdf"
+description = "PDF export for s1engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-model = { workspace = true }
+s1-layout = { workspace = true }
+# pdf-writer, subsetter, image — added in Phase 3
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

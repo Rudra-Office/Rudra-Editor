@@ -1,0 +1,942 @@
+//! Document tree structure — the core container for the document model.
+//!
+//! [`DocumentModel`] holds all nodes in a flat HashMap, with parent/child
+//! relationships encoded via [`NodeId`] references. This design allows O(1) node
+//! lookup and is compatible with CRDT node addressing.
+
+use std::collections::HashMap;
+
+use crate::attributes::{AttributeKey, AttributeMap};
+use crate::id::{IdGenerator, NodeId};
+use crate::media::MediaStore;
+use crate::metadata::DocumentMetadata;
+use crate::node::{Node, NodeType};
+use crate::styles::{resolve_style_chain, Style};
+
+/// Error type for document model operations.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ModelError {
+    /// The specified node was not found.
+    NodeNotFound(NodeId),
+    /// The child type is not allowed under the given parent type.
+    InvalidHierarchy {
+        parent_type: NodeType,
+        child_type: NodeType,
+    },
+    /// The index is out of bounds for the parent's children.
+    IndexOutOfBounds {
+        parent_id: NodeId,
+        index: usize,
+        child_count: usize,
+    },
+    /// Cannot remove the root node.
+    CannotRemoveRoot,
+    /// The node is not a Text node (for text operations).
+    NotATextNode(NodeId),
+    /// Text offset is out of bounds.
+    TextOffsetOutOfBounds {
+        node_id: NodeId,
+        offset: usize,
+        text_len: usize,
+    },
+}
+
+impl std::fmt::Display for ModelError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NodeNotFound(id) => write!(f, "Node not found: {id}"),
+            Self::InvalidHierarchy {
+                parent_type,
+                child_type,
+            } => write!(f, "{parent_type} cannot contain {child_type}"),
+            Self::IndexOutOfBounds {
+                parent_id,
+                index,
+                child_count,
+            } => write!(
+                f,
+                "Index {index} out of bounds for node {parent_id} (has {child_count} children)"
+            ),
+            Self::CannotRemoveRoot => write!(f, "Cannot remove the root document node"),
+            Self::NotATextNode(id) => write!(f, "Node {id} is not a Text node"),
+            Self::TextOffsetOutOfBounds {
+                node_id,
+                offset,
+                text_len,
+            } => write!(
+                f,
+                "Text offset {offset} out of bounds for node {node_id} (length {text_len})"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ModelError {}
+
+/// The complete document model.
+///
+/// Stores all nodes in a flat map with tree relationships via [`NodeId`] references.
+/// Provides tree query and mutation methods.
+#[derive(Debug, Clone)]
+pub struct DocumentModel {
+    nodes: HashMap<NodeId, Node>,
+    root: NodeId,
+    id_gen: IdGenerator,
+    styles: Vec<Style>,
+    metadata: DocumentMetadata,
+    media: MediaStore,
+}
+
+impl DocumentModel {
+    /// Create a new empty document with default replica ID (0).
+    pub fn new() -> Self {
+        Self::new_with_replica(0)
+    }
+
+    /// Create a new empty document for a specific replica (for CRDT collaboration).
+    pub fn new_with_replica(replica_id: u64) -> Self {
+        let mut id_gen = IdGenerator::new(replica_id);
+
+        // Create root Document node
+        let mut root = Node::new(NodeId::ROOT, NodeType::Document);
+
+        // Create Body node
+        let body_id = id_gen.next_id();
+        let mut body = Node::new(body_id, NodeType::Body);
+        body.parent = Some(NodeId::ROOT);
+
+        root.children.push(body_id);
+
+        let mut nodes = HashMap::new();
+        nodes.insert(NodeId::ROOT, root);
+        nodes.insert(body_id, body);
+
+        Self {
+            nodes,
+            root: NodeId::ROOT,
+            id_gen,
+            styles: Vec::new(),
+            metadata: DocumentMetadata::new(),
+            media: MediaStore::new(),
+        }
+    }
+
+    // ─── ID generation ──────────────────────────────────────────────────
+
+    /// Generate the next unique node ID for this document.
+    pub fn next_id(&mut self) -> NodeId {
+        self.id_gen.next_id()
+    }
+
+    /// Get the replica ID.
+    pub fn replica_id(&self) -> u64 {
+        self.id_gen.replica()
+    }
+
+    // ─── Tree queries ───────────────────────────────────────────────────
+
+    /// Get the root node ID.
+    pub fn root_id(&self) -> NodeId {
+        self.root
+    }
+
+    /// Get the body node ID (first Body child of root).
+    pub fn body_id(&self) -> Option<NodeId> {
+        self.node(self.root)?
+            .children
+            .iter()
+            .find(|&&id| {
+                self.node(id)
+                    .is_some_and(|n| n.node_type == NodeType::Body)
+            })
+            .copied()
+    }
+
+    /// Get a node by ID.
+    pub fn node(&self, id: NodeId) -> Option<&Node> {
+        self.nodes.get(&id)
+    }
+
+    /// Get a mutable reference to a node by ID.
+    pub fn node_mut(&mut self, id: NodeId) -> Option<&mut Node> {
+        self.nodes.get_mut(&id)
+    }
+
+    /// Get the root node.
+    pub fn root_node(&self) -> &Node {
+        self.nodes.get(&self.root).expect("root node must exist")
+    }
+
+    /// Get the children of a node.
+    pub fn children(&self, id: NodeId) -> Vec<&Node> {
+        self.node(id)
+            .map(|n| {
+                n.children
+                    .iter()
+                    .filter_map(|child_id| self.node(*child_id))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Get the parent of a node.
+    pub fn parent(&self, id: NodeId) -> Option<&Node> {
+        self.node(id).and_then(|n| n.parent).and_then(|pid| self.node(pid))
+    }
+
+    /// Walk ancestors from a node up to (but not including) the root.
+    pub fn ancestors(&self, id: NodeId) -> Vec<&Node> {
+        let mut result = Vec::new();
+        let mut current = self.node(id).and_then(|n| n.parent);
+        while let Some(pid) = current {
+            if let Some(node) = self.node(pid) {
+                result.push(node);
+                current = node.parent;
+            } else {
+                break;
+            }
+        }
+        result
+    }
+
+    /// Depth-first traversal of all descendants of a node (excluding the node itself).
+    pub fn descendants(&self, id: NodeId) -> Vec<&Node> {
+        let mut result = Vec::new();
+        let mut stack = Vec::new();
+
+        if let Some(node) = self.node(id) {
+            // Push children in reverse order so first child is processed first
+            for child_id in node.children.iter().rev() {
+                stack.push(*child_id);
+            }
+        }
+
+        while let Some(nid) = stack.pop() {
+            if let Some(node) = self.node(nid) {
+                result.push(node);
+                for child_id in node.children.iter().rev() {
+                    stack.push(*child_id);
+                }
+            }
+        }
+
+        result
+    }
+
+    /// Total number of nodes in the document.
+    pub fn node_count(&self) -> usize {
+        self.nodes.len()
+    }
+
+    /// Check if a node exists.
+    pub fn contains(&self, id: NodeId) -> bool {
+        self.nodes.contains_key(&id)
+    }
+
+    // ─── Tree mutations ─────────────────────────────────────────────────
+
+    /// Insert a node as a child of `parent_id` at the given `index`.
+    ///
+    /// Validates the parent-child type relationship and index bounds.
+    pub fn insert_node(
+        &mut self,
+        parent_id: NodeId,
+        index: usize,
+        mut node: Node,
+    ) -> Result<(), ModelError> {
+        // Validate parent exists
+        let parent = self
+            .nodes
+            .get(&parent_id)
+            .ok_or(ModelError::NodeNotFound(parent_id))?;
+
+        // Validate hierarchy
+        if !parent.node_type.can_contain(node.node_type) {
+            return Err(ModelError::InvalidHierarchy {
+                parent_type: parent.node_type,
+                child_type: node.node_type,
+            });
+        }
+
+        // Validate index
+        if index > parent.children.len() {
+            return Err(ModelError::IndexOutOfBounds {
+                parent_id,
+                index,
+                child_count: parent.children.len(),
+            });
+        }
+
+        // Set parent reference
+        node.parent = Some(parent_id);
+        let node_id = node.id;
+
+        // Insert node into storage
+        self.nodes.insert(node_id, node);
+
+        // Add to parent's children
+        let parent = self.nodes.get_mut(&parent_id).unwrap();
+        parent.children.insert(index, node_id);
+
+        Ok(())
+    }
+
+    /// Remove a node and all its descendants from the tree.
+    ///
+    /// Returns the removed node (without its descendants).
+    pub fn remove_node(&mut self, id: NodeId) -> Result<Node, ModelError> {
+        if id == self.root {
+            return Err(ModelError::CannotRemoveRoot);
+        }
+
+        let node = self
+            .nodes
+            .get(&id)
+            .ok_or(ModelError::NodeNotFound(id))?
+            .clone();
+
+        // Remove from parent's children
+        if let Some(parent_id) = node.parent {
+            if let Some(parent) = self.nodes.get_mut(&parent_id) {
+                parent.children.retain(|&child_id| child_id != id);
+            }
+        }
+
+        // Remove all descendants (DFS)
+        let descendant_ids: Vec<NodeId> = self
+            .descendants(id)
+            .iter()
+            .map(|n| n.id)
+            .collect();
+
+        for did in descendant_ids {
+            self.nodes.remove(&did);
+        }
+
+        // Remove the node itself
+        self.nodes.remove(&id);
+
+        Ok(node)
+    }
+
+    /// Move a node to a new parent at the given index.
+    pub fn move_node(
+        &mut self,
+        id: NodeId,
+        new_parent_id: NodeId,
+        new_index: usize,
+    ) -> Result<(), ModelError> {
+        if id == self.root {
+            return Err(ModelError::CannotRemoveRoot);
+        }
+
+        let node = self
+            .nodes
+            .get(&id)
+            .ok_or(ModelError::NodeNotFound(id))?;
+
+        let node_type = node.node_type;
+        let old_parent_id = node.parent;
+
+        // Validate new parent
+        let new_parent = self
+            .nodes
+            .get(&new_parent_id)
+            .ok_or(ModelError::NodeNotFound(new_parent_id))?;
+
+        if !new_parent.node_type.can_contain(node_type) {
+            return Err(ModelError::InvalidHierarchy {
+                parent_type: new_parent.node_type,
+                child_type: node_type,
+            });
+        }
+
+        // Remove from old parent
+        if let Some(old_pid) = old_parent_id {
+            if let Some(old_parent) = self.nodes.get_mut(&old_pid) {
+                old_parent.children.retain(|&child_id| child_id != id);
+            }
+        }
+
+        // Validate index after removal
+        let new_parent = self.nodes.get(&new_parent_id).unwrap();
+        let actual_index = new_index.min(new_parent.children.len());
+
+        // Add to new parent
+        let new_parent = self.nodes.get_mut(&new_parent_id).unwrap();
+        new_parent.children.insert(actual_index, id);
+
+        // Update parent reference
+        let node = self.nodes.get_mut(&id).unwrap();
+        node.parent = Some(new_parent_id);
+
+        Ok(())
+    }
+
+    // ─── Text operations ────────────────────────────────────────────────
+
+    /// Insert text into a Text node at the given character offset.
+    pub fn insert_text(
+        &mut self,
+        node_id: NodeId,
+        offset: usize,
+        text: &str,
+    ) -> Result<(), ModelError> {
+        let node = self
+            .nodes
+            .get_mut(&node_id)
+            .ok_or(ModelError::NodeNotFound(node_id))?;
+
+        if node.node_type != NodeType::Text {
+            return Err(ModelError::NotATextNode(node_id));
+        }
+
+        let content = node
+            .text_content
+            .get_or_insert_with(String::new);
+
+        if offset > content.len() {
+            return Err(ModelError::TextOffsetOutOfBounds {
+                node_id,
+                offset,
+                text_len: content.len(),
+            });
+        }
+
+        content.insert_str(offset, text);
+        Ok(())
+    }
+
+    /// Delete text from a Text node.
+    pub fn delete_text(
+        &mut self,
+        node_id: NodeId,
+        offset: usize,
+        length: usize,
+    ) -> Result<String, ModelError> {
+        let node = self
+            .nodes
+            .get_mut(&node_id)
+            .ok_or(ModelError::NodeNotFound(node_id))?;
+
+        if node.node_type != NodeType::Text {
+            return Err(ModelError::NotATextNode(node_id));
+        }
+
+        let content = node
+            .text_content
+            .get_or_insert_with(String::new);
+
+        let end = offset + length;
+        if end > content.len() {
+            return Err(ModelError::TextOffsetOutOfBounds {
+                node_id,
+                offset: end,
+                text_len: content.len(),
+            });
+        }
+
+        let deleted: String = content[offset..end].to_string();
+        content.replace_range(offset..end, "");
+        Ok(deleted)
+    }
+
+    // ─── Style queries ──────────────────────────────────────────────────
+
+    /// Get all styles.
+    pub fn styles(&self) -> &[Style] {
+        &self.styles
+    }
+
+    /// Get a style by its ID.
+    pub fn style_by_id(&self, id: &str) -> Option<&Style> {
+        self.styles.iter().find(|s| s.id == id)
+    }
+
+    /// Add or replace a style.
+    pub fn set_style(&mut self, style: Style) {
+        if let Some(existing) = self.styles.iter_mut().find(|s| s.id == style.id) {
+            *existing = style;
+        } else {
+            self.styles.push(style);
+        }
+    }
+
+    /// Remove a style by ID.
+    pub fn remove_style(&mut self, id: &str) -> Option<Style> {
+        if let Some(pos) = self.styles.iter().position(|s| s.id == id) {
+            Some(self.styles.remove(pos))
+        } else {
+            None
+        }
+    }
+
+    /// Resolve the fully merged attributes for a node, considering style inheritance.
+    ///
+    /// Resolution order (highest priority first):
+    /// 1. Direct attributes on the node
+    /// 2. Character style (if node is a Run with StyleId)
+    /// 3. Paragraph style (from ancestor Paragraph's StyleId)
+    /// 4. Default style
+    pub fn resolve_attributes(&self, node_id: NodeId) -> AttributeMap {
+        let node = match self.node(node_id) {
+            Some(n) => n,
+            None => return AttributeMap::new(),
+        };
+
+        let mut result = AttributeMap::new();
+
+        // Find paragraph ancestor's style
+        let para_style_id = self.find_ancestor_style(node_id, NodeType::Paragraph);
+        if let Some(style_id) = &para_style_id {
+            let resolved = resolve_style_chain(style_id, &self.styles);
+            result.merge(&resolved);
+        }
+
+        // Find character style (if node has StyleId)
+        if let Some(style_id) = node.attributes.get_string(&AttributeKey::StyleId) {
+            let resolved = resolve_style_chain(style_id, &self.styles);
+            result.merge(&resolved);
+        }
+
+        // Direct formatting wins
+        result.merge(&node.attributes);
+
+        result
+    }
+
+    /// Find the StyleId attribute from an ancestor of the given type.
+    fn find_ancestor_style(&self, node_id: NodeId, ancestor_type: NodeType) -> Option<String> {
+        let mut current = Some(node_id);
+        while let Some(id) = current {
+            if let Some(node) = self.node(id) {
+                if node.node_type == ancestor_type {
+                    return node
+                        .attributes
+                        .get_string(&AttributeKey::StyleId)
+                        .map(|s| s.to_string());
+                }
+                current = node.parent;
+            } else {
+                break;
+            }
+        }
+        None
+    }
+
+    // ─── Metadata and media ─────────────────────────────────────────────
+
+    /// Get document metadata.
+    pub fn metadata(&self) -> &DocumentMetadata {
+        &self.metadata
+    }
+
+    /// Get mutable document metadata.
+    pub fn metadata_mut(&mut self) -> &mut DocumentMetadata {
+        &mut self.metadata
+    }
+
+    /// Get the media store.
+    pub fn media(&self) -> &MediaStore {
+        &self.media
+    }
+
+    /// Get mutable media store.
+    pub fn media_mut(&mut self) -> &mut MediaStore {
+        &mut self.media
+    }
+
+    // ─── Plain text extraction ──────────────────────────────────────────
+
+    /// Extract all text from the document as a plain string.
+    /// Paragraphs are separated by newlines.
+    pub fn to_plain_text(&self) -> String {
+        let body_id = match self.body_id() {
+            Some(id) => id,
+            None => return String::new(),
+        };
+
+        let mut result = String::new();
+        self.extract_text(body_id, &mut result);
+        result
+    }
+
+    fn extract_text(&self, node_id: NodeId, out: &mut String) {
+        let node = match self.node(node_id) {
+            Some(n) => n,
+            None => return,
+        };
+
+        match node.node_type {
+            NodeType::Text => {
+                if let Some(text) = &node.text_content {
+                    out.push_str(text);
+                }
+            }
+            NodeType::Paragraph => {
+                if !out.is_empty() && !out.ends_with('\n') {
+                    out.push('\n');
+                }
+                let children: Vec<NodeId> = node.children.clone();
+                for child_id in children {
+                    self.extract_text(child_id, out);
+                }
+            }
+            NodeType::LineBreak => {
+                out.push('\n');
+            }
+            NodeType::Tab => {
+                out.push('\t');
+            }
+            _ => {
+                let children: Vec<NodeId> = node.children.clone();
+                for child_id in children {
+                    self.extract_text(child_id, out);
+                }
+            }
+        }
+    }
+}
+
+impl Default for DocumentModel {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::attributes::AttributeValue;
+
+    /// Helper: create a document with one paragraph containing one run with text.
+    fn doc_with_text(text: &str) -> (DocumentModel, NodeId, NodeId, NodeId) {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        let run = Node::new(run_id, NodeType::Run);
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        let text_node = Node::text(text_id, text);
+        doc.insert_node(run_id, 0, text_node).unwrap();
+
+        (doc, para_id, run_id, text_id)
+    }
+
+    #[test]
+    fn new_document_structure() {
+        let doc = DocumentModel::new();
+        assert_eq!(doc.node_count(), 2); // Document + Body
+        assert_eq!(doc.root_id(), NodeId::ROOT);
+        assert!(doc.body_id().is_some());
+
+        let root = doc.root_node();
+        assert_eq!(root.node_type, NodeType::Document);
+        assert_eq!(root.children.len(), 1);
+    }
+
+    #[test]
+    fn insert_paragraph() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        assert_eq!(doc.node_count(), 3);
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children, vec![para_id]);
+
+        let para = doc.node(para_id).unwrap();
+        assert_eq!(para.parent, Some(body_id));
+    }
+
+    #[test]
+    fn insert_invalid_hierarchy() {
+        let mut doc = DocumentModel::new();
+
+        // Try to put a Run directly under Body (not allowed)
+        let run_id = doc.next_id();
+        let run = Node::new(run_id, NodeType::Run);
+        let body_id = doc.body_id().unwrap();
+        let result = doc.insert_node(body_id, 0, run);
+        assert!(matches!(result, Err(ModelError::InvalidHierarchy { .. })));
+    }
+
+    #[test]
+    fn insert_index_out_of_bounds() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        let result = doc.insert_node(body_id, 999, para);
+        assert!(matches!(result, Err(ModelError::IndexOutOfBounds { .. })));
+    }
+
+    #[test]
+    fn remove_node() {
+        let (mut doc, para_id, _run_id, _text_id) = doc_with_text("Hello");
+        let initial_count = doc.node_count();
+
+        doc.remove_node(para_id).unwrap();
+        // Removed: para + run + text = 3 nodes
+        assert_eq!(doc.node_count(), initial_count - 3);
+        assert!(doc.node(para_id).is_none());
+    }
+
+    #[test]
+    fn cannot_remove_root() {
+        let mut doc = DocumentModel::new();
+        let result = doc.remove_node(NodeId::ROOT);
+        assert!(matches!(result, Err(ModelError::CannotRemoveRoot)));
+    }
+
+    #[test]
+    fn move_node() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Create two paragraphs
+        let para1_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para1_id, NodeType::Paragraph))
+            .unwrap();
+
+        let para2_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(para2_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Create a run in para1
+        let run_id = doc.next_id();
+        doc.insert_node(para1_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+
+        // Move run from para1 to para2
+        doc.move_node(run_id, para2_id, 0).unwrap();
+
+        assert!(doc.node(para1_id).unwrap().children.is_empty());
+        assert_eq!(doc.node(para2_id).unwrap().children, vec![run_id]);
+        assert_eq!(doc.node(run_id).unwrap().parent, Some(para2_id));
+    }
+
+    #[test]
+    fn insert_text_operation() {
+        let (mut doc, _para_id, _run_id, text_id) = doc_with_text("Hello");
+
+        doc.insert_text(text_id, 5, " World").unwrap();
+        assert_eq!(
+            doc.node(text_id).unwrap().text_content.as_deref(),
+            Some("Hello World")
+        );
+    }
+
+    #[test]
+    fn insert_text_at_beginning() {
+        let (mut doc, _p, _r, text_id) = doc_with_text("World");
+        doc.insert_text(text_id, 0, "Hello ").unwrap();
+        assert_eq!(
+            doc.node(text_id).unwrap().text_content.as_deref(),
+            Some("Hello World")
+        );
+    }
+
+    #[test]
+    fn insert_text_out_of_bounds() {
+        let (mut doc, _p, _r, text_id) = doc_with_text("Hi");
+        let result = doc.insert_text(text_id, 100, "x");
+        assert!(matches!(
+            result,
+            Err(ModelError::TextOffsetOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn delete_text_operation() {
+        let (mut doc, _p, _r, text_id) = doc_with_text("Hello World");
+
+        let deleted = doc.delete_text(text_id, 5, 6).unwrap();
+        assert_eq!(deleted, " World");
+        assert_eq!(
+            doc.node(text_id).unwrap().text_content.as_deref(),
+            Some("Hello")
+        );
+    }
+
+    #[test]
+    fn delete_text_out_of_bounds() {
+        let (mut doc, _p, _r, text_id) = doc_with_text("Hi");
+        let result = doc.delete_text(text_id, 0, 100);
+        assert!(matches!(
+            result,
+            Err(ModelError::TextOffsetOutOfBounds { .. })
+        ));
+    }
+
+    #[test]
+    fn text_operation_on_non_text_node() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let result = doc.insert_text(para_id, 0, "x");
+        assert!(matches!(result, Err(ModelError::NotATextNode(_))));
+    }
+
+    #[test]
+    fn descendants_dfs() {
+        let (doc, para_id, run_id, text_id) = doc_with_text("Hello");
+        let body_id = doc.body_id().unwrap();
+
+        let desc = doc.descendants(body_id);
+        let desc_ids: Vec<NodeId> = desc.iter().map(|n| n.id).collect();
+        assert_eq!(desc_ids, vec![para_id, run_id, text_id]);
+    }
+
+    #[test]
+    fn ancestors() {
+        let (doc, para_id, _run_id, text_id) = doc_with_text("Hello");
+        let body_id = doc.body_id().unwrap();
+
+        let anc = doc.ancestors(text_id);
+        let anc_types: Vec<NodeType> = anc.iter().map(|n| n.node_type).collect();
+        // Run → Paragraph → Body → Document
+        assert_eq!(
+            anc_types,
+            vec![
+                NodeType::Run,
+                NodeType::Paragraph,
+                NodeType::Body,
+                NodeType::Document,
+            ]
+        );
+
+        let _ = (para_id, body_id); // used in assertions above via ancestor chain
+    }
+
+    #[test]
+    fn plain_text_extraction() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Paragraph 1: "Hello"
+        let p1 = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Hello"))
+            .unwrap();
+
+        // Paragraph 2: "World"
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "World"))
+            .unwrap();
+
+        assert_eq!(doc.to_plain_text(), "Hello\nWorld");
+    }
+
+    #[test]
+    fn style_management() {
+        let mut doc = DocumentModel::new();
+        assert!(doc.styles().is_empty());
+
+        let style = Style::new("Normal", "Normal", crate::styles::StyleType::Paragraph);
+        doc.set_style(style);
+        assert_eq!(doc.styles().len(), 1);
+        assert!(doc.style_by_id("Normal").is_some());
+
+        // Update existing
+        let updated = Style::new("Normal", "Normal Updated", crate::styles::StyleType::Paragraph);
+        doc.set_style(updated);
+        assert_eq!(doc.styles().len(), 1);
+        assert_eq!(doc.style_by_id("Normal").unwrap().name, "Normal Updated");
+
+        // Remove
+        doc.remove_style("Normal");
+        assert!(doc.styles().is_empty());
+    }
+
+    #[test]
+    fn attribute_resolution_with_styles() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Add a style
+        let style = Style::new("Heading1", "Heading 1", crate::styles::StyleType::Paragraph)
+            .with_attributes(
+                AttributeMap::new()
+                    .bold(true)
+                    .font_size(24.0),
+            );
+        doc.set_style(style);
+
+        // Create paragraph with style reference
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::StyleId,
+            AttributeValue::String("Heading1".into()),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        // Create run with direct formatting (italic)
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes
+            .set(AttributeKey::Italic, AttributeValue::Bool(true));
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        // Resolve run attributes: should have bold (from style) + italic (direct)
+        let resolved = doc.resolve_attributes(run_id);
+        assert_eq!(resolved.get_bool(&AttributeKey::Bold), Some(true));
+        assert_eq!(resolved.get_bool(&AttributeKey::Italic), Some(true));
+        assert_eq!(resolved.get_f64(&AttributeKey::FontSize), Some(24.0));
+    }
+
+    #[test]
+    fn nested_tables() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Table > Row > Cell > Table > Row > Cell > Paragraph
+        let tbl = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(tbl, NodeType::Table)).unwrap();
+
+        let row = doc.next_id();
+        doc.insert_node(tbl, 0, Node::new(row, NodeType::TableRow)).unwrap();
+
+        let cell = doc.next_id();
+        doc.insert_node(row, 0, Node::new(cell, NodeType::TableCell)).unwrap();
+
+        // Nested table inside cell
+        let inner_tbl = doc.next_id();
+        doc.insert_node(cell, 0, Node::new(inner_tbl, NodeType::Table)).unwrap();
+
+        assert_eq!(doc.node(inner_tbl).unwrap().parent, Some(cell));
+    }
+
+    #[test]
+    fn replica_ids() {
+        let doc_a = DocumentModel::new_with_replica(1);
+        let doc_b = DocumentModel::new_with_replica(2);
+        assert_eq!(doc_a.replica_id(), 1);
+        assert_eq!(doc_b.replica_id(), 2);
+    }
+}

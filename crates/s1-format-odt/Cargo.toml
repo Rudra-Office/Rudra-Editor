@@ -1,0 +1,15 @@
+[package]
+name = "s1-format-odt"
+description = "ODT (ODF) reader/writer for s1engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-model = { workspace = true }
+quick-xml = { workspace = true }
+zip = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

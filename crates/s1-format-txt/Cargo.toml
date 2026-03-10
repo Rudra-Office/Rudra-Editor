@@ -1,0 +1,14 @@
+[package]
+name = "s1-format-txt"
+description = "Plain text reader/writer for s1engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-model = { workspace = true }
+encoding_rs = { workspace = true }
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }

@@ -1,0 +1,14 @@
+[package]
+name = "s1-ops"
+description = "Operations, transactions, undo/redo for s1engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-model = { workspace = true }
+
+[dev-dependencies]
+proptest = { workspace = true }
+pretty_assertions = { workspace = true }

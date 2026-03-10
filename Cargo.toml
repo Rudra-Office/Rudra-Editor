@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/s1-model",
+    "crates/s1-ops",
+    "crates/s1-format-docx",
+    "crates/s1-format-odt",
+    "crates/s1-format-pdf",
+    "crates/s1-format-txt",
+    "crates/s1-convert",
+    "crates/s1-layout",
+    "crates/s1-text",
+    "crates/s1engine",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/user/s1engine"
+
+[workspace.dependencies]
+# Internal crates
+s1-model = { path = "crates/s1-model" }
+s1-ops = { path = "crates/s1-ops" }
+s1-format-docx = { path = "crates/s1-format-docx" }
+s1-format-odt = { path = "crates/s1-format-odt" }
+s1-format-pdf = { path = "crates/s1-format-pdf" }
+s1-format-txt = { path = "crates/s1-format-txt" }
+s1-convert = { path = "crates/s1-convert" }
+s1-layout = { path = "crates/s1-layout" }
+s1-text = { path = "crates/s1-text" }
+s1engine = { path = "crates/s1engine" }
+
+# External dependencies
+thiserror = "2"
+quick-xml = "0.37"
+zip = "2"
+base64 = "0.22"
+encoding_rs = "0.8"
+
+# Dev dependencies
+proptest = "1"
+pretty_assertions = "1"

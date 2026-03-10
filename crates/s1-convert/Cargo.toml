@@ -1,0 +1,16 @@
+[package]
+name = "s1-convert"
+description = "Format conversion pipelines for s1engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+s1-model = { workspace = true }
+s1-format-docx = { workspace = true }
+s1-format-odt = { workspace = true }
+# cfb — added in Phase 3
+
+[dev-dependencies]
+pretty_assertions = { workspace = true }
