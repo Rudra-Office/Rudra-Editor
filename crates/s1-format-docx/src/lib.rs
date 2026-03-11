@@ -13,13 +13,21 @@
 //! # Phase 2 (planned)
 //! - Tables, images, lists, headers/footers, hyperlinks, bookmarks, comments
 
+pub mod comments_parser;
+pub mod comments_writer;
 pub mod content_parser;
 pub mod content_writer;
 pub mod error;
+pub mod header_footer_parser;
+pub mod header_footer_writer;
 pub mod metadata_parser;
 pub mod metadata_writer;
+pub mod numbering_parser;
+pub mod numbering_writer;
 pub mod property_parser;
 pub mod reader;
+pub mod section_parser;
+pub mod section_writer;
 pub mod style_parser;
 pub mod style_writer;
 pub mod writer;

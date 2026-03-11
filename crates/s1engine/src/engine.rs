@@ -45,6 +45,8 @@ impl Engine {
         let model = match format {
             #[cfg(feature = "docx")]
             Format::Docx => s1_format_docx::read(data)?,
+            #[cfg(feature = "odt")]
+            Format::Odt => s1_format_odt::read(data)?,
             #[cfg(feature = "txt")]
             Format::Txt => {
                 let result = s1_format_txt::read(data)?;

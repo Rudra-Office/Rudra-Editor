@@ -57,6 +57,13 @@ impl From<s1_format_docx::DocxError> for Error {
     }
 }
 
+#[cfg(feature = "odt")]
+impl From<s1_format_odt::OdtError> for Error {
+    fn from(e: s1_format_odt::OdtError) -> Self {
+        Self::Format(e.to_string())
+    }
+}
+
 #[cfg(feature = "txt")]
 impl From<s1_format_txt::TxtError> for Error {
     fn from(e: s1_format_txt::TxtError) -> Self {

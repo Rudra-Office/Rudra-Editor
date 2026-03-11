@@ -6,10 +6,7 @@ use std::fmt;
 #[derive(Debug, Clone, PartialEq)]
 pub enum TxtError {
     /// The input bytes could not be decoded as valid text.
-    DecodingError {
-        encoding: String,
-        message: String,
-    },
+    DecodingError { encoding: String, message: String },
 }
 
 impl fmt::Display for TxtError {

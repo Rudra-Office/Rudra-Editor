@@ -32,6 +32,8 @@ pub mod id;
 pub mod media;
 pub mod metadata;
 pub mod node;
+pub mod numbering;
+pub mod section;
 pub mod styles;
 pub mod tree;
 
@@ -45,5 +47,9 @@ pub use id::{IdGenerator, NodeId};
 pub use media::{MediaItem, MediaStore};
 pub use metadata::DocumentMetadata;
 pub use node::{Node, NodeType};
+pub use numbering::{
+    AbstractNumbering, LevelOverride, NumberingDefinitions, NumberingInstance, NumberingLevel,
+};
+pub use section::{HeaderFooterRef, HeaderFooterType, SectionBreakType, SectionProperties};
 pub use styles::{Style, StyleType};
 pub use tree::{DocumentModel, ModelError};

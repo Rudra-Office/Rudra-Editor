@@ -37,7 +37,7 @@ pub mod error;
 pub mod format;
 
 // Re-export primary facade types.
-pub use builder::{DocumentBuilder, ParagraphBuilder};
+pub use builder::{DocumentBuilder, ParagraphBuilder, RowBuilder, TableBuilder};
 pub use document::Document;
 pub use engine::Engine;
 pub use error::Error;
@@ -46,11 +46,15 @@ pub use format::Format;
 // Re-export key model types consumers will need.
 pub use s1_model::{
     Alignment, AttributeKey, AttributeMap, AttributeValue, Color, DocumentMetadata, DocumentModel,
-    LineSpacing, Node, NodeId, NodeType, Style, StyleType, UnderlineStyle,
+    FieldType, HeaderFooterRef, HeaderFooterType, LineSpacing, ListFormat, ListInfo, Node, NodeId,
+    NodeType, PageOrientation, SectionBreakType, SectionProperties, Style, StyleType,
+    UnderlineStyle,
 };
 
 // Re-export operation types.
-pub use s1_ops::{History, Operation, OperationError, Position, Selection, Transaction, TransactionBuilder};
+pub use s1_ops::{
+    History, Operation, OperationError, Position, Selection, Transaction, TransactionBuilder,
+};
 
 // Provide access to internal crates for advanced use cases.
 pub use s1_model as model;
@@ -191,6 +195,62 @@ mod tests {
         // Export back to TXT
         let txt = doc.export_string(Format::Txt).unwrap();
         assert_eq!(txt, "Line one\nLine two");
+    }
+
+    #[cfg(feature = "odt")]
+    #[test]
+    fn open_and_export_odt() {
+        let engine = Engine::new();
+        let mut doc = engine.create();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.apply(Operation::insert_node(
+            body_id,
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        ))
+        .unwrap();
+
+        let run_id = doc.next_id();
+        doc.apply(Operation::insert_node(
+            para_id,
+            0,
+            Node::new(run_id, NodeType::Run),
+        ))
+        .unwrap();
+
+        let text_id = doc.next_id();
+        doc.apply(Operation::insert_node(
+            run_id,
+            0,
+            Node::text(text_id, "ODT round-trip"),
+        ))
+        .unwrap();
+
+        let bytes = doc.export(Format::Odt).unwrap();
+
+        let doc2 = engine.open_as(&bytes, Format::Odt).unwrap();
+        assert!(doc2.to_plain_text().contains("ODT round-trip"));
+    }
+
+    #[cfg(feature = "odt")]
+    #[test]
+    fn odt_builder_roundtrip() {
+        let doc = DocumentBuilder::new()
+            .heading(1, "Title")
+            .paragraph(|p| p.text("Some text").bold("bold part"))
+            .build();
+
+        let bytes = doc.export(Format::Odt).unwrap();
+
+        let engine = Engine::new();
+        let doc2 = engine.open_as(&bytes, Format::Odt).unwrap();
+
+        let text = doc2.to_plain_text();
+        assert!(text.contains("Title"));
+        assert!(text.contains("Some text"));
+        assert!(text.contains("bold part"));
     }
 
     #[test]

@@ -82,9 +82,7 @@ impl Format {
     /// MIME type for this format.
     pub fn mime_type(&self) -> &'static str {
         match self {
-            Self::Docx => {
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            }
+            Self::Docx => "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
             Self::Odt => "application/vnd.oasis.opendocument.text",
             Self::Pdf => "application/pdf",
             Self::Txt => "text/plain",

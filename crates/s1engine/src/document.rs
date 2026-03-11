@@ -120,6 +120,16 @@ impl Document {
         self.model.style_by_id(id)
     }
 
+    /// Get the numbering definitions.
+    pub fn numbering(&self) -> &s1_model::NumberingDefinitions {
+        self.model.numbering()
+    }
+
+    /// Get section properties.
+    pub fn sections(&self) -> &[s1_model::SectionProperties] {
+        self.model.sections()
+    }
+
     // ─── Transactions ────────────────────────────────────────────────
 
     /// Begin building a new transaction.
@@ -179,6 +189,8 @@ impl Document {
         match format {
             #[cfg(feature = "docx")]
             Format::Docx => Ok(s1_format_docx::write(&self.model)?),
+            #[cfg(feature = "odt")]
+            Format::Odt => Ok(s1_format_odt::write(&self.model)?),
             #[cfg(feature = "txt")]
             Format::Txt => Ok(s1_format_txt::write(&self.model)),
             #[allow(unreachable_patterns)]

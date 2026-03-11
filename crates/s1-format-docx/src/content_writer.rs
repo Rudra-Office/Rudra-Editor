@@ -1,36 +1,68 @@
 //! Generate `word/document.xml` from a DocumentModel.
 
 use s1_model::{
-    Alignment, AttributeKey, AttributeValue, Color, DocumentModel, LineSpacing, NodeId, NodeType,
-    UnderlineStyle,
+    Alignment, AttributeKey, AttributeValue, BorderSide, BorderStyle, Borders, Color,
+    DocumentModel, FieldType, LineSpacing, MediaId, NodeId, NodeType, TabAlignment, TabLeader,
+    TableWidth, UnderlineStyle, VerticalAlignment,
 };
 
+use crate::xml_util::{extension_for_mime, points_to_emu};
 use crate::xml_writer::escape_xml;
 
-/// Generate `word/document.xml` content.
-pub fn write_document_xml(doc: &DocumentModel) -> String {
+/// An image relationship entry collected during writing.
+pub struct ImageRelEntry {
+    /// Relationship ID (e.g., "rId10")
+    pub rid: String,
+    /// Target path within the ZIP (e.g., "media/image1.png")
+    pub target: String,
+    /// MediaId for looking up bytes in the media store
+    pub media_id: MediaId,
+    /// File extension (e.g., "png")
+    pub extension: String,
+}
+
+/// A hyperlink relationship entry collected during writing.
+pub struct HyperlinkRelEntry {
+    /// Relationship ID (e.g., "rHyp1")
+    pub rid: String,
+    /// External URL target
+    pub target: String,
+}
+
+/// Generate `word/document.xml` content and collect relationship entries.
+pub fn write_document_xml(
+    doc: &DocumentModel,
+) -> (String, Vec<ImageRelEntry>, Vec<HyperlinkRelEntry>) {
     let mut xml = String::new();
+    let mut image_rels: Vec<ImageRelEntry> = Vec::new();
+    let mut hyperlink_rels: Vec<HyperlinkRelEntry> = Vec::new();
 
     xml.push_str(r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>"#);
     xml.push('\n');
     xml.push_str(
-        r#"<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mo="http://schemas.microsoft.com/office/mac/office/2008/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mv="urn:schemas-microsoft-com:mac:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml">"#,
+        r#"<w:document xmlns:wpc="http://schemas.microsoft.com/office/word/2010/wordprocessingCanvas" xmlns:mo="http://schemas.microsoft.com/office/mac/office/2008/main" xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006" xmlns:mv="urn:schemas-microsoft-com:mac:vml" xmlns:o="urn:schemas-microsoft-com:office:office" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:m="http://schemas.openxmlformats.org/officeDocument/2006/math" xmlns:v="urn:schemas-microsoft-com:vml" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:w10="urn:schemas-microsoft-com:office:word" xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:wne="http://schemas.microsoft.com/office/word/2006/wordml" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">"#,
     );
     xml.push('\n');
 
     // Write body
     if let Some(body_id) = doc.body_id() {
         xml.push_str("<w:body>");
-        write_body_children(doc, body_id, &mut xml);
+        write_body_children(doc, body_id, &mut xml, &mut image_rels, &mut hyperlink_rels);
         xml.push_str("</w:body>");
     }
 
     xml.push_str("</w:document>");
-    xml
+    (xml, image_rels, hyperlink_rels)
 }
 
 /// Write the children of the body node.
-fn write_body_children(doc: &DocumentModel, body_id: NodeId, xml: &mut String) {
+fn write_body_children(
+    doc: &DocumentModel,
+    body_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+    hyperlink_rels: &mut Vec<HyperlinkRelEntry>,
+) {
     let body = match doc.node(body_id) {
         Some(n) => n,
         None => return,
@@ -43,14 +75,24 @@ fn write_body_children(doc: &DocumentModel, body_id: NodeId, xml: &mut String) {
             None => continue,
         };
 
-        if child.node_type == NodeType::Paragraph {
-            write_paragraph(doc, child_id, xml);
+        match child.node_type {
+            NodeType::Paragraph => {
+                write_paragraph(doc, child_id, xml, image_rels, hyperlink_rels);
+            }
+            NodeType::Table => write_table(doc, child_id, xml, image_rels, hyperlink_rels),
+            _ => {}
         }
     }
 }
 
 /// Write a `<w:p>` element.
-fn write_paragraph(doc: &DocumentModel, para_id: NodeId, xml: &mut String) {
+fn write_paragraph(
+    doc: &DocumentModel,
+    para_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+    hyperlink_rels: &mut Vec<HyperlinkRelEntry>,
+) {
     let para = match doc.node(para_id) {
         Some(n) => n,
         None => return,
@@ -66,34 +108,508 @@ fn write_paragraph(doc: &DocumentModel, para_id: NodeId, xml: &mut String) {
         xml.push_str("</w:pPr>");
     }
 
-    // Inline children
+    // Inline children — group consecutive runs with the same HyperlinkUrl into
+    // `<w:hyperlink>` elements.
     let children: Vec<NodeId> = para.children.clone();
+    let mut i = 0;
+    while i < children.len() {
+        let child_id = children[i];
+        let child = match doc.node(child_id) {
+            Some(n) => n,
+            None => {
+                i += 1;
+                continue;
+            }
+        };
+
+        match child.node_type {
+            NodeType::Run => {
+                // Check if this run is a hyperlink
+                if let Some(url) = child.attributes.get_string(&AttributeKey::HyperlinkUrl) {
+                    let url = url.to_string();
+                    // Find all consecutive runs with the same URL
+                    let hyp_start = i;
+                    while i < children.len() {
+                        if let Some(n) = doc.node(children[i]) {
+                            if n.node_type == NodeType::Run
+                                && n.attributes.get_string(&AttributeKey::HyperlinkUrl)
+                                    == Some(&url)
+                            {
+                                i += 1;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+
+                    // Write hyperlink wrapper
+                    if let Some(anchor) = url.strip_prefix('#') {
+                        // Internal anchor
+                        xml.push_str(&format!(
+                            r#"<w:hyperlink w:anchor="{}">"#,
+                            escape_xml(anchor)
+                        ));
+                    } else {
+                        // External link — create relationship
+                        let rid = format!("rHyp{}", hyperlink_rels.len() + 1);
+                        hyperlink_rels.push(HyperlinkRelEntry {
+                            rid: rid.clone(),
+                            target: url.clone(),
+                        });
+                        xml.push_str(&format!(r#"<w:hyperlink r:id="{rid}">"#));
+                    }
+                    for &run_id in &children[hyp_start..i] {
+                        write_run(doc, run_id, xml);
+                    }
+                    xml.push_str("</w:hyperlink>");
+                } else {
+                    write_run(doc, child_id, xml);
+                    i += 1;
+                }
+            }
+            NodeType::Image => {
+                write_image(doc, child_id, xml, image_rels);
+                i += 1;
+            }
+            NodeType::Field => {
+                write_field_node(doc, child_id, xml);
+                i += 1;
+            }
+            NodeType::LineBreak => {
+                xml.push_str("<w:r><w:br/></w:r>");
+                i += 1;
+            }
+            NodeType::PageBreak => {
+                xml.push_str(r#"<w:r><w:br w:type="page"/></w:r>"#);
+                i += 1;
+            }
+            NodeType::ColumnBreak => {
+                xml.push_str(r#"<w:r><w:br w:type="column"/></w:r>"#);
+                i += 1;
+            }
+            NodeType::Tab => {
+                xml.push_str("<w:r><w:tab/></w:r>");
+                i += 1;
+            }
+            NodeType::BookmarkStart => {
+                if let Some(bk_name) = child.attributes.get_string(&AttributeKey::BookmarkName) {
+                    xml.push_str(&format!(
+                        r#"<w:bookmarkStart w:id="{i}" w:name="{}"/>"#,
+                        escape_xml(bk_name)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::BookmarkEnd => {
+                xml.push_str(&format!(r#"<w:bookmarkEnd w:id="{i}"/>"#));
+                i += 1;
+            }
+            NodeType::CommentStart => {
+                if let Some(cid) = child.attributes.get_string(&AttributeKey::CommentId) {
+                    xml.push_str(&format!(
+                        r#"<w:commentRangeStart w:id="{}"/>"#,
+                        escape_xml(cid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::CommentEnd => {
+                if let Some(cid) = child.attributes.get_string(&AttributeKey::CommentId) {
+                    xml.push_str(&format!(
+                        r#"<w:commentRangeEnd w:id="{}"/>"#,
+                        escape_xml(cid)
+                    ));
+                    // Add commentReference run
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="{}"/></w:r>"#,
+                        escape_xml(cid)
+                    ));
+                }
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    xml.push_str("</w:p>");
+}
+
+/// Write a `<w:tbl>` element.
+fn write_table(
+    doc: &DocumentModel,
+    table_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+    hyperlink_rels: &mut Vec<HyperlinkRelEntry>,
+) {
+    let table = match doc.node(table_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    xml.push_str("<w:tbl>");
+
+    // Table properties
+    let tbl_pr = write_table_properties(&table.attributes);
+    if !tbl_pr.is_empty() {
+        xml.push_str("<w:tblPr>");
+        xml.push_str(&tbl_pr);
+        xml.push_str("</w:tblPr>");
+    }
+
+    // Table grid — derive from first row's cell widths
+    write_table_grid(doc, table, xml);
+
+    // Rows
+    let children: Vec<NodeId> = table.children.clone();
     for child_id in children {
         let child = match doc.node(child_id) {
             Some(n) => n,
             None => continue,
         };
+        if child.node_type == NodeType::TableRow {
+            write_table_row(doc, child_id, xml, image_rels, hyperlink_rels);
+        }
+    }
 
+    xml.push_str("</w:tbl>");
+}
+
+/// Write `<w:tblGrid>` derived from the first row's cell widths.
+fn write_table_grid(doc: &DocumentModel, table: &s1_model::Node, xml: &mut String) {
+    if table.children.is_empty() {
+        return;
+    }
+
+    let first_row = match doc.node(table.children[0]) {
+        Some(n) if n.node_type == NodeType::TableRow => n,
+        _ => return,
+    };
+
+    let mut has_widths = false;
+    let mut grid_cols = Vec::new();
+
+    for &cell_id in &first_row.children {
+        if let Some(cell) = doc.node(cell_id) {
+            if let Some(AttributeValue::TableWidth(tw)) =
+                cell.attributes.get(&AttributeKey::CellWidth)
+            {
+                match tw {
+                    TableWidth::Fixed(pts) => {
+                        grid_cols.push(points_to_twips(*pts));
+                        has_widths = true;
+                    }
+                    _ => grid_cols.push(0),
+                }
+            } else {
+                grid_cols.push(0);
+            }
+        }
+    }
+
+    if has_widths {
+        xml.push_str("<w:tblGrid>");
+        for w in grid_cols {
+            xml.push_str(&format!(r#"<w:gridCol w:w="{w}"/>"#));
+        }
+        xml.push_str("</w:tblGrid>");
+    }
+}
+
+/// Generate table properties XML.
+fn write_table_properties(attrs: &s1_model::AttributeMap) -> String {
+    let mut tpr = String::new();
+
+    // Table width
+    if let Some(AttributeValue::TableWidth(tw)) = attrs.get(&AttributeKey::TableWidth) {
+        match tw {
+            TableWidth::Auto => {
+                tpr.push_str(r#"<w:tblW w:w="0" w:type="auto"/>"#);
+            }
+            TableWidth::Fixed(pts) => {
+                let twips = points_to_twips(*pts);
+                tpr.push_str(&format!(r#"<w:tblW w:w="{twips}" w:type="dxa"/>"#));
+            }
+            TableWidth::Percent(pct) => {
+                let val = (*pct * 50.0) as i64;
+                tpr.push_str(&format!(r#"<w:tblW w:w="{val}" w:type="pct"/>"#));
+            }
+        }
+    }
+
+    // Table alignment
+    if let Some(alignment) = attrs.get_alignment(&AttributeKey::TableAlignment) {
+        let val = match alignment {
+            Alignment::Left => "left",
+            Alignment::Center => "center",
+            Alignment::Right => "right",
+            Alignment::Justify => "left",
+        };
+        tpr.push_str(&format!(r#"<w:jc w:val="{val}"/>"#));
+    }
+
+    // Table borders
+    if let Some(AttributeValue::Borders(borders)) = attrs.get(&AttributeKey::TableBorders) {
+        tpr.push_str("<w:tblBorders>");
+        write_borders(borders, &mut tpr);
+        tpr.push_str("</w:tblBorders>");
+    }
+
+    tpr
+}
+
+/// Write a `<w:tr>` element.
+fn write_table_row(
+    doc: &DocumentModel,
+    row_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+    hyperlink_rels: &mut Vec<HyperlinkRelEntry>,
+) {
+    let row = match doc.node(row_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    xml.push_str("<w:tr>");
+
+    let children: Vec<NodeId> = row.children.clone();
+    for child_id in children {
+        let child = match doc.node(child_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if child.node_type == NodeType::TableCell {
+            write_table_cell(doc, child_id, xml, image_rels, hyperlink_rels);
+        }
+    }
+
+    xml.push_str("</w:tr>");
+}
+
+/// Write a `<w:tc>` element.
+fn write_table_cell(
+    doc: &DocumentModel,
+    cell_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+    hyperlink_rels: &mut Vec<HyperlinkRelEntry>,
+) {
+    let cell = match doc.node(cell_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    xml.push_str("<w:tc>");
+
+    // Cell properties
+    let tcp = write_cell_properties(&cell.attributes);
+    if !tcp.is_empty() {
+        xml.push_str("<w:tcPr>");
+        xml.push_str(&tcp);
+        xml.push_str("</w:tcPr>");
+    }
+
+    // Cell content (paragraphs, nested tables)
+    let children: Vec<NodeId> = cell.children.clone();
+    let mut has_content = false;
+    for child_id in children {
+        let child = match doc.node(child_id) {
+            Some(n) => n,
+            None => continue,
+        };
         match child.node_type {
-            NodeType::Run => write_run(doc, child_id, xml),
-            NodeType::LineBreak => {
-                // Wrap in a run
-                xml.push_str("<w:r><w:br/></w:r>");
+            NodeType::Paragraph => {
+                write_paragraph(doc, child_id, xml, image_rels, hyperlink_rels);
+                has_content = true;
             }
-            NodeType::PageBreak => {
-                xml.push_str(r#"<w:r><w:br w:type="page"/></w:r>"#);
-            }
-            NodeType::ColumnBreak => {
-                xml.push_str(r#"<w:r><w:br w:type="column"/></w:r>"#);
-            }
-            NodeType::Tab => {
-                xml.push_str("<w:r><w:tab/></w:r>");
+            NodeType::Table => {
+                write_table(doc, child_id, xml, image_rels, hyperlink_rels);
+                has_content = true;
             }
             _ => {}
         }
     }
 
-    xml.push_str("</w:p>");
+    // OOXML requires at least one <w:p> inside a <w:tc>
+    if !has_content {
+        xml.push_str("<w:p/>");
+    }
+
+    xml.push_str("</w:tc>");
+}
+
+/// Generate cell properties XML.
+fn write_cell_properties(attrs: &s1_model::AttributeMap) -> String {
+    let mut tcp = String::new();
+
+    // Cell width
+    if let Some(AttributeValue::TableWidth(tw)) = attrs.get(&AttributeKey::CellWidth) {
+        match tw {
+            TableWidth::Auto => {
+                tcp.push_str(r#"<w:tcW w:w="0" w:type="auto"/>"#);
+            }
+            TableWidth::Fixed(pts) => {
+                let twips = points_to_twips(*pts);
+                tcp.push_str(&format!(r#"<w:tcW w:w="{twips}" w:type="dxa"/>"#));
+            }
+            TableWidth::Percent(pct) => {
+                let val = (*pct * 50.0) as i64;
+                tcp.push_str(&format!(r#"<w:tcW w:w="{val}" w:type="pct"/>"#));
+            }
+        }
+    }
+
+    // Column span
+    if let Some(span) = attrs.get_i64(&AttributeKey::ColSpan) {
+        if span > 1 {
+            tcp.push_str(&format!(r#"<w:gridSpan w:val="{span}"/>"#));
+        }
+    }
+
+    // Vertical merge
+    if let Some(merge) = attrs.get_string(&AttributeKey::RowSpan) {
+        match merge {
+            "restart" => tcp.push_str(r#"<w:vMerge w:val="restart"/>"#),
+            "continue" => tcp.push_str("<w:vMerge/>"),
+            _ => {}
+        }
+    }
+
+    // Vertical alignment
+    if let Some(AttributeValue::VerticalAlignment(va)) = attrs.get(&AttributeKey::VerticalAlign) {
+        let val = match va {
+            VerticalAlignment::Top => "top",
+            VerticalAlignment::Center => "center",
+            VerticalAlignment::Bottom => "bottom",
+        };
+        tcp.push_str(&format!(r#"<w:vAlign w:val="{val}"/>"#));
+    }
+
+    // Cell shading/background
+    if let Some(color) = attrs.get_color(&AttributeKey::CellBackground) {
+        tcp.push_str(&format!(
+            r#"<w:shd w:val="clear" w:fill="{}"/>"#,
+            color.to_hex()
+        ));
+    }
+
+    // Cell borders
+    if let Some(AttributeValue::Borders(borders)) = attrs.get(&AttributeKey::CellBorders) {
+        tcp.push_str("<w:tcBorders>");
+        write_borders(borders, &mut tcp);
+        tcp.push_str("</w:tcBorders>");
+    }
+
+    tcp
+}
+
+/// Write border sides (top, bottom, left, right) shared between table and cell borders.
+fn write_borders(borders: &Borders, xml: &mut String) {
+    if let Some(ref side) = borders.top {
+        write_border_side("top", side, xml);
+    }
+    if let Some(ref side) = borders.left {
+        write_border_side("left", side, xml);
+    }
+    if let Some(ref side) = borders.bottom {
+        write_border_side("bottom", side, xml);
+    }
+    if let Some(ref side) = borders.right {
+        write_border_side("right", side, xml);
+    }
+}
+
+/// Write a single border side element.
+fn write_border_side(name: &str, side: &BorderSide, xml: &mut String) {
+    let style = match side.style {
+        BorderStyle::None => "none",
+        BorderStyle::Single => "single",
+        BorderStyle::Double => "double",
+        BorderStyle::Dashed => "dashed",
+        BorderStyle::Dotted => "dotted",
+        BorderStyle::Thick => "thick",
+    };
+    let sz = (side.width * 8.0) as i64; // points to eighths of a point
+    let color = side.color.to_hex();
+    let space = side.spacing as i64;
+    xml.push_str(&format!(
+        r#"<w:{name} w:val="{style}" w:sz="{sz}" w:space="{space}" w:color="{color}"/>"#
+    ));
+}
+
+/// Write an inline image as `<w:r><w:drawing><wp:inline>…</wp:inline></w:drawing></w:r>`.
+fn write_image(
+    doc: &DocumentModel,
+    image_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+) {
+    let image = match doc.node(image_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Get the media ID from the image node
+    let media_id = match image.attributes.get(&AttributeKey::ImageMediaId) {
+        Some(AttributeValue::MediaId(mid)) => *mid,
+        _ => return,
+    };
+
+    // Look up the media item to get content type and extension
+    let media_item = match doc.media().get(media_id) {
+        Some(item) => item,
+        None => return,
+    };
+
+    let ext = extension_for_mime(&media_item.content_type);
+    let idx = image_rels.len() + 1;
+    let rid = format!("rImg{idx}");
+    let target = format!("media/image{idx}.{ext}");
+
+    image_rels.push(ImageRelEntry {
+        rid: rid.clone(),
+        target,
+        media_id,
+        extension: ext.to_string(),
+    });
+
+    // Dimensions in EMU (default 100×100 pts if not specified)
+    let width_pts = image
+        .attributes
+        .get_f64(&AttributeKey::ImageWidth)
+        .unwrap_or(100.0);
+    let height_pts = image
+        .attributes
+        .get_f64(&AttributeKey::ImageHeight)
+        .unwrap_or(100.0);
+    let cx = points_to_emu(width_pts);
+    let cy = points_to_emu(height_pts);
+
+    let alt = image
+        .attributes
+        .get_string(&AttributeKey::ImageAltText)
+        .unwrap_or("");
+
+    xml.push_str("<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">");
+    xml.push_str(&format!(r#"<wp:extent cx="{cx}" cy="{cy}"/>"#));
+    xml.push_str(&format!(
+        r#"<wp:docPr id="{idx}" name="Image{idx}" descr="{}"/>"#,
+        escape_xml(alt)
+    ));
+    xml.push_str("<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">");
+    xml.push_str(&format!(
+        r#"<pic:pic><pic:nvPicPr><pic:cNvPr id="{idx}" name="Image{idx}"/><pic:cNvPicPr/></pic:nvPicPr>"#
+    ));
+    xml.push_str(&format!(
+        r#"<pic:blipFill><a:blip r:embed="{rid}"/><a:stretch><a:fillRect/></a:stretch></pic:blipFill>"#
+    ));
+    xml.push_str(&format!(
+        r#"<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>"#
+    ));
+    xml.push_str("</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>");
 }
 
 /// Generate paragraph properties XML from a Node.
@@ -109,10 +625,15 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
 
     // Style reference
     if let Some(style_id) = attrs.get_string(&AttributeKey::StyleId) {
-        ppr.push_str(&format!(
-            r#"<w:pStyle w:val="{}"/>"#,
-            escape_xml(style_id)
-        ));
+        ppr.push_str(&format!(r#"<w:pStyle w:val="{}"/>"#, escape_xml(style_id)));
+    }
+
+    // List numbering reference
+    if let Some(AttributeValue::ListInfo(info)) = attrs.get(&AttributeKey::ListInfo) {
+        ppr.push_str("<w:numPr>");
+        ppr.push_str(&format!(r#"<w:ilvl w:val="{}"/>"#, info.level));
+        ppr.push_str(&format!(r#"<w:numId w:val="{}"/>"#, info.num_id));
+        ppr.push_str("</w:numPr>");
     }
 
     // Alignment
@@ -197,7 +718,78 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
         ppr.push_str("<w:pageBreakBefore/>");
     }
 
+    // Tab stops
+    if let Some(AttributeValue::TabStops(tab_stops)) = attrs.get(&AttributeKey::TabStops) {
+        if !tab_stops.is_empty() {
+            ppr.push_str("<w:tabs>");
+            for ts in tab_stops {
+                let pos = points_to_twips(ts.position);
+                let val = match ts.alignment {
+                    TabAlignment::Left => "left",
+                    TabAlignment::Center => "center",
+                    TabAlignment::Right => "right",
+                    TabAlignment::Decimal => "decimal",
+                };
+                let leader = match ts.leader {
+                    TabLeader::None => None,
+                    TabLeader::Dot => Some("dot"),
+                    TabLeader::Dash => Some("hyphen"),
+                    TabLeader::Underscore => Some("underscore"),
+                };
+                if let Some(ldr) = leader {
+                    ppr.push_str(&format!(
+                        r#"<w:tab w:val="{val}" w:pos="{pos}" w:leader="{ldr}"/>"#
+                    ));
+                } else {
+                    ppr.push_str(&format!(r#"<w:tab w:val="{val}" w:pos="{pos}"/>"#));
+                }
+            }
+            ppr.push_str("</w:tabs>");
+        }
+    }
+
+    // Paragraph borders
+    if let Some(AttributeValue::Borders(borders)) = attrs.get(&AttributeKey::ParagraphBorders) {
+        ppr.push_str("<w:pBdr>");
+        write_borders(borders, &mut ppr);
+        ppr.push_str("</w:pBdr>");
+    }
+
+    // Paragraph shading/background
+    if let Some(color) = attrs.get_color(&AttributeKey::Background) {
+        ppr.push_str(&format!(
+            r#"<w:shd w:val="clear" w:fill="{}"/>"#,
+            color.to_hex()
+        ));
+    }
+
     ppr
+}
+
+/// Public wrapper for write_run (for use by header/footer writer).
+pub fn write_run_pub(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
+    write_run(doc, run_id, xml);
+}
+
+/// Public wrapper for write_image (for use by header/footer writer).
+pub fn write_image_pub(
+    doc: &DocumentModel,
+    image_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+) {
+    write_image(doc, image_id, xml, image_rels);
+}
+
+/// Public wrapper for write_table (for use by header/footer writer).
+pub fn write_table_pub(
+    doc: &DocumentModel,
+    table_id: NodeId,
+    xml: &mut String,
+    image_rels: &mut Vec<ImageRelEntry>,
+) {
+    let mut dummy_hyp_rels = Vec::new();
+    write_table(doc, table_id, xml, image_rels, &mut dummy_hyp_rels);
 }
 
 /// Write a `<w:r>` element.
@@ -250,10 +842,7 @@ pub fn write_run_properties_from_attrs(attrs: &s1_model::AttributeMap) -> String
 
     // Style reference
     if let Some(style_id) = attrs.get_string(&AttributeKey::StyleId) {
-        rpr.push_str(&format!(
-            r#"<w:rStyle w:val="{}"/>"#,
-            escape_xml(style_id)
-        ));
+        rpr.push_str(&format!(r#"<w:rStyle w:val="{}"/>"#, escape_xml(style_id)));
     }
 
     // Font family
@@ -325,12 +914,15 @@ pub fn write_run_properties_from_attrs(attrs: &s1_model::AttributeMap) -> String
         rpr.push_str(r#"<w:vertAlign w:val="subscript"/>"#);
     }
 
+    // Character spacing (points → twips)
+    if let Some(pts) = attrs.get_f64(&AttributeKey::FontSpacing) {
+        let twips = points_to_twips(pts);
+        rpr.push_str(&format!(r#"<w:spacing w:val="{twips}"/>"#));
+    }
+
     // Language
     if let Some(lang) = attrs.get_string(&AttributeKey::Language) {
-        rpr.push_str(&format!(
-            r#"<w:lang w:val="{}"/>"#,
-            escape_xml(lang)
-        ));
+        rpr.push_str(&format!(r#"<w:lang w:val="{}"/>"#, escape_xml(lang)));
     }
 
     rpr
@@ -339,6 +931,49 @@ pub fn write_run_properties_from_attrs(attrs: &s1_model::AttributeMap) -> String
 /// Convert points to twips (twentieths of a point).
 fn points_to_twips(pts: f64) -> i64 {
     (pts * 20.0) as i64
+}
+
+/// Write a Field node as `<w:fldSimple>`.
+fn write_field_node(doc: &DocumentModel, field_id: NodeId, xml: &mut String) {
+    let field = match doc.node(field_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let field_type = match field.attributes.get(&AttributeKey::FieldType) {
+        Some(AttributeValue::FieldType(ft)) => *ft,
+        _ => return,
+    };
+
+    let instr = crate::header_footer_writer::field_type_to_instruction(field_type);
+    let placeholder = match field_type {
+        FieldType::PageNumber => "1",
+        FieldType::PageCount => "1",
+        _ => "",
+    };
+
+    xml.push_str(&format!(
+        r#"<w:fldSimple w:instr=" {} "><w:r><w:t>{}</w:t></w:r></w:fldSimple>"#,
+        escape_xml(&instr),
+        placeholder,
+    ));
+}
+
+/// Write a `w:sectPr` element for the body (final section or inline).
+pub fn write_section_xml(
+    doc: &DocumentModel,
+    section_idx: usize,
+    xml: &mut String,
+    hf_rel_entries: &[crate::section_writer::HfRelEntry],
+) {
+    if let Some(props) = doc.sections().get(section_idx) {
+        xml.push_str("<w:sectPr>");
+        xml.push_str(&crate::section_writer::write_section_properties(
+            props,
+            hf_rel_entries,
+        ));
+        xml.push_str("</w:sectPr>");
+    }
 }
 
 /// Best-effort mapping of Color to OOXML highlight color name.
@@ -383,7 +1018,7 @@ mod tests {
     #[test]
     fn write_simple_document() {
         let doc = make_simple_doc("Hello World");
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
 
         assert!(xml.contains("<w:t xml:space=\"preserve\">Hello World</w:t>"));
         assert!(xml.contains("<w:body>"));
@@ -409,7 +1044,7 @@ mod tests {
         doc.insert_node(run_id, 0, Node::text(text_id, "Bold"))
             .unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
 
         assert!(xml.contains("<w:b/>"));
         assert!(xml.contains(r#"<w:sz w:val="48"/>"#)); // 24pt = 48 half-points
@@ -425,7 +1060,7 @@ mod tests {
         para.attributes = AttributeMap::new().alignment(Alignment::Center);
         doc.insert_node(body_id, 0, para).unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains(r#"<w:jc w:val="center"/>"#));
     }
 
@@ -436,17 +1071,13 @@ mod tests {
 
         let para_id = doc.next_id();
         let mut para = Node::new(para_id, NodeType::Paragraph);
-        para.attributes.set(
-            AttributeKey::SpacingBefore,
-            AttributeValue::Float(12.0),
-        );
-        para.attributes.set(
-            AttributeKey::SpacingAfter,
-            AttributeValue::Float(6.0),
-        );
+        para.attributes
+            .set(AttributeKey::SpacingBefore, AttributeValue::Float(12.0));
+        para.attributes
+            .set(AttributeKey::SpacingAfter, AttributeValue::Float(6.0));
         doc.insert_node(body_id, 0, para).unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains(r#"w:before="240""#)); // 12pt = 240 twips
         assert!(xml.contains(r#"w:after="120""#)); // 6pt = 120 twips
     }
@@ -454,7 +1085,7 @@ mod tests {
     #[test]
     fn write_escapes_special_chars() {
         let doc = make_simple_doc("A & B < C");
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains("A &amp; B &lt; C"));
     }
 
@@ -467,7 +1098,7 @@ mod tests {
         doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
             .unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains("<w:p></w:p>"));
     }
 
@@ -484,8 +1115,166 @@ mod tests {
         doc.insert_node(para_id, 0, Node::new(br_id, NodeType::LineBreak))
             .unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains("<w:r><w:br/></w:r>"));
+    }
+
+    // ─── Table writing tests ──────────────────────────────────────────
+
+    #[test]
+    fn write_simple_table() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Table > Row > 2 Cells > 1 Paragraph each
+        let tbl_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(tbl_id, NodeType::Table))
+            .unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(tbl_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        // Cell 1
+        let cell1_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell1_id, NodeType::TableCell))
+            .unwrap();
+        let p1 = doc.next_id();
+        doc.insert_node(cell1_id, 0, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "A1")).unwrap();
+
+        // Cell 2
+        let cell2_id = doc.next_id();
+        doc.insert_node(row_id, 1, Node::new(cell2_id, NodeType::TableCell))
+            .unwrap();
+        let p2 = doc.next_id();
+        doc.insert_node(cell2_id, 0, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "B1")).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:tbl>"));
+        assert!(xml.contains("<w:tr>"));
+        assert!(xml.contains("<w:tc>"));
+        assert!(xml.contains("A1"));
+        assert!(xml.contains("B1"));
+        assert!(xml.contains("</w:tc>"));
+        assert!(xml.contains("</w:tr>"));
+        assert!(xml.contains("</w:tbl>"));
+    }
+
+    #[test]
+    fn write_table_with_properties() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let tbl_id = doc.next_id();
+        let mut tbl = Node::new(tbl_id, NodeType::Table);
+        tbl.attributes.set(
+            AttributeKey::TableWidth,
+            AttributeValue::TableWidth(s1_model::TableWidth::Fixed(468.0)),
+        );
+        tbl.attributes.set(
+            AttributeKey::TableAlignment,
+            AttributeValue::Alignment(Alignment::Center),
+        );
+        doc.insert_node(body_id, 0, tbl).unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(tbl_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        let cell_id = doc.next_id();
+        let mut cell = Node::new(cell_id, NodeType::TableCell);
+        cell.attributes.set(
+            AttributeKey::CellWidth,
+            AttributeValue::TableWidth(s1_model::TableWidth::Fixed(234.0)),
+        );
+        doc.insert_node(row_id, 0, cell).unwrap();
+
+        // Must have a paragraph inside
+        let p_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(p_id, NodeType::Paragraph))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"w:w="9360" w:type="dxa""#)); // 468pt = 9360 twips
+        assert!(xml.contains(r#"<w:jc w:val="center"/>"#));
+        assert!(xml.contains(r#"w:w="4680" w:type="dxa""#)); // 234pt = 4680 twips
+                                                             // Grid col should also appear
+        assert!(xml.contains(r#"<w:gridCol w:w="4680"/>"#));
+    }
+
+    #[test]
+    fn write_table_cell_merge() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let tbl_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(tbl_id, NodeType::Table))
+            .unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(tbl_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        // Cell with colspan=2
+        let cell_id = doc.next_id();
+        let mut cell = Node::new(cell_id, NodeType::TableCell);
+        cell.attributes
+            .set(AttributeKey::ColSpan, AttributeValue::Int(2));
+        doc.insert_node(row_id, 0, cell).unwrap();
+        let p_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(p_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Cell with vMerge restart
+        let cell2_id = doc.next_id();
+        let mut cell2 = Node::new(cell2_id, NodeType::TableCell);
+        cell2.attributes.set(
+            AttributeKey::RowSpan,
+            AttributeValue::String("restart".into()),
+        );
+        doc.insert_node(row_id, 1, cell2).unwrap();
+        let p2_id = doc.next_id();
+        doc.insert_node(cell2_id, 0, Node::new(p2_id, NodeType::Paragraph))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:gridSpan w:val="2"/>"#));
+        assert!(xml.contains(r#"<w:vMerge w:val="restart"/>"#));
+    }
+
+    #[test]
+    fn write_empty_cell_gets_paragraph() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let tbl_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(tbl_id, NodeType::Table))
+            .unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(tbl_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        // Empty cell — no children
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        // Should have a <w:p/> to satisfy OOXML requirements
+        assert!(xml.contains("<w:p/>"));
     }
 
     #[test]
@@ -499,17 +1288,461 @@ mod tests {
 
         let run_id = doc.next_id();
         let mut run = Node::new(run_id, NodeType::Run);
-        run.attributes = AttributeMap::new()
-            .font_family("Arial")
-            .color(Color::RED);
+        run.attributes = AttributeMap::new().font_family("Arial").color(Color::RED);
         doc.insert_node(para_id, 0, run).unwrap();
 
         let text_id = doc.next_id();
         doc.insert_node(run_id, 0, Node::text(text_id, "Red"))
             .unwrap();
 
-        let xml = write_document_xml(&doc);
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
         assert!(xml.contains(r#"w:ascii="Arial""#));
         assert!(xml.contains(r#"<w:color w:val="FF0000"/>"#));
+    }
+
+    // ─── Image writing tests ──────────────────────────────────────────
+
+    #[test]
+    fn write_inline_image() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Insert an image into the media store
+        let media_id = doc.media_mut().insert(
+            "image/png",
+            vec![0x89, 0x50, 0x4E, 0x47],
+            Some("test.png".to_string()),
+        );
+
+        let img_id = doc.next_id();
+        let mut img = Node::new(img_id, NodeType::Image);
+        img.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img.attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img.attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(150.0));
+        img.attributes.set(
+            AttributeKey::ImageAltText,
+            AttributeValue::String("A test image".into()),
+        );
+        doc.insert_node(para_id, 0, img).unwrap();
+
+        let (xml, rels, _hyp_rels) = write_document_xml(&doc);
+
+        // Check drawing XML structure
+        assert!(xml.contains("<w:drawing>"));
+        assert!(xml.contains("<wp:inline"));
+        assert!(xml.contains("wp:extent"));
+        assert!(xml.contains("a:blip"));
+        assert!(xml.contains("pic:pic"));
+        assert!(xml.contains("r:embed=\"rImg1\""));
+        assert!(xml.contains("descr=\"A test image\""));
+
+        // Check EMU values (200pt * 12700 = 2540000, 150pt * 12700 = 1905000)
+        assert!(xml.contains(r#"cx="2540000""#));
+        assert!(xml.contains(r#"cy="1905000""#));
+
+        // Check relationship entry
+        assert_eq!(rels.len(), 1);
+        assert_eq!(rels[0].rid, "rImg1");
+        assert_eq!(rels[0].target, "media/image1.png");
+        assert_eq!(rels[0].extension, "png");
+    }
+
+    #[test]
+    fn write_multiple_images() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Two images
+        for i in 0..2 {
+            let media_id =
+                doc.media_mut()
+                    .insert("image/jpeg", vec![0xFF, 0xD8, i], None::<String>);
+
+            let img_id = doc.next_id();
+            let mut img = Node::new(img_id, NodeType::Image);
+            img.attributes.set(
+                AttributeKey::ImageMediaId,
+                AttributeValue::MediaId(media_id),
+            );
+            doc.insert_node(para_id, i as usize, img).unwrap();
+        }
+
+        let (xml, rels, _hyp_rels) = write_document_xml(&doc);
+
+        assert_eq!(rels.len(), 2);
+        assert_eq!(rels[0].rid, "rImg1");
+        assert_eq!(rels[1].rid, "rImg2");
+        assert!(xml.contains("r:embed=\"rImg1\""));
+        assert!(xml.contains("r:embed=\"rImg2\""));
+    }
+
+    // ─── List writing tests ───────────────────────────────────────────
+
+    #[test]
+    fn write_paragraph_with_numpr() {
+        use s1_model::{ListFormat, ListInfo};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 0,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Bullet item"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:numPr>"));
+        assert!(xml.contains(r#"<w:ilvl w:val="0"/>"#));
+        assert!(xml.contains(r#"<w:numId w:val="1"/>"#));
+        assert!(xml.contains("</w:numPr>"));
+    }
+
+    #[test]
+    fn write_paragraph_with_numpr_level_2() {
+        use s1_model::{ListFormat, ListInfo};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 2,
+                num_format: ListFormat::LowerRoman,
+                num_id: 5,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:ilvl w:val="2"/>"#));
+        assert!(xml.contains(r#"<w:numId w:val="5"/>"#));
+    }
+
+    #[test]
+    fn write_hyperlink_external() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::HyperlinkUrl,
+            AttributeValue::String("https://example.com".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        let mut text = Node::new(text_id, NodeType::Text);
+        text.text_content = Some("Click here".into());
+        doc.insert_node(run_id, 0, text).unwrap();
+
+        let (xml, _rels, hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:hyperlink r:id="rHyp1">"#));
+        assert!(xml.contains("Click here"));
+        assert!(xml.contains("</w:hyperlink>"));
+        assert_eq!(hyp_rels.len(), 1);
+        assert_eq!(hyp_rels[0].rid, "rHyp1");
+        assert_eq!(hyp_rels[0].target, "https://example.com");
+    }
+
+    #[test]
+    fn write_hyperlink_internal_anchor() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::HyperlinkUrl,
+            AttributeValue::String("#_MyBookmark".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        let mut text = Node::new(text_id, NodeType::Text);
+        text.text_content = Some("Go to bookmark".into());
+        doc.insert_node(run_id, 0, text).unwrap();
+
+        let (xml, _rels, hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:hyperlink w:anchor="_MyBookmark">"#));
+        assert!(xml.contains("Go to bookmark"));
+        // Internal anchor should NOT create a relationship entry
+        assert!(hyp_rels.is_empty());
+    }
+
+    #[test]
+    fn write_hyperlink_groups_consecutive_runs() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        // Two runs with the same URL should be grouped
+        for (idx, text_str) in ["Click ", "here"].iter().enumerate() {
+            let run_id = doc.next_id();
+            let mut run = Node::new(run_id, NodeType::Run);
+            run.attributes.set(
+                AttributeKey::HyperlinkUrl,
+                AttributeValue::String("https://example.com".into()),
+            );
+            doc.insert_node(para_id, idx, run).unwrap();
+
+            let text_id = doc.next_id();
+            let mut text = Node::new(text_id, NodeType::Text);
+            text.text_content = Some(text_str.to_string());
+            doc.insert_node(run_id, 0, text).unwrap();
+        }
+
+        let (xml, _rels, hyp_rels) = write_document_xml(&doc);
+        // Should produce ONE hyperlink wrapping TWO runs
+        assert_eq!(xml.matches("<w:hyperlink").count(), 1);
+        assert_eq!(xml.matches("</w:hyperlink>").count(), 1);
+        assert!(xml.contains("Click "));
+        assert!(xml.contains("here"));
+        assert_eq!(hyp_rels.len(), 1);
+    }
+
+    #[test]
+    fn write_bookmark_start_end() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let bk_start_id = doc.next_id();
+        let mut bk_start = Node::new(bk_start_id, NodeType::BookmarkStart);
+        bk_start.attributes.set(
+            AttributeKey::BookmarkName,
+            AttributeValue::String("MyBookmark".into()),
+        );
+        doc.insert_node(para_id, 0, bk_start).unwrap();
+
+        // A run between bookmarks
+        let run_id = doc.next_id();
+        let run = Node::new(run_id, NodeType::Run);
+        doc.insert_node(para_id, 1, run).unwrap();
+        let text_id = doc.next_id();
+        let mut text = Node::new(text_id, NodeType::Text);
+        text.text_content = Some("Bookmarked text".into());
+        doc.insert_node(run_id, 0, text).unwrap();
+
+        let bk_end_id = doc.next_id();
+        let bk_end = Node::new(bk_end_id, NodeType::BookmarkEnd);
+        doc.insert_node(para_id, 2, bk_end).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:bookmarkStart w:id="#));
+        assert!(xml.contains(r#"w:name="MyBookmark"/>"#));
+        assert!(xml.contains(r#"<w:bookmarkEnd w:id="#));
+        assert!(xml.contains("Bookmarked text"));
+    }
+
+    #[test]
+    fn write_tab_stops() {
+        use s1_model::{TabAlignment, TabLeader, TabStop};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::TabStops,
+            AttributeValue::TabStops(vec![
+                TabStop {
+                    position: 36.0, // 36 points = 720 twips
+                    alignment: TabAlignment::Left,
+                    leader: TabLeader::None,
+                },
+                TabStop {
+                    position: 72.0, // 72 points = 1440 twips
+                    alignment: TabAlignment::Right,
+                    leader: TabLeader::Dot,
+                },
+                TabStop {
+                    position: 108.0,
+                    alignment: TabAlignment::Center,
+                    leader: TabLeader::Dash,
+                },
+                TabStop {
+                    position: 144.0,
+                    alignment: TabAlignment::Decimal,
+                    leader: TabLeader::Underscore,
+                },
+            ]),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:tabs>"));
+        assert!(xml.contains(r#"<w:tab w:val="left" w:pos="720"/>"#));
+        assert!(xml.contains(r#"<w:tab w:val="right" w:pos="1440" w:leader="dot"/>"#));
+        assert!(xml.contains(r#"<w:tab w:val="center" w:pos="2160" w:leader="hyphen"/>"#));
+        assert!(xml.contains(r#"<w:tab w:val="decimal" w:pos="2880" w:leader="underscore"/>"#));
+        assert!(xml.contains("</w:tabs>"));
+    }
+
+    #[test]
+    fn write_paragraph_borders() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+
+        let borders = Borders {
+            top: Some(BorderSide {
+                style: BorderStyle::Single,
+                width: 1.0,
+                color: Color::new(0, 0, 0),
+                spacing: 0.0,
+            }),
+            bottom: Some(BorderSide {
+                style: BorderStyle::Double,
+                width: 2.0,
+                color: Color::new(255, 0, 0),
+                spacing: 0.0,
+            }),
+            left: None,
+            right: None,
+        };
+        para.attributes.set(
+            AttributeKey::ParagraphBorders,
+            AttributeValue::Borders(borders),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:pBdr>"));
+        assert!(xml.contains(r#"<w:top w:val="single""#));
+        assert!(xml.contains(r#"w:color="000000""#));
+        assert!(xml.contains(r#"<w:bottom w:val="double""#));
+        assert!(xml.contains(r#"w:color="FF0000""#));
+        assert!(xml.contains("</w:pBdr>"));
+    }
+
+    #[test]
+    fn write_paragraph_shading() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::Background,
+            AttributeValue::Color(Color::new(255, 255, 0)),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:shd w:val="clear" w:fill="FFFF00"/>"#));
+    }
+
+    #[test]
+    fn write_character_spacing() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::FontSpacing,
+            AttributeValue::Float(2.0), // 2 points = 40 twips
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        let mut text = Node::new(text_id, NodeType::Text);
+        text.text_content = Some("Spaced".into());
+        doc.insert_node(run_id, 0, text).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:spacing w:val="40"/>"#));
+    }
+
+    #[test]
+    fn write_comment_range() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let para = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        // CommentStart
+        let cs_id = doc.next_id();
+        let mut cs = Node::new(cs_id, NodeType::CommentStart);
+        cs.attributes
+            .set(AttributeKey::CommentId, AttributeValue::String("42".into()));
+        doc.insert_node(para_id, 0, cs).unwrap();
+
+        // Run
+        let run_id = doc.next_id();
+        let run = Node::new(run_id, NodeType::Run);
+        doc.insert_node(para_id, 1, run).unwrap();
+        let text_id = doc.next_id();
+        let mut text = Node::new(text_id, NodeType::Text);
+        text.text_content = Some("Text".into());
+        doc.insert_node(run_id, 0, text).unwrap();
+
+        // CommentEnd
+        let ce_id = doc.next_id();
+        let mut ce = Node::new(ce_id, NodeType::CommentEnd);
+        ce.attributes
+            .set(AttributeKey::CommentId, AttributeValue::String("42".into()));
+        doc.insert_node(para_id, 2, ce).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:commentRangeStart w:id="42"/>"#));
+        assert!(xml.contains(r#"<w:commentRangeEnd w:id="42"/>"#));
+        assert!(xml.contains(r#"<w:commentReference w:id="42"/>"#));
     }
 }

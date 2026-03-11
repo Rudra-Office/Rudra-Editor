@@ -11,6 +11,8 @@ use crate::id::{IdGenerator, NodeId};
 use crate::media::MediaStore;
 use crate::metadata::DocumentMetadata;
 use crate::node::{Node, NodeType};
+use crate::numbering::NumberingDefinitions;
+use crate::section::SectionProperties;
 use crate::styles::{resolve_style_chain, Style};
 
 /// Error type for document model operations.
@@ -85,6 +87,8 @@ pub struct DocumentModel {
     styles: Vec<Style>,
     metadata: DocumentMetadata,
     media: MediaStore,
+    numbering: NumberingDefinitions,
+    sections: Vec<SectionProperties>,
 }
 
 impl DocumentModel {
@@ -118,6 +122,8 @@ impl DocumentModel {
             styles: Vec::new(),
             metadata: DocumentMetadata::new(),
             media: MediaStore::new(),
+            numbering: NumberingDefinitions::default(),
+            sections: Vec::new(),
         }
     }
 
@@ -145,10 +151,7 @@ impl DocumentModel {
         self.node(self.root)?
             .children
             .iter()
-            .find(|&&id| {
-                self.node(id)
-                    .is_some_and(|n| n.node_type == NodeType::Body)
-            })
+            .find(|&&id| self.node(id).is_some_and(|n| n.node_type == NodeType::Body))
             .copied()
     }
 
@@ -181,7 +184,9 @@ impl DocumentModel {
 
     /// Get the parent of a node.
     pub fn parent(&self, id: NodeId) -> Option<&Node> {
-        self.node(id).and_then(|n| n.parent).and_then(|pid| self.node(pid))
+        self.node(id)
+            .and_then(|n| n.parent)
+            .and_then(|pid| self.node(pid))
     }
 
     /// Walk ancestors from a node up to (but not including) the root.
@@ -303,11 +308,7 @@ impl DocumentModel {
         }
 
         // Remove all descendants (DFS)
-        let descendant_ids: Vec<NodeId> = self
-            .descendants(id)
-            .iter()
-            .map(|n| n.id)
-            .collect();
+        let descendant_ids: Vec<NodeId> = self.descendants(id).iter().map(|n| n.id).collect();
 
         for did in descendant_ids {
             self.nodes.remove(&did);
@@ -330,10 +331,7 @@ impl DocumentModel {
             return Err(ModelError::CannotRemoveRoot);
         }
 
-        let node = self
-            .nodes
-            .get(&id)
-            .ok_or(ModelError::NodeNotFound(id))?;
+        let node = self.nodes.get(&id).ok_or(ModelError::NodeNotFound(id))?;
 
         let node_type = node.node_type;
         let old_parent_id = node.parent;
@@ -391,9 +389,7 @@ impl DocumentModel {
             return Err(ModelError::NotATextNode(node_id));
         }
 
-        let content = node
-            .text_content
-            .get_or_insert_with(String::new);
+        let content = node.text_content.get_or_insert_with(String::new);
 
         if offset > content.len() {
             return Err(ModelError::TextOffsetOutOfBounds {
@@ -423,9 +419,7 @@ impl DocumentModel {
             return Err(ModelError::NotATextNode(node_id));
         }
 
-        let content = node
-            .text_content
-            .get_or_insert_with(String::new);
+        let content = node.text_content.get_or_insert_with(String::new);
 
         let end = offset + length;
         if end > content.len() {
@@ -544,6 +538,26 @@ impl DocumentModel {
     /// Get mutable media store.
     pub fn media_mut(&mut self) -> &mut MediaStore {
         &mut self.media
+    }
+
+    /// Get the numbering definitions.
+    pub fn numbering(&self) -> &NumberingDefinitions {
+        &self.numbering
+    }
+
+    /// Get mutable numbering definitions.
+    pub fn numbering_mut(&mut self) -> &mut NumberingDefinitions {
+        &mut self.numbering
+    }
+
+    /// Get the section properties.
+    pub fn sections(&self) -> &[SectionProperties] {
+        &self.sections
+    }
+
+    /// Get mutable section properties.
+    pub fn sections_mut(&mut self) -> &mut Vec<SectionProperties> {
+        &mut self.sections
     }
 
     // ─── Plain text extraction ──────────────────────────────────────────
@@ -835,8 +849,7 @@ mod tests {
         doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
             .unwrap();
         let t1 = doc.next_id();
-        doc.insert_node(r1, 0, Node::text(t1, "Hello"))
-            .unwrap();
+        doc.insert_node(r1, 0, Node::text(t1, "Hello")).unwrap();
 
         // Paragraph 2: "World"
         let p2 = doc.next_id();
@@ -846,8 +859,7 @@ mod tests {
         doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
             .unwrap();
         let t2 = doc.next_id();
-        doc.insert_node(r2, 0, Node::text(t2, "World"))
-            .unwrap();
+        doc.insert_node(r2, 0, Node::text(t2, "World")).unwrap();
 
         assert_eq!(doc.to_plain_text(), "Hello\nWorld");
     }
@@ -863,7 +875,11 @@ mod tests {
         assert!(doc.style_by_id("Normal").is_some());
 
         // Update existing
-        let updated = Style::new("Normal", "Normal Updated", crate::styles::StyleType::Paragraph);
+        let updated = Style::new(
+            "Normal",
+            "Normal Updated",
+            crate::styles::StyleType::Paragraph,
+        );
         doc.set_style(updated);
         assert_eq!(doc.styles().len(), 1);
         assert_eq!(doc.style_by_id("Normal").unwrap().name, "Normal Updated");
@@ -880,11 +896,7 @@ mod tests {
 
         // Add a style
         let style = Style::new("Heading1", "Heading 1", crate::styles::StyleType::Paragraph)
-            .with_attributes(
-                AttributeMap::new()
-                    .bold(true)
-                    .font_size(24.0),
-            );
+            .with_attributes(AttributeMap::new().bold(true).font_size(24.0));
         doc.set_style(style);
 
         // Create paragraph with style reference
@@ -917,17 +929,21 @@ mod tests {
 
         // Table > Row > Cell > Table > Row > Cell > Paragraph
         let tbl = doc.next_id();
-        doc.insert_node(body_id, 0, Node::new(tbl, NodeType::Table)).unwrap();
+        doc.insert_node(body_id, 0, Node::new(tbl, NodeType::Table))
+            .unwrap();
 
         let row = doc.next_id();
-        doc.insert_node(tbl, 0, Node::new(row, NodeType::TableRow)).unwrap();
+        doc.insert_node(tbl, 0, Node::new(row, NodeType::TableRow))
+            .unwrap();
 
         let cell = doc.next_id();
-        doc.insert_node(row, 0, Node::new(cell, NodeType::TableCell)).unwrap();
+        doc.insert_node(row, 0, Node::new(cell, NodeType::TableCell))
+            .unwrap();
 
         // Nested table inside cell
         let inner_tbl = doc.next_id();
-        doc.insert_node(cell, 0, Node::new(inner_tbl, NodeType::Table)).unwrap();
+        doc.insert_node(cell, 0, Node::new(inner_tbl, NodeType::Table))
+            .unwrap();
 
         assert_eq!(doc.node(inner_tbl).unwrap().parent, Some(cell));
     }

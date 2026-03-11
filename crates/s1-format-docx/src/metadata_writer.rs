@@ -38,17 +38,11 @@ pub fn write_core_xml(doc: &DocumentModel) -> Option<String> {
     }
 
     if let Some(ref subject) = meta.subject {
-        xml.push_str(&format!(
-            "<dc:subject>{}</dc:subject>",
-            escape_xml(subject)
-        ));
+        xml.push_str(&format!("<dc:subject>{}</dc:subject>", escape_xml(subject)));
     }
 
     if let Some(ref creator) = meta.creator {
-        xml.push_str(&format!(
-            "<dc:creator>{}</dc:creator>",
-            escape_xml(creator)
-        ));
+        xml.push_str(&format!("<dc:creator>{}</dc:creator>", escape_xml(creator)));
     }
 
     if let Some(ref desc) = meta.description {
@@ -85,10 +79,7 @@ pub fn write_core_xml(doc: &DocumentModel) -> Option<String> {
     }
 
     if let Some(ref lang) = meta.language {
-        xml.push_str(&format!(
-            "<dc:language>{}</dc:language>",
-            escape_xml(lang)
-        ));
+        xml.push_str(&format!("<dc:language>{}</dc:language>", escape_xml(lang)));
     }
 
     xml.push_str("</cp:coreProperties>");

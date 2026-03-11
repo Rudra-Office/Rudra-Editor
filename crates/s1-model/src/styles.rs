@@ -29,11 +29,7 @@ pub struct Style {
 
 impl Style {
     /// Create a new style with the given id, name, and type.
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        style_type: StyleType,
-    ) -> Self {
+    pub fn new(id: impl Into<String>, name: impl Into<String>, style_type: StyleType) -> Self {
         Self {
             id: id.into(),
             name: name.into(),
@@ -121,8 +117,7 @@ mod tests {
 
     #[test]
     fn style_with_parent() {
-        let style = Style::new("Heading1", "Heading 1", StyleType::Paragraph)
-            .with_parent("Normal");
+        let style = Style::new("Heading1", "Heading 1", StyleType::Paragraph).with_parent("Normal");
         assert_eq!(style.parent_id.as_deref(), Some("Normal"));
     }
 
@@ -132,9 +127,8 @@ mod tests {
         attrs.set(AttributeKey::Bold, AttributeValue::Bool(true));
         attrs.set(AttributeKey::FontSize, AttributeValue::Float(12.0));
 
-        let styles = vec![
-            Style::new("Normal", "Normal", StyleType::Paragraph).with_attributes(attrs),
-        ];
+        let styles =
+            vec![Style::new("Normal", "Normal", StyleType::Paragraph).with_attributes(attrs)];
 
         let resolved = resolve_style_chain("Normal", &styles);
         assert_eq!(resolved.get_bool(&AttributeKey::Bold), Some(true));
@@ -155,8 +149,7 @@ mod tests {
         heading_attrs.set(AttributeKey::Bold, AttributeValue::Bool(true));
 
         let styles = vec![
-            Style::new("Normal", "Normal", StyleType::Paragraph)
-                .with_attributes(normal_attrs),
+            Style::new("Normal", "Normal", StyleType::Paragraph).with_attributes(normal_attrs),
             Style::new("Heading1", "Heading 1", StyleType::Paragraph)
                 .with_parent("Normal")
                 .with_attributes(heading_attrs),

@@ -209,9 +209,7 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
                 .node(*target_id)
                 .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
 
-            let parent_id = node
-                .parent
-                .ok_or(OperationError::CannotDeleteRoot)?;
+            let parent_id = node.parent.ok_or(OperationError::CannotDeleteRoot)?;
 
             let parent = model
                 .node(parent_id)
@@ -256,13 +254,11 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
                 .node(*target_id)
                 .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
 
-            let old_parent_id = node
-                .parent
-                .ok_or(OperationError::CannotDeleteRoot)?;
+            let old_parent_id = node.parent.ok_or(OperationError::CannotDeleteRoot)?;
 
-            let old_parent = model
-                .node(old_parent_id)
-                .ok_or(OperationError::Model(ModelError::NodeNotFound(old_parent_id)))?;
+            let old_parent = model.node(old_parent_id).ok_or(OperationError::Model(
+                ModelError::NodeNotFound(old_parent_id),
+            ))?;
 
             let old_index = old_parent
                 .children
@@ -393,9 +389,7 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
             })
         }
 
-        Operation::SetMetadata {
-            key, value, ..
-        } => {
+        Operation::SetMetadata { key, value, .. } => {
             let meta = model.metadata();
             let old_value = match key.as_str() {
                 "title" => meta.title.clone(),
@@ -510,11 +504,9 @@ pub fn validate(model: &DocumentModel, op: &Operation) -> Result<(), OperationEr
                 .node(*target_id)
                 .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
 
-            let new_parent = model
-                .node(*new_parent_id)
-                .ok_or(OperationError::Model(ModelError::NodeNotFound(
-                    *new_parent_id,
-                )))?;
+            let new_parent = model.node(*new_parent_id).ok_or(OperationError::Model(
+                ModelError::NodeNotFound(*new_parent_id),
+            ))?;
 
             if !new_parent.node_type.can_contain(node.node_type) {
                 return Err(OperationError::Model(ModelError::InvalidHierarchy {
@@ -526,7 +518,9 @@ pub fn validate(model: &DocumentModel, op: &Operation) -> Result<(), OperationEr
             Ok(())
         }
 
-        Operation::InsertText { target_id, offset, .. } => {
+        Operation::InsertText {
+            target_id, offset, ..
+        } => {
             let node = model
                 .node(*target_id)
                 .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
@@ -695,12 +689,15 @@ mod tests {
         let body_id = doc.body_id().unwrap();
 
         let p1 = doc.next_id();
-        doc.insert_node(body_id, 0, Node::new(p1, NodeType::Paragraph)).unwrap();
+        doc.insert_node(body_id, 0, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
         let p2 = doc.next_id();
-        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph)).unwrap();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
 
         let run_id = doc.next_id();
-        doc.insert_node(p1, 0, Node::new(run_id, NodeType::Run)).unwrap();
+        doc.insert_node(p1, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
 
         // Move run from p1 to p2
         let inverse = apply(&mut doc, &Operation::move_node(run_id, p2, 0)).unwrap();
@@ -802,14 +799,20 @@ mod tests {
         .unwrap();
 
         assert_eq!(
-            doc.node(run_id).unwrap().attributes.get_f64(&AttributeKey::FontSize),
+            doc.node(run_id)
+                .unwrap()
+                .attributes
+                .get_f64(&AttributeKey::FontSize),
             Some(24.0)
         );
 
         // Undo restores old value
         apply(&mut doc, &inverse).unwrap();
         assert_eq!(
-            doc.node(run_id).unwrap().attributes.get_f64(&AttributeKey::FontSize),
+            doc.node(run_id)
+                .unwrap()
+                .attributes
+                .get_f64(&AttributeKey::FontSize),
             Some(12.0)
         );
     }
@@ -841,7 +844,10 @@ mod tests {
         // Undo: bold is restored
         apply(&mut doc, &inverse).unwrap();
         assert_eq!(
-            doc.node(run_id).unwrap().attributes.get_bool(&AttributeKey::Bold),
+            doc.node(run_id)
+                .unwrap()
+                .attributes
+                .get_bool(&AttributeKey::Bold),
             Some(true)
         );
     }

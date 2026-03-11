@@ -42,25 +42,16 @@ pub fn write_styles_xml(doc: &DocumentModel) -> String {
         xml.push('>');
 
         // Name
-        xml.push_str(&format!(
-            r#"<w:name w:val="{}"/>"#,
-            escape_xml(&style.name)
-        ));
+        xml.push_str(&format!(r#"<w:name w:val="{}"/>"#, escape_xml(&style.name)));
 
         // basedOn
         if let Some(ref parent) = style.parent_id {
-            xml.push_str(&format!(
-                r#"<w:basedOn w:val="{}"/>"#,
-                escape_xml(parent)
-            ));
+            xml.push_str(&format!(r#"<w:basedOn w:val="{}"/>"#, escape_xml(parent)));
         }
 
         // next
         if let Some(ref next) = style.next_style_id {
-            xml.push_str(&format!(
-                r#"<w:next w:val="{}"/>"#,
-                escape_xml(next)
-            ));
+            xml.push_str(&format!(r#"<w:next w:val="{}"/>"#, escape_xml(next)));
         }
 
         // Paragraph properties

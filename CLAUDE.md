@@ -144,8 +144,8 @@ NEVER add C/C++ dependencies to any other crate.
 
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
-### Current Phase: 1 COMPLETE — Phase 2 next (Rich Documents)
-### Status: s1-model (52), s1-ops (37), s1-format-txt (25), s1-format-docx (64), s1engine (28). 206 total tests.
+### Current Phase: Phase 2 — Rich Documents (COMPLETE)
+### Status: s1-model (61), s1-ops (37), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1engine (46). 399 total tests + 4 doc-tests.
 
 ### Phase Completion Tracker
 
@@ -153,7 +153,7 @@ NEVER add C/C++ dependencies to any other crate.
 |---|---|---|---|---|
 | Phase 0: Planning | COMPLETE | 2026-03-11 | 2026-03-11 | Specs, architecture, roadmap finalized |
 | Phase 1: Foundation | COMPLETE | 2026-03-11 | 2026-03-11 | 7 milestones done; 206 tests |
-| Phase 2: Rich Documents | NOT STARTED | — | — | Tables, images, lists, full DOCX, ODT |
+| Phase 2: Rich Documents | COMPLETE | 2026-03-11 | 2026-03-12 | 6 milestones; tables, images, lists, sections, ODT, advanced DOCX |
 | Phase 3: Layout & Export | NOT STARTED | — | — | Text shaping, layout, PDF export |
 | Phase 4: Collaboration | NOT STARTED | — | — | CRDT integration |
 | Phase 5: Production | NOT STARTED | — | — | WASM, C FFI, hardening |
@@ -169,20 +169,28 @@ Phase 1 milestones (update when Phase 1 begins):
 - [x] 1.6 Basic DOCX Writer — ZIP packaging, content/styles/metadata writers, round-trip tests (27 new tests, 64 total)
 - [x] 1.7 Facade — Engine, Document, Format, Error, DocumentBuilder; open/create/export/undo/redo (28 tests)
 
+Phase 2 milestones:
+- [x] 2.1 Tables — DOCX table read/write, builder API (19 new tests)
+- [x] 2.2 Images — DOCX inline image read/write, MediaStore, round-trip (7 new tests)
+- [x] 2.3 Lists — numbering parser/writer, numPr read/write, builder (30 new tests)
+- [x] 2.4 Sections, Headers, Footers — section model, sectPr, header/footer, fields, builder (29 new tests)
+- [x] 2.5 ODT Format — Full ODT reader/writer with paragraphs, formatting, tables, images, lists, styles, metadata (63 tests)
+- [x] 2.6 Advanced DOCX Features — Hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments (read/write/round-trip/builder). 43 new tests.
+
 ### Crate Implementation Status
 
 | Crate | Status | Tests | Notes |
 |---|---|---|---|
-| `s1-model` | **COMPLETE** | 52 passing | Core types, zero deps, all modules implemented |
+| `s1-model` | **COMPLETE** | 61 passing | Core types, zero deps, all modules + numbering defs + sections |
 | `s1-ops` | **COMPLETE** | 37 passing | Operations, transactions, undo/redo, cursor/selection |
-| `s1-format-docx` | **COMPLETE** | 64 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, round-trip |
-| `s1-format-odt` | Not started | — | ODT reader/writer |
+| `s1-format-docx` | **Phase 2** | 167 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields, hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, round-trip |
+| `s1-format-odt` | **Phase 2** | 63 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, round-trip |
 | `s1-format-pdf` | Not started | — | PDF export |
 | `s1-format-txt` | **COMPLETE** | 25 passing | Reader (UTF-8/UTF-16/Latin-1 detection), writer, round-trip |
 | `s1-convert` | Not started | — | Format conversion |
 | `s1-layout` | Not started | — | Page layout |
 | `s1-text` | Not started | — | Text shaping (C++ FFI) |
-| `s1engine` | **COMPLETE** | 28 passing | Engine, Document, Format, Error, DocumentBuilder; open/create/export; undo/redo |
+| `s1engine` | **Phase 2** | 46 passing | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript builder; open/create/export; undo/redo; ODT support |
 
 ### Recent Changes Log
 
@@ -196,6 +204,12 @@ Phase 1 milestones (update when Phase 1 begins):
 | 2026-03-11 | s1-format-docx reader implemented (37 tests) | crates/s1-format-docx/src/* |
 | 2026-03-11 | s1-format-docx writer implemented (27 new tests, 64 total) | crates/s1-format-docx/src/writer.rs, content_writer.rs, style_writer.rs, metadata_writer.rs, xml_writer.rs |
 | 2026-03-11 | s1engine facade implemented (28 tests) | crates/s1engine/src/lib.rs, engine.rs, document.rs, format.rs, error.rs, builder.rs |
+| 2026-03-11 | Milestone 2.1: Tables — DOCX read/write, builder (19 new tests, 83 docx, 32 s1engine) | property_parser.rs, content_parser.rs, content_writer.rs, writer.rs, builder.rs |
+| 2026-03-11 | Milestone 2.2: Images — DOCX read/write, round-trip (7 new tests, 90 docx total) | content_parser.rs, content_writer.rs, reader.rs, writer.rs, xml_util.rs |
+| 2026-03-11 | Milestone 2.3: Lists — numbering parser/writer, numPr read/write, builder (30 new tests) | numbering.rs, numbering_parser.rs, numbering_writer.rs, property_parser.rs, content_parser.rs, content_writer.rs, reader.rs, writer.rs, builder.rs |
+| 2026-03-11 | Milestone 2.4: Sections, Headers, Footers — section model, sectPr parser/writer, header/footer parser/writer, field support, builder API (29 new tests) | section.rs, section_parser.rs, section_writer.rs, header_footer_parser.rs, header_footer_writer.rs, content_parser.rs, content_writer.rs, reader.rs, writer.rs, builder.rs, lib.rs |
+| 2026-03-12 | Milestone 2.5: ODT Format — full reader/writer crate with paragraphs, formatting, tables, images, lists, styles, metadata, auto-styles, round-trip (63 new tests, 2 s1engine integration tests) | crates/s1-format-odt/src/* (11 modules), crates/s1engine/src/engine.rs, document.rs, error.rs, lib.rs |
+| 2026-03-12 | Milestone 2.6: Advanced DOCX — hyperlinks (external/internal/tooltip, rId resolution), bookmarks (start/end), tab stops (left/center/right/decimal with leaders), paragraph borders, paragraph shading, character spacing, superscript/subscript, comments (parser/writer/round-trip); builder API (hyperlink, bookmark_start/end, superscript, subscript); 43 new tests | comments_parser.rs, comments_writer.rs, content_parser.rs, content_writer.rs, property_parser.rs, writer.rs, reader.rs, builder.rs, lib.rs, node.rs |
 
 ---
 
@@ -295,17 +309,17 @@ Phase 1 milestones (update when Phase 1 begins):
 - [x] `read_metadata` — Parse docProps/core.xml (title, creator, etc.)
 - [x] `read_style_parent` — Style inheritance (basedOn)
 - [x] `read_bold_false` — Toggle properties with val="false"
-- [ ] `read_tables` — Basic table structure (Phase 2)
-- [ ] `read_merged_cells` — Column span, row span (Phase 2)
-- [ ] `read_images_inline` — Inline images from word/media/ (Phase 2)
+- [x] `read_tables` — Basic table structure (Phase 2)
+- [x] `read_merged_cells` — Column span, row span (Phase 2)
+- [x] `read_images_inline` — Inline images from word/media/ (Phase 2)
 - [ ] `read_images_floating` — Floating/anchored images (Phase 2)
-- [ ] `read_lists_bulleted` — Bulleted lists from numbering.xml (Phase 2)
-- [ ] `read_lists_numbered` — Numbered lists (Phase 2)
-- [ ] `read_lists_multilevel` — Multi-level nested lists (Phase 2)
-- [ ] `read_headers_footers` — Header/footer XML files (Phase 2)
-- [ ] `read_sections` — Multiple sections with different page sizes (Phase 2)
-- [ ] `read_hyperlinks` — Hyperlink elements (Phase 2)
-- [ ] `read_bookmarks` — Bookmark start/end (Phase 2)
+- [x] `read_lists_bulleted` — Bulleted lists from numbering.xml (Phase 2)
+- [x] `read_lists_numbered` — Numbered lists (Phase 2)
+- [x] `read_lists_multilevel` — Multi-level nested lists (Phase 2)
+- [x] `read_headers_footers` — Header/footer XML files (Phase 2)
+- [x] `read_sections` — Multiple sections with different page sizes (Phase 2)
+- [x] `read_hyperlinks` — Hyperlink elements (Phase 2)
+- [x] `read_bookmarks` — Bookmark start/end (Phase 2)
 - [x] `write_simple_document` — Write minimal valid DOCX
 - [x] `write_bold_run` — Bold + font size run properties
 - [x] `write_paragraph_alignment` — Paragraph alignment serialization
@@ -324,20 +338,110 @@ Phase 1 milestones (update when Phase 1 begins):
 - [x] `roundtrip_multiple_paragraphs` — Round-trip multiple paragraphs
 - [ ] `write_opens_in_word` — Output opens without errors in Word
 - [ ] `write_opens_in_libreoffice` — Output opens in LibreOffice
-- [ ] `roundtrip_tables` — Round-trip tables (Phase 2)
-- [ ] `roundtrip_images` — Round-trip images (Phase 2)
+- [x] `roundtrip_tables` — Round-trip tables (Phase 2)
+- [x] `roundtrip_images` — Round-trip images (Phase 2)
+- [x] `roundtrip_section_properties` — Round-trip section page layout (Phase 2)
+- [x] `roundtrip_header_footer` — Round-trip header/footer content (Phase 2)
+- [x] `roundtrip_first_page_header` — Round-trip first-page header with title_page (Phase 2)
+- [x] `roundtrip_section_break` — Round-trip multi-section with continuous break (Phase 2)
+- [x] `read_hyperlink_external` — External hyperlink with rId resolution (Phase 2)
+- [x] `read_hyperlink_internal` — Internal anchor hyperlink (Phase 2)
+- [x] `read_hyperlink_tooltip` — Hyperlink with tooltip (Phase 2)
+- [x] `read_hyperlink_multiple_runs` — Multiple runs in one hyperlink (Phase 2)
+- [x] `read_bookmark_start_end` — BookmarkStart/BookmarkEnd parsing (Phase 2)
+- [x] `read_tab_stops` — Tab stop parsing (left/center/right/decimal with leaders) (Phase 2)
+- [x] `read_paragraph_borders` — Paragraph border parsing (Phase 2)
+- [x] `read_paragraph_shading` — Paragraph shading/background (Phase 2)
+- [x] `read_character_spacing` — Character spacing in run properties (Phase 2)
+- [x] `read_superscript` — Superscript via vertAlign (Phase 2)
+- [x] `read_subscript` — Subscript via vertAlign (Phase 2)
+- [x] `write_hyperlink_external` — External hyperlink with relationship (Phase 2)
+- [x] `write_hyperlink_internal_anchor` — Internal anchor hyperlink (Phase 2)
+- [x] `write_hyperlink_groups_runs` — Consecutive runs grouped under hyperlink (Phase 2)
+- [x] `write_bookmark_start_end` — BookmarkStart/BookmarkEnd XML (Phase 2)
+- [x] `write_tab_stops` — Tab stop XML generation (Phase 2)
+- [x] `write_paragraph_borders` — Paragraph border XML (Phase 2)
+- [x] `write_paragraph_shading` — Paragraph shading XML (Phase 2)
+- [x] `write_character_spacing` — Character spacing in run properties (Phase 2)
+- [x] `roundtrip_hyperlink_external` — Round-trip external hyperlink (Phase 2)
+- [x] `roundtrip_hyperlink_internal` — Round-trip internal anchor hyperlink (Phase 2)
+- [x] `roundtrip_bookmarks` — Round-trip bookmarks (Phase 2)
+- [x] `roundtrip_tab_stops` — Round-trip tab stops (Phase 2)
+- [x] `roundtrip_paragraph_borders` — Round-trip paragraph borders (Phase 2)
+- [x] `roundtrip_paragraph_shading` — Round-trip paragraph shading (Phase 2)
+- [x] `roundtrip_character_spacing` — Round-trip character spacing (Phase 2)
+- [x] `roundtrip_superscript_subscript` — Round-trip superscript/subscript (Phase 2)
+- [x] `parse_comment_range` — CommentRangeStart/End parsing (Phase 2)
+- [x] `write_comment_range` — CommentRangeStart/End XML output (Phase 2)
+- [x] `parse_single_comment` — Parse single comment from comments.xml (Phase 2)
+- [x] `parse_multiple_comments` — Parse multiple comments (Phase 2)
+- [x] `parse_comment_multiple_paragraphs` — Comment with multiple paragraphs (Phase 2)
+- [x] `parse_empty_comments` — Empty comments.xml (Phase 2)
+- [x] `write_single_comment` — Write comments.xml (Phase 2)
+- [x] `write_no_comments_returns_none` — No comments → no file (Phase 2)
+- [x] `write_comment_with_date` — Comment with date attribute (Phase 2)
+- [x] `roundtrip_comments` — Full comment round-trip (Phase 2)
 - [ ] `fuzz_reader` — Fuzz DOCX reader with random ZIP/XML input
 
 #### s1-format-odt (Phase 2)
-- [ ] `read_minimal` — Minimal valid ODT
-- [ ] `read_paragraphs` — Paragraphs with text:p and text:span
-- [ ] `read_formatting` — ODF style properties
-- [ ] `read_tables` — ODF tables
-- [ ] `read_images` — Images in draw:frame
-- [ ] `read_lists` — ODF list structures
-- [ ] `write_minimal` — Write valid ODT
+- [x] `read_minimal` — Minimal valid ODT (reader.rs)
+- [x] `read_multiple_paragraphs` — Multiple paragraphs (reader.rs)
+- [x] `read_invalid_zip` — Invalid input produces error (reader.rs)
+- [x] `read_missing_content_xml` — Missing content.xml produces error (reader.rs)
+- [x] `parse_paragraph_basic` — Basic paragraph parsing (content_parser.rs)
+- [x] `parse_paragraph_with_spans` — Spans with auto-style formatting (content_parser.rs)
+- [x] `parse_heading` — Heading elements (content_parser.rs)
+- [x] `parse_table` — ODF table structure (content_parser.rs)
+- [x] `parse_list` — ODF list structures (content_parser.rs)
+- [x] `parse_frame_image` — Images in draw:frame (content_parser.rs)
+- [x] `parse_line_break` — Line breaks (content_parser.rs)
+- [x] `parse_tab` — Tab characters (content_parser.rs)
+- [x] `write_minimal_odt` — Write minimal valid ODT ZIP (writer.rs)
+- [x] `write_with_content` — Write paragraphs (writer.rs)
+- [x] `write_with_styles` — Write styles.xml (writer.rs)
+- [x] `write_with_metadata` — Write meta.xml (writer.rs)
+- [x] `roundtrip_basic` — Read → write → read text preserved (writer.rs)
+- [x] `roundtrip_metadata` — Round-trip title + creator (writer.rs)
+- [x] `roundtrip_styles` — Round-trip style definitions (writer.rs)
+- [x] `write_content_empty` — Empty document content.xml (content_writer.rs)
+- [x] `write_content_paragraphs` — Paragraphs with text (content_writer.rs)
+- [x] `write_content_formatted` — Bold/italic auto-styles (content_writer.rs)
+- [x] `write_content_table` — Table structure (content_writer.rs)
+- [x] `write_content_list` — List reconstruction (content_writer.rs)
+- [x] `write_no_styles` — No styles returns None (style_writer.rs)
+- [x] `write_paragraph_style` — Paragraph style output (style_writer.rs)
+- [x] `write_style_with_parent` — Style with parent reference (style_writer.rs)
+- [x] `write_character_style` — Character style output (style_writer.rs)
+- [x] `parse_named_style_paragraph` — Named paragraph style parsing (style_parser.rs)
+- [x] `parse_style_with_parent` — Style with parent inheritance (style_parser.rs)
+- [x] `parse_auto_styles` — Automatic style parsing (style_parser.rs)
+- [x] `parse_empty_style_element` — Self-closing style elements (style_parser.rs)
+- [x] `write_manifest_basic` — Manifest with standard entries (manifest_writer.rs)
+- [x] `write_manifest_with_images` — Manifest with image entries (manifest_writer.rs)
+- [x] `parse_basic_metadata` — Title, creator, description (metadata_parser.rs)
+- [x] `parse_empty_metadata` — Empty/missing metadata fields (metadata_parser.rs)
+- [x] `parse_keywords` — Multiple keyword elements (metadata_parser.rs)
+- [x] `write_meta_basic` — Meta.xml with all fields (metadata_writer.rs)
+- [x] `write_meta_empty` — No metadata returns None (metadata_writer.rs)
+- [x] `parse_bold_italic` — Bold/italic text properties (property_parser.rs)
+- [x] `parse_font_size` — Font size parsing (property_parser.rs)
+- [x] `parse_font_name` — Font name parsing (property_parser.rs)
+- [x] `parse_color` — Color attribute parsing (property_parser.rs)
+- [x] `parse_underline` — Underline style mapping (property_parser.rs)
+- [x] `parse_paragraph_alignment` — Text alignment (property_parser.rs)
+- [x] `parse_paragraph_margins` — Margin/indent parsing (property_parser.rs)
+- [x] `write_text_bold_italic` — Bold/italic output (property_writer.rs)
+- [x] `write_text_font_size` — Font size output (property_writer.rs)
+- [x] `write_text_color` — Color output (property_writer.rs)
+- [x] `write_paragraph_alignment` — Alignment output (property_writer.rs)
+- [x] `write_paragraph_margins` — Margin output (property_writer.rs)
+- [x] `write_table_cell_background` — Cell background output (property_writer.rs)
+- [x] `write_table_cell_vertical_align` — Vertical alignment output (property_writer.rs)
+- [x] `parse_length_inches/cm/mm/pt/px` — Unit conversion (xml_util.rs)
+- [x] `parse_length_invalid` — Invalid length handling (xml_util.rs)
+- [x] `points_to_cm_roundtrip` — Points to cm conversion (xml_util.rs)
+- [x] `test_parse_percentage` — Percentage parsing (xml_util.rs)
 - [ ] `write_opens_in_libreoffice` — Output opens in LibreOffice
-- [ ] `roundtrip_odt` — Read → write → read → compare
 - [ ] `cross_format_docx_to_odt` — DOCX → model → ODT → model → compare content
 - [ ] `fuzz_reader` — Fuzz ODT reader
 
@@ -387,6 +491,20 @@ Phase 1 milestones (update when Phase 1 begins):
 - [x] `build_heading_levels` — H1/H2/H3 with distinct styles
 - [x] `build_with_line_break` — Line break in paragraph
 - [x] `build_and_export_docx` — Builder → DOCX → reopen round-trip
+- [x] `build_simple_table` — Table builder with rows and cells
+- [x] `build_table_with_rich_cells` — Table with formatted cell content
+- [x] `build_table_mixed_with_paragraphs` — Tables between paragraphs
+- [x] `build_table_docx_roundtrip` — Table builder → DOCX → reopen round-trip
+- [x] `build_with_section` — Section builder with custom properties
+- [x] `build_with_header_footer` — Section builder with header/footer text
+- [x] `build_section_docx_roundtrip` — Section builder → DOCX → reopen round-trip
+- [x] `open_and_export_odt` — Open ODT bytes, export, round-trip verify
+- [x] `odt_builder_roundtrip` — Builder → ODT → reopen round-trip
+- [x] `build_with_superscript` — Superscript builder
+- [x] `build_with_subscript` — Subscript builder
+- [x] `build_with_hyperlink` — Hyperlink builder
+- [x] `build_with_bookmark` — Bookmark start/end builder
+- [x] `build_hyperlink_docx_roundtrip` — Hyperlink builder → DOCX → reopen round-trip
 
 #### Integration Tests
 - [ ] `open_real_world_docx` — Open 10+ real DOCX files without panic

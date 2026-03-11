@@ -126,7 +126,12 @@ impl NodeType {
     /// Returns the allowed child node types for this node type.
     pub fn allowed_children(&self) -> &'static [NodeType] {
         match self {
-            NodeType::Document => &[NodeType::Body, NodeType::Header, NodeType::Footer],
+            NodeType::Document => &[
+                NodeType::Body,
+                NodeType::Header,
+                NodeType::Footer,
+                NodeType::CommentBody,
+            ],
             NodeType::Body => &[NodeType::Section, NodeType::Paragraph, NodeType::Table],
             NodeType::Section => &[NodeType::Paragraph, NodeType::Table],
             NodeType::Paragraph => &[
@@ -146,9 +151,7 @@ impl NodeType {
             NodeType::Table => &[NodeType::TableRow],
             NodeType::TableRow => &[NodeType::TableCell],
             NodeType::TableCell => &[NodeType::Paragraph, NodeType::Table],
-            NodeType::Header | NodeType::Footer => {
-                &[NodeType::Paragraph, NodeType::Table]
-            }
+            NodeType::Header | NodeType::Footer => &[NodeType::Paragraph, NodeType::Table],
             NodeType::CommentBody => &[NodeType::Paragraph],
             // Leaf nodes
             _ => &[],

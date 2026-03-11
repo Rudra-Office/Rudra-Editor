@@ -191,10 +191,7 @@ mod tests {
         assert_eq!(style.name, "Heading 1");
         assert_eq!(style.parent_id.as_deref(), Some("Normal"));
         assert_eq!(style.next_style_id.as_deref(), Some("Normal"));
-        assert_eq!(
-            style.attributes.get_bool(&AttributeKey::Bold),
-            Some(true)
-        );
+        assert_eq!(style.attributes.get_bool(&AttributeKey::Bold), Some(true));
         // 48 half-points = 24pt
         assert_eq!(
             style.attributes.get_f64(&AttributeKey::FontSize),
@@ -229,10 +226,7 @@ mod tests {
 
         let style = doc.style_by_id("BoldChar").unwrap();
         assert_eq!(style.style_type, StyleType::Character);
-        assert_eq!(
-            style.attributes.get_bool(&AttributeKey::Bold),
-            Some(true)
-        );
+        assert_eq!(style.attributes.get_bool(&AttributeKey::Bold), Some(true));
     }
 
     #[test]
@@ -248,9 +242,7 @@ mod tests {
 
         let style = doc.style_by_id("Center").unwrap();
         assert_eq!(
-            style
-                .attributes
-                .get_alignment(&AttributeKey::Alignment),
+            style.attributes.get_alignment(&AttributeKey::Alignment),
             Some(s1_model::Alignment::Center)
         );
     }

@@ -3,7 +3,9 @@
 use quick_xml::events::Event;
 use quick_xml::Reader;
 use s1_model::{
-    Alignment, AttributeKey, AttributeMap, AttributeValue, Color, LineSpacing, UnderlineStyle,
+    Alignment, AttributeKey, AttributeMap, AttributeValue, BorderSide, BorderStyle, Borders, Color,
+    LineSpacing, ListFormat, ListInfo, TabAlignment, TabLeader, TabStop, TableWidth,
+    UnderlineStyle, VerticalAlignment,
 };
 
 use crate::error::DocxError;
@@ -28,19 +30,13 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                             .or_else(|| get_attr(&e, b"hAnsi"))
                             .or_else(|| get_attr(&e, b"cs"))
                         {
-                            attrs.set(
-                                AttributeKey::FontFamily,
-                                AttributeValue::String(font),
-                            );
+                            attrs.set(AttributeKey::FontFamily, AttributeValue::String(font));
                         }
                         skip_to_end(reader)?;
                     }
                     b"rStyle" => {
                         if let Some(style_id) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::StyleId,
-                                AttributeValue::String(style_id),
-                            );
+                            attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
                         }
                         skip_to_end(reader)?;
                     }
@@ -56,10 +52,7 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         attrs.set(AttributeKey::Bold, AttributeValue::Bool(is_toggle_on(&e)));
                     }
                     b"i" => {
-                        attrs.set(
-                            AttributeKey::Italic,
-                            AttributeValue::Bool(is_toggle_on(&e)),
-                        );
+                        attrs.set(AttributeKey::Italic, AttributeValue::Bool(is_toggle_on(&e)));
                     }
                     b"strike" => {
                         attrs.set(
@@ -94,10 +87,7 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         if let Some(hex) = get_val(&e) {
                             if hex != "auto" {
                                 if let Some(color) = Color::from_hex(&hex) {
-                                    attrs.set(
-                                        AttributeKey::Color,
-                                        AttributeValue::Color(color),
-                                    );
+                                    attrs.set(AttributeKey::Color, AttributeValue::Color(color));
                                 }
                             }
                         }
@@ -117,53 +107,33 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                             .or_else(|| get_attr(&e, b"hAnsi"))
                             .or_else(|| get_attr(&e, b"cs"))
                         {
-                            attrs.set(
-                                AttributeKey::FontFamily,
-                                AttributeValue::String(font),
-                            );
+                            attrs.set(AttributeKey::FontFamily, AttributeValue::String(font));
                         }
                     }
-                    b"vertAlign" => {
-                        match get_val(&e).as_deref() {
-                            Some("superscript") => {
-                                attrs.set(
-                                    AttributeKey::Superscript,
-                                    AttributeValue::Bool(true),
-                                );
-                            }
-                            Some("subscript") => {
-                                attrs.set(
-                                    AttributeKey::Subscript,
-                                    AttributeValue::Bool(true),
-                                );
-                            }
-                            _ => {}
+                    b"vertAlign" => match get_val(&e).as_deref() {
+                        Some("superscript") => {
+                            attrs.set(AttributeKey::Superscript, AttributeValue::Bool(true));
                         }
-                    }
+                        Some("subscript") => {
+                            attrs.set(AttributeKey::Subscript, AttributeValue::Bool(true));
+                        }
+                        _ => {}
+                    },
                     b"rStyle" => {
                         if let Some(style_id) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::StyleId,
-                                AttributeValue::String(style_id),
-                            );
+                            attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
                         }
                     }
                     b"spacing" => {
                         if let Some(val) = get_val(&e) {
                             if let Some(pts) = twips_to_points(&val) {
-                                attrs.set(
-                                    AttributeKey::FontSpacing,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs.set(AttributeKey::FontSpacing, AttributeValue::Float(pts));
                             }
                         }
                     }
                     b"lang" => {
                         if let Some(lang) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::Language,
-                                AttributeValue::String(lang),
-                            );
+                            attrs.set(AttributeKey::Language, AttributeValue::String(lang));
                         }
                     }
                     _ => {}
@@ -180,9 +150,7 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
 }
 
 /// Parse `<w:pPr>` — paragraph formatting properties.
-pub fn parse_paragraph_properties(
-    reader: &mut Reader<&[u8]>,
-) -> Result<AttributeMap, DocxError> {
+pub fn parse_paragraph_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap, DocxError> {
     let mut attrs = AttributeMap::new();
 
     loop {
@@ -192,12 +160,27 @@ pub fn parse_paragraph_properties(
                 match name.as_slice() {
                     b"pStyle" => {
                         if let Some(style_id) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::StyleId,
-                                AttributeValue::String(style_id),
-                            );
+                            attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
                         }
                         skip_to_end(reader)?;
+                    }
+                    b"numPr" => {
+                        if let Some(list_info) = parse_num_pr(reader)? {
+                            attrs.set(AttributeKey::ListInfo, AttributeValue::ListInfo(list_info));
+                        }
+                    }
+                    b"tabs" => {
+                        let tab_stops = parse_tabs(reader)?;
+                        if !tab_stops.is_empty() {
+                            attrs.set(AttributeKey::TabStops, AttributeValue::TabStops(tab_stops));
+                        }
+                    }
+                    b"pBdr" => {
+                        let borders = parse_borders(reader, b"pBdr")?;
+                        attrs.set(
+                            AttributeKey::ParagraphBorders,
+                            AttributeValue::Borders(borders),
+                        );
                     }
                     b"rPr" => {
                         // Default run properties for the paragraph — skip for now
@@ -220,35 +203,23 @@ pub fn parse_paragraph_properties(
                             _ => None,
                         };
                         if let Some(a) = alignment {
-                            attrs.set(
-                                AttributeKey::Alignment,
-                                AttributeValue::Alignment(a),
-                            );
+                            attrs.set(AttributeKey::Alignment, AttributeValue::Alignment(a));
                         }
                     }
                     b"pStyle" => {
                         if let Some(style_id) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::StyleId,
-                                AttributeValue::String(style_id),
-                            );
+                            attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
                         }
                     }
                     b"spacing" => {
                         if let Some(before) = get_attr(&e, b"before") {
                             if let Some(pts) = twips_to_points(&before) {
-                                attrs.set(
-                                    AttributeKey::SpacingBefore,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs.set(AttributeKey::SpacingBefore, AttributeValue::Float(pts));
                             }
                         }
                         if let Some(after) = get_attr(&e, b"after") {
                             if let Some(pts) = twips_to_points(&after) {
-                                attrs.set(
-                                    AttributeKey::SpacingAfter,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs.set(AttributeKey::SpacingAfter, AttributeValue::Float(pts));
                             }
                         }
                         // Line spacing
@@ -282,26 +253,18 @@ pub fn parse_paragraph_properties(
                     b"ind" => {
                         if let Some(left) = get_attr(&e, b"left") {
                             if let Some(pts) = twips_to_points(&left) {
-                                attrs.set(
-                                    AttributeKey::IndentLeft,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(pts));
                             }
                         }
                         if let Some(right) = get_attr(&e, b"right") {
                             if let Some(pts) = twips_to_points(&right) {
-                                attrs.set(
-                                    AttributeKey::IndentRight,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs.set(AttributeKey::IndentRight, AttributeValue::Float(pts));
                             }
                         }
                         if let Some(first_line) = get_attr(&e, b"firstLine") {
                             if let Some(pts) = twips_to_points(&first_line) {
-                                attrs.set(
-                                    AttributeKey::IndentFirstLine,
-                                    AttributeValue::Float(pts),
-                                );
+                                attrs
+                                    .set(AttributeKey::IndentFirstLine, AttributeValue::Float(pts));
                             }
                         }
                     }
@@ -323,6 +286,19 @@ pub fn parse_paragraph_properties(
                             AttributeValue::Bool(is_toggle_on(&e)),
                         );
                     }
+                    b"shd" => {
+                        // Paragraph shading/background color
+                        if let Some(fill) = get_attr(&e, b"fill") {
+                            if fill != "auto" {
+                                if let Some(color) = Color::from_hex(&fill) {
+                                    attrs.set(
+                                        AttributeKey::Background,
+                                        AttributeValue::Color(color),
+                                    );
+                                }
+                            }
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -334,6 +310,398 @@ pub fn parse_paragraph_properties(
     }
 
     Ok(attrs)
+}
+
+/// Parse `<w:tblPr>` — table formatting properties.
+pub fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap, DocxError> {
+    let mut attrs = AttributeMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"tblBorders" => {
+                        let borders = parse_borders(reader, b"tblBorders")?;
+                        attrs.set(AttributeKey::TableBorders, AttributeValue::Borders(borders));
+                    }
+                    _ => {
+                        skip_to_end(reader)?;
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"tblW" => {
+                        if let Some(w) = parse_width(&e) {
+                            attrs.set(AttributeKey::TableWidth, AttributeValue::TableWidth(w));
+                        }
+                    }
+                    b"jc" => {
+                        let alignment = match get_val(&e).as_deref() {
+                            Some("left") | Some("start") => Some(Alignment::Left),
+                            Some("center") => Some(Alignment::Center),
+                            Some("right") | Some("end") => Some(Alignment::Right),
+                            _ => None,
+                        };
+                        if let Some(a) = alignment {
+                            attrs.set(AttributeKey::TableAlignment, AttributeValue::Alignment(a));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"tblPr" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(attrs)
+}
+
+/// Parse `<w:tcPr>` — table cell formatting properties.
+pub fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap, DocxError> {
+    let mut attrs = AttributeMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"tcBorders" => {
+                        let borders = parse_borders(reader, b"tcBorders")?;
+                        attrs.set(AttributeKey::CellBorders, AttributeValue::Borders(borders));
+                    }
+                    _ => {
+                        skip_to_end(reader)?;
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"tcW" => {
+                        if let Some(w) = parse_width(&e) {
+                            attrs.set(AttributeKey::CellWidth, AttributeValue::TableWidth(w));
+                        }
+                    }
+                    b"gridSpan" => {
+                        if let Some(val) = get_val(&e) {
+                            if let Ok(span) = val.parse::<i64>() {
+                                attrs.set(AttributeKey::ColSpan, AttributeValue::Int(span));
+                            }
+                        }
+                    }
+                    b"vMerge" => {
+                        // vMerge with val="restart" starts a merge; empty vMerge continues it
+                        let val = get_val(&e);
+                        let merge_val = match val.as_deref() {
+                            Some("restart") => "restart",
+                            _ => "continue",
+                        };
+                        attrs.set(
+                            AttributeKey::RowSpan,
+                            AttributeValue::String(merge_val.to_string()),
+                        );
+                    }
+                    b"vAlign" => {
+                        let valign = match get_val(&e).as_deref() {
+                            Some("top") => Some(VerticalAlignment::Top),
+                            Some("center") => Some(VerticalAlignment::Center),
+                            Some("bottom") => Some(VerticalAlignment::Bottom),
+                            _ => None,
+                        };
+                        if let Some(va) = valign {
+                            attrs.set(
+                                AttributeKey::VerticalAlign,
+                                AttributeValue::VerticalAlignment(va),
+                            );
+                        }
+                    }
+                    b"shd" => {
+                        // Cell shading/background color
+                        if let Some(fill) = get_attr(&e, b"fill") {
+                            if fill != "auto" {
+                                if let Some(color) = Color::from_hex(&fill) {
+                                    attrs.set(
+                                        AttributeKey::CellBackground,
+                                        AttributeValue::Color(color),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"tcPr" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(attrs)
+}
+
+/// Parse spacing attributes from a `w:spacing` element.
+pub fn parse_spacing_attrs(e: &quick_xml::events::BytesStart<'_>, attrs: &mut AttributeMap) {
+    if let Some(before) = get_attr(e, b"before") {
+        if let Some(pts) = twips_to_points(&before) {
+            attrs.set(AttributeKey::SpacingBefore, AttributeValue::Float(pts));
+        }
+    }
+    if let Some(after) = get_attr(e, b"after") {
+        if let Some(pts) = twips_to_points(&after) {
+            attrs.set(AttributeKey::SpacingAfter, AttributeValue::Float(pts));
+        }
+    }
+    if let Some(line) = get_attr(e, b"line") {
+        let rule = get_attr(e, b"lineRule");
+        if let Ok(line_val) = line.parse::<f64>() {
+            let spacing = match rule.as_deref() {
+                Some("exact") => LineSpacing::Exact(line_val / 20.0),
+                Some("atLeast") => LineSpacing::AtLeast(line_val / 20.0),
+                _ => {
+                    let multiple = line_val / 240.0;
+                    if (multiple - 1.0).abs() < 0.01 {
+                        LineSpacing::Single
+                    } else if (multiple - 1.5).abs() < 0.01 {
+                        LineSpacing::OnePointFive
+                    } else if (multiple - 2.0).abs() < 0.01 {
+                        LineSpacing::Double
+                    } else {
+                        LineSpacing::Multiple(multiple)
+                    }
+                }
+            };
+            attrs.set(
+                AttributeKey::LineSpacing,
+                AttributeValue::LineSpacing(spacing),
+            );
+        }
+    }
+}
+
+/// Parse indent attributes from a `w:ind` element.
+pub fn parse_indent_attrs(e: &quick_xml::events::BytesStart<'_>, attrs: &mut AttributeMap) {
+    if let Some(left) = get_attr(e, b"left") {
+        if let Some(pts) = twips_to_points(&left) {
+            attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(pts));
+        }
+    }
+    if let Some(right) = get_attr(e, b"right") {
+        if let Some(pts) = twips_to_points(&right) {
+            attrs.set(AttributeKey::IndentRight, AttributeValue::Float(pts));
+        }
+    }
+    if let Some(first_line) = get_attr(e, b"firstLine") {
+        if let Some(pts) = twips_to_points(&first_line) {
+            attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(pts));
+        }
+    }
+}
+
+/// Parse `<w:numPr>` — list numbering reference on a paragraph.
+///
+/// Contains `<w:ilvl w:val="0"/>` and `<w:numId w:val="1"/>`.
+/// Returns a `ListInfo` with `num_format` set to `Decimal` as a placeholder
+/// (the caller resolves the actual format from numbering definitions).
+pub fn parse_num_pr(reader: &mut Reader<&[u8]>) -> Result<Option<ListInfo>, DocxError> {
+    let mut num_id: Option<u32> = None;
+    let mut level: u8 = 0;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) | Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"ilvl" => {
+                    if let Some(v) = get_val(&e) {
+                        level = v.parse().unwrap_or(0);
+                    }
+                }
+                b"numId" => {
+                    if let Some(v) = get_val(&e) {
+                        num_id = v.parse().ok();
+                    }
+                }
+                _ => {}
+            },
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"numPr" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    // numId=0 means "no list" in OOXML
+    match num_id {
+        Some(id) if id > 0 => Ok(Some(ListInfo {
+            level,
+            num_format: ListFormat::Decimal, // placeholder, resolved later
+            num_id: id,
+            start: None,
+        })),
+        _ => Ok(None),
+    }
+}
+
+/// Parse `<w:tabs>` — tab stop definitions in paragraph properties.
+/// Parse `<w:tabs>` children into a list of TabStop values.
+pub fn parse_tabs_pub(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, DocxError> {
+    parse_tabs(reader)
+}
+
+fn parse_tabs(reader: &mut Reader<&[u8]>) -> Result<Vec<TabStop>, DocxError> {
+    let mut stops = Vec::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) if e.local_name().as_ref() == b"tab" => {
+                let pos = get_attr(&e, b"pos")
+                    .and_then(|v| v.parse::<f64>().ok())
+                    .map(|v| v / 20.0) // twips to points
+                    .unwrap_or(0.0);
+
+                let alignment = match get_val(&e).as_deref() {
+                    Some("center") => TabAlignment::Center,
+                    Some("right") => TabAlignment::Right,
+                    Some("decimal") => TabAlignment::Decimal,
+                    _ => TabAlignment::Left,
+                };
+
+                let leader = match get_attr(&e, b"leader").as_deref() {
+                    Some("dot") => TabLeader::Dot,
+                    Some("hyphen") | Some("dash") => TabLeader::Dash,
+                    Some("underscore") | Some("heavy") => TabLeader::Underscore,
+                    _ => TabLeader::None,
+                };
+
+                stops.push(TabStop {
+                    position: pos,
+                    alignment,
+                    leader,
+                });
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"tabs" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(stops)
+}
+
+/// Parse a width element (`<w:tblW>` or `<w:tcW>`).
+///
+/// OOXML width types: "auto", "dxa" (twips), "pct" (fiftieths of a percent).
+fn parse_width(e: &quick_xml::events::BytesStart<'_>) -> Option<TableWidth> {
+    let w_val = get_attr(e, b"w")?;
+    let w_type = get_attr(e, b"type").unwrap_or_default();
+
+    match w_type.as_str() {
+        "auto" | "nil" | "" => Some(TableWidth::Auto),
+        "dxa" => {
+            let twips = w_val.parse::<f64>().ok()?;
+            Some(TableWidth::Fixed(twips / 20.0))
+        }
+        "pct" => {
+            // Value is in fiftieths of a percent (e.g. 5000 = 100%)
+            let pct_50 = w_val.parse::<f64>().ok()?;
+            Some(TableWidth::Percent(pct_50 / 50.0))
+        }
+        _ => Some(TableWidth::Auto),
+    }
+}
+
+/// Parse a borders element (`<w:tblBorders>` or `<w:tcBorders>`).
+/// Parse border elements (top/bottom/left/right) until the given end tag.
+pub fn parse_borders(reader: &mut Reader<&[u8]>, end_tag: &[u8]) -> Result<Borders, DocxError> {
+    let mut borders = Borders {
+        top: None,
+        bottom: None,
+        left: None,
+        right: None,
+    };
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Empty(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                let side = parse_border_side(&e);
+                match name.as_slice() {
+                    b"top" => borders.top = side,
+                    b"bottom" => borders.bottom = side,
+                    b"left" | b"start" => borders.left = side,
+                    b"right" | b"end" => borders.right = side,
+                    // insideH/insideV are table-level; skip for now
+                    _ => {}
+                }
+            }
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                let side = parse_border_side(&e);
+                match name.as_slice() {
+                    b"top" => borders.top = side,
+                    b"bottom" => borders.bottom = side,
+                    b"left" | b"start" => borders.left = side,
+                    b"right" | b"end" => borders.right = side,
+                    _ => {}
+                }
+                skip_to_end(reader)?;
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == end_tag => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(borders)
+}
+
+/// Parse attributes of a single border side element (e.g. `<w:top w:val="single" w:sz="4" w:color="000000"/>`).
+fn parse_border_side(e: &quick_xml::events::BytesStart<'_>) -> Option<BorderSide> {
+    let style_str = get_val(e)?;
+    let style = match style_str.as_str() {
+        "none" | "nil" => BorderStyle::None,
+        "single" => BorderStyle::Single,
+        "double" => BorderStyle::Double,
+        "dashed" | "dashSmallGap" => BorderStyle::Dashed,
+        "dotted" => BorderStyle::Dotted,
+        "thick" | "thickThinSmallGap" | "thinThickSmallGap" => BorderStyle::Thick,
+        _ => BorderStyle::Single,
+    };
+
+    // w:sz is in eighths of a point
+    let width = get_attr(e, b"sz")
+        .and_then(|s| s.parse::<f64>().ok())
+        .map(|v| v / 8.0)
+        .unwrap_or(0.5);
+
+    let color = get_attr(e, b"color")
+        .and_then(|hex| {
+            if hex == "auto" {
+                None
+            } else {
+                Color::from_hex(&hex)
+            }
+        })
+        .unwrap_or(Color::BLACK);
+
+    let spacing = get_attr(e, b"space")
+        .and_then(|s| s.parse::<f64>().ok())
+        .unwrap_or(0.0);
+
+    Some(BorderSide {
+        style,
+        width,
+        color,
+        spacing,
+    })
 }
 
 /// Skip to the matching end tag (for elements we want to ignore).
@@ -443,10 +811,7 @@ mod tests {
             }
         }
         let attrs = parse_run_properties(&mut reader).unwrap();
-        assert_eq!(
-            attrs.get_color(&AttributeKey::Color),
-            Some(Color::RED)
-        );
+        assert_eq!(attrs.get_color(&AttributeKey::Color), Some(Color::RED));
     }
 
     #[test]
@@ -461,10 +826,7 @@ mod tests {
             }
         }
         let attrs = parse_run_properties(&mut reader).unwrap();
-        assert_eq!(
-            attrs.get_string(&AttributeKey::FontFamily),
-            Some("Arial")
-        );
+        assert_eq!(attrs.get_string(&AttributeKey::FontFamily), Some("Arial"));
     }
 
     #[test]
@@ -531,9 +893,203 @@ mod tests {
             }
         }
         let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::StyleId), Some("Heading1"));
+    }
+
+    // ─── Table property tests ─────────────────────────────────────────
+
+    fn skip_to_start(reader: &mut Reader<&[u8]>, tag: &[u8]) {
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) if e.local_name().as_ref() == tag => break,
+                Ok(Event::Eof) => panic!("unexpected EOF looking for tag"),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
+    fn parse_table_width_auto() {
+        let xml = r#"<w:tblPr><w:tblW w:w="0" w:type="auto"/></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::TableWidth) {
+            Some(AttributeValue::TableWidth(s1_model::TableWidth::Auto)) => {}
+            other => panic!("Expected TableWidth::Auto, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_table_width_dxa() {
+        let xml = r#"<w:tblPr><w:tblW w:w="9360" w:type="dxa"/></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::TableWidth) {
+            Some(AttributeValue::TableWidth(s1_model::TableWidth::Fixed(pts))) => {
+                assert!((pts - 468.0).abs() < 0.01); // 9360 twips = 468pt
+            }
+            other => panic!("Expected TableWidth::Fixed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_table_width_pct() {
+        let xml = r#"<w:tblPr><w:tblW w:w="5000" w:type="pct"/></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::TableWidth) {
+            Some(AttributeValue::TableWidth(s1_model::TableWidth::Percent(pct))) => {
+                assert!((pct - 100.0).abs() < 0.01); // 5000/50 = 100%
+            }
+            other => panic!("Expected TableWidth::Percent, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_table_alignment() {
+        let xml = r#"<w:tblPr><w:jc w:val="center"/></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
         assert_eq!(
-            attrs.get_string(&AttributeKey::StyleId),
-            Some("Heading1")
+            attrs.get_alignment(&AttributeKey::TableAlignment),
+            Some(Alignment::Center)
         );
+    }
+
+    #[test]
+    fn parse_table_borders() {
+        let xml = r#"<w:tblPr><w:tblBorders>
+            <w:top w:val="single" w:sz="4" w:color="000000"/>
+            <w:bottom w:val="double" w:sz="8" w:color="FF0000"/>
+        </w:tblBorders></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::TableBorders) {
+            Some(AttributeValue::Borders(b)) => {
+                let top = b.top.as_ref().unwrap();
+                assert_eq!(top.style, s1_model::BorderStyle::Single);
+                assert!((top.width - 0.5).abs() < 0.01); // 4/8 = 0.5pt
+
+                let bottom = b.bottom.as_ref().unwrap();
+                assert_eq!(bottom.style, s1_model::BorderStyle::Double);
+                assert_eq!(bottom.color, Color::RED);
+            }
+            other => panic!("Expected Borders, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_cell_width_and_span() {
+        let xml = r#"<w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:gridSpan w:val="2"/></w:tcPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tcPr");
+        let attrs = parse_cell_properties(&mut reader).unwrap();
+
+        // 2880 twips = 144pt
+        match attrs.get(&AttributeKey::CellWidth) {
+            Some(AttributeValue::TableWidth(s1_model::TableWidth::Fixed(pts))) => {
+                assert!((pts - 144.0).abs() < 0.01);
+            }
+            other => panic!("Expected CellWidth Fixed, got {:?}", other),
+        }
+
+        assert_eq!(attrs.get_i64(&AttributeKey::ColSpan), Some(2));
+    }
+
+    #[test]
+    fn parse_cell_vmerge_restart() {
+        let xml = r#"<w:tcPr><w:vMerge w:val="restart"/></w:tcPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tcPr");
+        let attrs = parse_cell_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RowSpan), Some("restart"));
+    }
+
+    #[test]
+    fn parse_cell_vmerge_continue() {
+        let xml = r#"<w:tcPr><w:vMerge/></w:tcPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tcPr");
+        let attrs = parse_cell_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RowSpan), Some("continue"));
+    }
+
+    #[test]
+    fn parse_cell_valign_and_shading() {
+        let xml = r#"<w:tcPr><w:vAlign w:val="center"/><w:shd w:fill="FFFF00"/></w:tcPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tcPr");
+        let attrs = parse_cell_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::VerticalAlign) {
+            Some(AttributeValue::VerticalAlignment(s1_model::VerticalAlignment::Center)) => {}
+            other => panic!("Expected Center, got {:?}", other),
+        }
+        assert_eq!(
+            attrs.get_color(&AttributeKey::CellBackground),
+            Some(Color::new(255, 255, 0))
+        );
+    }
+
+    #[test]
+    fn parse_paragraph_numpr() {
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:numPr>
+                <w:ilvl w:val="0"/>
+                <w:numId w:val="3"/>
+            </w:numPr>
+        </w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        skip_to_start(&mut reader, b"pPr");
+        let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::ListInfo) {
+            Some(AttributeValue::ListInfo(info)) => {
+                assert_eq!(info.level, 0);
+                assert_eq!(info.num_id, 3);
+            }
+            other => panic!("Expected ListInfo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_paragraph_numpr_level_2() {
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:numPr>
+                <w:ilvl w:val="2"/>
+                <w:numId w:val="1"/>
+            </w:numPr>
+        </w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        skip_to_start(&mut reader, b"pPr");
+        let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        match attrs.get(&AttributeKey::ListInfo) {
+            Some(AttributeValue::ListInfo(info)) => {
+                assert_eq!(info.level, 2);
+                assert_eq!(info.num_id, 1);
+            }
+            other => panic!("Expected ListInfo, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn parse_paragraph_numpr_zero_numid_ignored() {
+        // numId=0 means "remove from list" in OOXML — should produce no ListInfo
+        let xml = r#"<w:pPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+            <w:numPr>
+                <w:ilvl w:val="0"/>
+                <w:numId w:val="0"/>
+            </w:numPr>
+        </w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        reader.config_mut().trim_text(true);
+        skip_to_start(&mut reader, b"pPr");
+        let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        assert!(attrs.get(&AttributeKey::ListInfo).is_none());
     }
 }
