@@ -125,7 +125,7 @@ s1engine = { version = "0.1", features = ["pdf", "convert", "crdt"] }
 | `s1-model` | Core document model (tree, nodes, attributes, styles) | 72 |
 | `s1-ops` | Operations, transactions, undo/redo | 48 |
 | `s1-format-docx` | DOCX reader/writer | 172 |
-| `s1-format-odt` | ODT reader/writer | 98 |
+| `s1-format-odt` | ODT reader/writer | 110 |
 | `s1-format-md` | Markdown reader/writer | 32 |
 | `s1-format-pdf` | PDF exporter | 21 |
 | `s1-format-txt` | Plain text reader/writer | 41 |
@@ -171,9 +171,9 @@ Detailed per-feature support across all document formats. Classification key:
 | Lists (numbered) | Full | Full | Full | -- | Markers (`1. `) | -- |
 | Lists (multilevel) | Full | Full | Partial (nested) | -- | Indent-based | -- |
 | Page breaks | Full | Full | -- | Write | -- | -- |
-| Sections (page size, margins) | Full | -- | -- | Write | -- | -- |
-| Sections (orientation) | Full | -- | -- | Write | -- | -- |
-| Headers / footers | Full | -- | -- | Write | -- | -- |
+| Sections (page size, margins) | Full | Full | -- | Write | -- | -- |
+| Sections (orientation) | Full | Full | -- | Write | -- | -- |
+| Headers / footers | Full | Full | -- | Write | -- | -- |
 | Table of contents | Full | Full | -- | -- | Lossy (text only) | -- |
 | Thematic breaks | -- | -- | Full | -- | `---` | -- |
 | Code blocks | -- | -- | Full | -- | -- | -- |
@@ -214,7 +214,7 @@ Detailed per-feature support across all document formats. Classification key:
 ### Notes
 
 - **DOCX**: Most complete format support. Floating images are read into the model but written back as inline.
-- **ODT**: Superscript/subscript, character spacing, paragraph shading, hyperlinks (with URL), bookmarks (start/end/collapsed), tab stops, paragraph borders, and comments (annotations with author/date). No support for headers/footers or sections.
+- **ODT**: Superscript/subscript, character spacing, paragraph shading, hyperlinks (with URL), bookmarks (start/end/collapsed), tab stops, paragraph borders, comments (annotations with author/date), headers/footers (with page number/count fields), and sections (page size, margins, orientation). Page layout round-trips via `styles.xml` master pages.
 - **MD**: Markdown via pulldown-cmark. Supports CommonMark + GFM tables. Round-trip is partial -- Markdown-specific features (headings, bold, italic, strikethrough, links, lists, tables, code) round-trip well, but document-level features (metadata, page layout, images) are not representable in Markdown.
 - **PDF**: Export-only path: DocumentModel passes through the layout engine (`s1-layout`) before PDF generation. Supports font embedding with subsetting, table borders, image embedding, hyperlink annotations, and document outline (bookmarks).
 - **TXT**: Structural markers preserved: headings (`# `), bullet lists (`- `), numbered lists (`1. `), nested lists (indent), thematic breaks (`---`). Tables render as tab-separated columns. Encoding detection supports UTF-8, UTF-16 LE/BE (BOM), and Latin-1 fallback.

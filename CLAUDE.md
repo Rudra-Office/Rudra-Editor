@@ -148,7 +148,7 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
 ### Current Phase: All phases complete (pre-release)
-### Status: s1-model (72), s1-ops (48), s1-format-txt (41), s1-format-docx (172), s1-format-odt (98), s1-format-md (32), s1-format-pdf (21), s1-convert (15), s1-layout (38), s1-text (39), s1engine (52+44 integration), s1-crdt (172), s1engine-wasm (12), s1engine-c (10), proptests (4). 870 total tests.
+### Status: s1-model (72), s1-ops (48), s1-format-txt (41), s1-format-docx (172), s1-format-odt (110), s1-format-md (32), s1-format-pdf (21), s1-convert (15), s1-layout (38), s1-text (39), s1engine (52+44 integration), s1-crdt (172), s1engine-wasm (12), s1engine-c (10), proptests (4). 882 total tests.
 
 ### Phase Completion Tracker
 
@@ -206,7 +206,7 @@ Phase 5 milestones:
 | `s1-model` | **COMPLETE** | 72 passing | Core types, zero deps, all modules + numbering defs + sections + proptest tree invariants + Unicode text safety + cycle detection + is_descendant |
 | `s1-ops` | **COMPLETE** | 48 passing | Operations, transactions, undo/redo, cursor/selection + proptest inversion roundtrip + subtree undo + mixed attribute undo + Unicode text roundtrip |
 | `s1-format-docx` | **COMPLETE** | 172 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields, hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, TOC (SDT), round-trip. ZIP bomb protection. |
-| `s1-format-odt` | **COMPLETE** | 98 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, TOC, superscript/subscript, character spacing, paragraph shading, keep-lines-together, hyperlinks, bookmarks, tab stops, paragraph borders, comments (annotations), round-trip. ZIP bomb protection. |
+| `s1-format-odt` | **COMPLETE** | 110 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, TOC, superscript/subscript, character spacing, paragraph shading, keep-lines-together, hyperlinks, bookmarks, tab stops, paragraph borders, comments (annotations), headers/footers (with page number/count fields), sections (page size, margins, orientation), round-trip. ZIP bomb protection. |
 | `s1-format-md` | **COMPLETE** | 32 passing | Reader (pulldown-cmark): headings, bold/italic/strikethrough, code, links, lists, GFM tables, thematic breaks. Writer: Markdown generation from DocumentModel. |
 | `s1-format-pdf` | **COMPLETE** | 21 passing | PDF export: font embedding/subsetting, text rendering, tables, metadata, images (JPEG/PNG), hyperlinks, bookmarks. Image dimension caps. |
 | `s1-format-txt` | **COMPLETE** | 41 passing | Reader (UTF-8/UTF-16/Latin-1 detection, heading/list/break markers), writer (headings, lists, TOC, thematic breaks), round-trip |
@@ -261,6 +261,7 @@ Phase 5 milestones:
 | 2026-03-12 | Fidelity F.4: ODT Tab Stops + Paragraph Borders — parse_paragraph_properties_children for <style:tab-stops>, parse_border_value for fo:border-*, border_side_to_odf writer, tab stop child elements. 7 new tests. | crates/s1-format-odt/src/property_parser.rs, property_writer.rs, style_parser.rs |
 | 2026-03-12 | Fidelity F.5: TXT Fidelity — heading # markers, bullet - markers, numbered N. markers, nested list indent, thematic break --- (PageBreakBefore), marker detection in reader. 14 new tests. | crates/s1-format-txt/src/writer.rs, reader.rs |
 | 2026-03-12 | Fidelity F.6: ODT Comments — parse/write office:annotation with dc:creator, dc:date, text:p body. CommentStart/CommentEnd inline, CommentBody on root. annotation-end parsing. 7 new tests. | crates/s1-format-odt/src/content_parser.rs, content_writer.rs |
+| 2026-03-13 | Fidelity F.7: ODT Headers/Footers/Sections — parse style:page-layout (page-layout-properties), parse style:master-page (header/footer with text + page-number/page-count fields), parse header-first/footer-first (ODF 1.3). Build SectionProperties + Header/Footer nodes from master page. Write page-layout + master-page with header/footer content to styles.xml. Round-trip page layout, headers, footers, first-page headers, footer with page number fields. 12 new tests. | crates/s1-format-odt/src/style_parser.rs, style_writer.rs, reader.rs, writer.rs |
 
 ---
 
