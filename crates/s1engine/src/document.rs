@@ -47,6 +47,11 @@ impl Document {
         &mut self.model
     }
 
+    /// Consume the Document and return the underlying model.
+    pub fn into_model(self) -> DocumentModel {
+        self.model
+    }
+
     // ─── Metadata ────────────────────────────────────────────────────
 
     /// Get document metadata (title, author, etc.).

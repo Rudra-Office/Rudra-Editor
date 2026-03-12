@@ -17,6 +17,7 @@ s1-format-odt = { workspace = true, optional = true }
 s1-format-pdf = { workspace = true, optional = true }
 s1-format-txt = { workspace = true, optional = true }
 s1-convert = { workspace = true, optional = true }
+s1-crdt = { workspace = true, optional = true }
 s1-layout = { workspace = true, optional = true }
 s1-text = { workspace = true, optional = true }
 
@@ -27,6 +28,7 @@ odt = ["dep:s1-format-odt"]
 pdf = ["dep:s1-format-pdf", "dep:s1-layout", "dep:s1-text"]
 txt = ["dep:s1-format-txt"]
 convert = ["dep:s1-convert"]
+crdt = ["dep:s1-crdt"]
 doc-legacy = ["convert"]
 
 [dev-dependencies]

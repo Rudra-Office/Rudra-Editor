@@ -879,6 +879,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "s1-crdt"
+version = "0.1.0"
+dependencies = [
+ "pretty_assertions",
+ "proptest",
+ "s1-model",
+ "s1-ops",
+]
+
+[[package]]
 name = "s1-format-docx"
 version = "0.1.0"
 dependencies = [
@@ -971,6 +981,7 @@ version = "0.1.0"
 dependencies = [
  "pretty_assertions",
  "s1-convert",
+ "s1-crdt",
  "s1-format-docx",
  "s1-format-odt",
  "s1-format-pdf",

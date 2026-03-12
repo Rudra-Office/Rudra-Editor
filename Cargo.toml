@@ -10,6 +10,7 @@ members = [
     "crates/s1-convert",
     "crates/s1-layout",
     "crates/s1-text",
+    "crates/s1-crdt",
     "crates/s1engine",
 ]
 
@@ -31,6 +32,7 @@ s1-format-txt = { path = "crates/s1-format-txt" }
 s1-convert = { path = "crates/s1-convert" }
 s1-layout = { path = "crates/s1-layout" }
 s1-text = { path = "crates/s1-text" }
+s1-crdt = { path = "crates/s1-crdt" }
 s1engine = { path = "crates/s1engine" }
 
 # External dependencies

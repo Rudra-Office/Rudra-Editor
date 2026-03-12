@@ -54,6 +54,7 @@ crates/
   s1-format-pdf/     PDF export only
   s1-format-txt/     Plain text reader/writer
   s1-convert/        Format conversion pipelines (incl. DOC→DOCX)
+  s1-crdt/           CRDT algorithms for collaborative editing
   s1-layout/         Page layout engine (pagination, line breaking)
   s1-text/           Text processing (HarfBuzz, FreeType, ICU via FFI)
   s1engine/          Facade crate — high-level public API
@@ -146,8 +147,8 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
-### Current Phase: Phase 3 — Layout & Export (complete, PDF polish deferred)
-### Status: s1-model (61), s1-ops (37), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1-format-pdf (8), s1-convert (15), s1-layout (30), s1-text (39), s1engine (46). 491 total tests + 4 doc-tests.
+### Current Phase: Phase 4 — Collaboration (complete)
+### Status: s1-model (61), s1-ops (37), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1-format-pdf (8), s1-convert (15), s1-layout (30), s1-text (39), s1engine (46), s1-crdt (171). 662 total tests + 4 doc-tests.
 
 ### Phase Completion Tracker
 
@@ -157,7 +158,7 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 | Phase 1: Foundation | COMPLETE | 2026-03-11 | 2026-03-11 | 7 milestones done; 206 tests |
 | Phase 2: Rich Documents | COMPLETE | 2026-03-11 | 2026-03-12 | 6 milestones; tables, images, lists, sections, ODT, advanced DOCX |
 | Phase 3: Layout & Export | COMPLETE | 2026-03-12 | 2026-03-12 | Layout complete; PDF polish (images, hyperlinks, bookmarks) deferred to 3.6 |
-| Phase 4: Collaboration | NOT STARTED | — | — | CRDT integration |
+| Phase 4: Collaboration | COMPLETE | 2026-03-12 | 2026-03-12 | 4 milestones; Fugue text CRDT, tree CRDT, LWW attributes/metadata, CollabDocument API, awareness, serialization, compression; 171 tests |
 | Phase 5: Production | NOT STARTED | — | — | WASM, C FFI, hardening |
 
 ### Milestone Tracker (Current Phase)
@@ -187,6 +188,12 @@ Phase 3 milestones:
 - [x] 3.5 Format Conversion (`s1-convert`) — DOC reader (OLE2/CFB heuristic text extraction), cross-format conversion pipeline (DOC/DOCX/ODT → DOCX/ODT), format detection. 15 tests.
 - [ ] 3.6 PDF Polish — Image embedding in PDF, hyperlink annotations, bookmarks/outline (deferred until after Phase 4).
 
+Phase 4 milestones:
+- [x] 4.1 Core CRDT Primitives — LamportClock, VectorClock, OpId, StateVector, CrdtOperation, CrdtError (25 tests)
+- [x] 4.2 CRDT Algorithms — Fugue-based TextCrdt, TreeCrdt, AttrCrdt, MetadataCrdt, CrdtResolver, TombstoneTracker (40 tests)
+- [x] 4.3 Collaboration API — CollabDocument, AwarenessState, binary serialization, operation compression (40 tests)
+- [x] 4.4 Collaboration Testing — 16 convergence tests (multi-replica, partition/heal, snapshot sync), 17 scenario tests (concurrent edits, deterministic ordering, undo). 33 integration tests.
+
 ### Crate Implementation Status
 
 | Crate | Status | Tests | Notes |
@@ -200,7 +207,8 @@ Phase 3 milestones:
 | `s1-convert` | **Phase 3** | 15 passing | DOC reader (OLE2/CFB heuristic), cross-format conversion (DOC/DOCX/ODT → DOCX/ODT), format detection |
 | `s1-layout` | **Phase 3** | 30 passing | Style resolution, Knuth-Plass line breaking, pagination, table layout, image placement, header/footer placement, widow/orphan control, page-number field substitution |
 | `s1-text` | **Phase 3** | 39 passing | Pure Rust: text shaping (rustybuzz), font parsing (ttf-parser), font discovery (fontdb), BiDi, line breaking |
-| `s1engine` | **Phase 2** | 46 passing | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript builder; open/create/export; undo/redo; ODT support |
+| `s1-crdt` | **Phase 4** | 171 passing | Fugue text CRDT, tree CRDT, LWW attr/metadata, resolver, CollabDocument, awareness, binary serialization, compression, tombstones; 16 convergence + 17 scenario integration tests |
+| `s1engine` | **Phase 4** | 46 passing | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript builder; open/create/export; undo/redo; ODT support; feature-gated CRDT re-exports + create_collab/open_collab |
 
 ### Recent Changes Log
 
@@ -225,6 +233,11 @@ Phase 3 milestones:
 | 2026-03-12 | Milestone 3.4: PDF Export — PDF generation from LayoutDocument, CIDFont embedding with subsetting, glyph width tables, content streams, table border rendering, metadata, multi-page support (8 tests) | crates/s1-format-pdf/src/* (3 modules) |
 | 2026-03-12 | Milestone 3.5: Format Conversion — DOC reader (OLE2/CFB heuristic text extraction), cross-format pipeline (DOC/DOCX/ODT → DOCX/ODT), format detection, convert_to_model API (15 tests) | crates/s1-convert/src/* (4 modules) |
 | 2026-03-12 | Layout Polish: Knuth-Plass optimal line breaking, header/footer placement from SectionProperties, page-number field substitution (PAGE/NUMPAGES), widow/orphan control, section page size resolution (8 new tests, 30 total) | crates/s1-layout/src/engine.rs |
+| 2026-03-12 | Phase 4 CRDT Integration: Milestone 4.1 — LamportClock, VectorClock, OpId, StateVector, CrdtOperation, CrdtError (25 unit tests) | crates/s1-crdt/src/* (clock.rs, op_id.rs, state_vector.rs, crdt_op.rs, error.rs, lib.rs) |
+| 2026-03-12 | Milestone 4.2 — Fugue-based TextCrdt (YATA integration), TreeCrdt (Kleppmann moves, cycle detection), AttrCrdt (per-key LWW), MetadataCrdt, CrdtResolver, TombstoneTracker (40 tests) | crates/s1-crdt/src/* (text_crdt.rs, tree_crdt.rs, attr_crdt.rs, metadata_crdt.rs, resolver.rs, tombstone.rs) |
+| 2026-03-12 | Milestone 4.3 — CollabDocument (fork, snapshot, apply_local/remote, changes_since, undo/redo), AwarenessState, binary serialization, operation compression (40 tests) | crates/s1-crdt/src/* (collab.rs, awareness.rs, serialize.rs, compression.rs) |
+| 2026-03-12 | Milestone 4.4 — 16 convergence tests (2/3/5 replicas, partition/heal, snapshot sync, delayed delivery) + 17 scenario tests (concurrent inserts, attribute LWW, delete+modify, undo) | crates/s1-crdt/tests/* (convergence.rs, scenarios.rs) |
+| 2026-03-12 | Feature-gated CRDT integration into s1engine facade: crdt feature flag, create_collab/open_collab methods, conditional re-exports, CrdtError variant | Cargo.toml, crates/s1engine/src/* (lib.rs, engine.rs, error.rs) |
 
 ---
 
@@ -537,6 +550,98 @@ Phase 3 milestones:
 - [x] `convert_odt_to_docx` — ODT → DocumentModel → DOCX round-trip
 - [x] `convert_invalid_doc` — Invalid DOC data produces error
 - [x] `convert_to_model_docx` — DOCX → DocumentModel extraction
+
+#### s1-crdt (Phase 4)
+
+**Unit tests (138 tests across 12 modules):**
+- [x] `lamport_tick` — LamportClock tick increments (clock.rs)
+- [x] `lamport_update` — LamportClock update from remote timestamp (clock.rs)
+- [x] `vector_clock_merge` — VectorClock merge from two replicas (clock.rs)
+- [x] `vector_clock_dominates` — VectorClock dominance comparison (clock.rs)
+- [x] `vector_clock_concurrent` — Concurrent vector clock detection (clock.rs)
+- [x] `op_id_ordering` — OpId total ordering (lamport first, replica tiebreak) (op_id.rs)
+- [x] `op_id_equality` — OpId equality comparison (op_id.rs)
+- [x] `state_vector_includes` — StateVector includes check (state_vector.rs)
+- [x] `state_vector_diff` — StateVector diff for sync (state_vector.rs)
+- [x] `state_vector_merge` — StateVector merge (state_vector.rs)
+- [x] `crdt_op_creation` — CrdtOperation construction (crdt_op.rs)
+- [x] `crdt_op_with_origins` — CrdtOperation with origin_left/right (crdt_op.rs)
+- [x] `crdt_error_variants` — All CrdtError variants (error.rs)
+- [x] `text_crdt_insert` — TextCrdt single insert (text_crdt.rs)
+- [x] `text_crdt_multiple_inserts` — TextCrdt sequential inserts (text_crdt.rs)
+- [x] `text_crdt_concurrent_inserts` — Concurrent inserts converge (text_crdt.rs)
+- [x] `text_crdt_delete` — TextCrdt tombstone delete (text_crdt.rs)
+- [x] `text_crdt_materialize` — Materialize visible text (text_crdt.rs)
+- [x] `text_crdt_offset_to_op_id` — Offset to OpId mapping (text_crdt.rs)
+- [x] `tree_crdt_insert` — TreeCrdt insert node (tree_crdt.rs)
+- [x] `tree_crdt_delete` — TreeCrdt tombstone delete (tree_crdt.rs)
+- [x] `tree_crdt_move` — TreeCrdt move node (tree_crdt.rs)
+- [x] `tree_crdt_cycle_detection` — Move creating cycle is dropped (tree_crdt.rs)
+- [x] `tree_crdt_concurrent_moves_lww` — Concurrent moves LWW (tree_crdt.rs)
+- [x] `tree_crdt_visible_children` — Only non-tombstoned children (tree_crdt.rs)
+- [x] `attr_crdt_set` — AttrCrdt set attribute (attr_crdt.rs)
+- [x] `attr_crdt_concurrent_different_keys` — Both apply (attr_crdt.rs)
+- [x] `attr_crdt_concurrent_same_key_lww` — Highest OpId wins (attr_crdt.rs)
+- [x] `attr_crdt_remove` — AttrCrdt remove attribute (attr_crdt.rs)
+- [x] `metadata_crdt_set` — MetadataCrdt LWW set (metadata_crdt.rs)
+- [x] `metadata_crdt_concurrent_lww` — Concurrent metadata LWW (metadata_crdt.rs)
+- [x] `resolver_integrate_insert_node` — Resolver delegates InsertNode (resolver.rs)
+- [x] `resolver_integrate_delete_node` — Resolver delegates DeleteNode (resolver.rs)
+- [x] `resolver_integrate_insert_text` — Per-character text integration (resolver.rs)
+- [x] `resolver_integrate_set_attributes` — Attribute integration (resolver.rs)
+- [x] `resolver_duplicate_op` — Duplicate op returns empty (resolver.rs)
+- [x] `tombstone_add_remove` — TombstoneTracker add/check/gc (tombstone.rs)
+- [x] `collab_apply_local` — CollabDocument apply local operation (collab.rs)
+- [x] `collab_apply_remote` — CollabDocument apply remote operation (collab.rs)
+- [x] `collab_fork` — Fork replica without phantom state (collab.rs)
+- [x] `collab_snapshot` — Snapshot and restore with resolver (collab.rs)
+- [x] `collab_changes_since` — Delta sync via state vector (collab.rs)
+- [x] `collab_undo_redo` — Local undo/redo generates broadcast ops (collab.rs)
+- [x] `collab_causal_ordering` — Out-of-order ops buffered in pending (collab.rs)
+- [x] `awareness_set_cursor` — Set and query cursor state (awareness.rs)
+- [x] `awareness_remove_stale` — Remove stale cursors (awareness.rs)
+- [x] `serialize_operation_roundtrip` — Binary encode/decode CrdtOperation (serialize.rs)
+- [x] `serialize_state_vector_roundtrip` — Binary encode/decode StateVector (serialize.rs)
+- [x] `serialize_snapshot_roundtrip` — Binary encode/decode Snapshot (serialize.rs)
+- [x] `compress_consecutive_inserts` — Merge consecutive single-char inserts (compression.rs)
+- [x] `compress_different_replicas` — Don't merge across replicas (compression.rs)
+
+**Convergence integration tests (16 tests in convergence.rs):**
+- [x] `two_replicas_concurrent_insert_nodes` — Both insert nodes, sync, same tree
+- [x] `two_replicas_concurrent_text_insert_converge` — Concurrent text inserts converge
+- [x] `two_replicas_sequential_typing_converge` — Sequential char-by-char typing
+- [x] `two_replicas_delete_while_other_inserts` — Delete + insert concurrent
+- [x] `two_replicas_concurrent_metadata_lww` — Metadata LWW convergence
+- [x] `two_replicas_concurrent_attributes_different_keys` — Both attrs apply
+- [x] `three_replicas_converge_after_sync` — 3-way sync convergence
+- [x] `three_replicas_mixed_operations_converge` — Mixed ops 3-way
+- [x] `delayed_delivery_converges` — Delayed/reordered delivery
+- [x] `partition_and_heal` — Network partition then heal
+- [x] `snapshot_sync_new_replica` — Snapshot-based initial sync
+- [x] `fork_diverge_and_converge` — Fork, diverge, re-sync
+- [x] `changes_since_incremental_sync` — Incremental delta sync
+- [x] `idempotent_sync` — Double-apply is idempotent
+- [x] `five_replicas_all_insert_converge` — 5-replica convergence
+- [x] `duplicate_operations_are_idempotent` — Duplicate ops ignored
+
+**Scenario integration tests (17 tests in scenarios.rs):**
+- [x] `concurrent_insert_at_same_offset_both_preserved` — Both inserts preserved
+- [x] `concurrent_insert_deterministic_order` — Deterministic ordering across replicas
+- [x] `concurrent_bold_and_italic_both_apply` — Different attrs both apply
+- [x] `concurrent_same_attribute_lww` — Same attr LWW
+- [x] `delete_node_while_other_modifies_it` — Delete wins over modify
+- [x] `concurrent_delete_same_node` — Double-delete is safe
+- [x] `concurrent_metadata_different_keys` — Different metadata keys both apply
+- [x] `concurrent_style_updates_lww` — Style LWW
+- [x] `undo_only_affects_local_operations` — Undo is local-only
+- [x] `batch_operations_all_arrive` — Batch ops all sync
+- [x] `op_log_tracks_all_operations` — Op log completeness
+- [x] `state_vector_reflects_all_replicas` — State vector accuracy
+- [x] `awareness_cursor_sharing` — Cursor presence sharing
+- [x] `empty_sync_is_noop` — Empty sync is safe
+- [x] `multi_char_insert_syncs_correctly` — Multi-char text sync
+- [x] `concurrent_multi_char_inserts_converge` — Concurrent multi-char convergence
+- [x] `apply_local_transaction` — Local transaction generates CrdtOps
 
 #### Integration Tests
 - [ ] `open_real_world_docx` — Open 10+ real DOCX files without panic
