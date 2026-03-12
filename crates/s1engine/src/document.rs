@@ -3,7 +3,7 @@
 //! [`Document`] wraps [`DocumentModel`] with undo/redo history and provides
 //! a convenient API for reading, editing, and exporting documents.
 
-use s1_model::{DocumentMetadata, DocumentModel, Node, NodeId, NodeType};
+use s1_model::{AttributeKey, AttributeValue, DocumentMetadata, DocumentModel, Node, NodeId, NodeType};
 use s1_ops::{History, Operation, Transaction, TransactionBuilder};
 
 use crate::error::Error;
@@ -209,6 +209,99 @@ impl Document {
         self.history.clear();
     }
 
+    // ─── TOC ────────────────────────────────────────────────────────
+
+    /// Update all Table of Contents entries in the document.
+    ///
+    /// Scans for heading paragraphs and regenerates the cached entry
+    /// paragraphs inside each TOC node. Call this before exporting if
+    /// content has changed since the TOC was inserted.
+    pub fn update_toc(&mut self) {
+        // First, find all TOC nodes and their max_level
+        let body_id = match self.model.body_id() {
+            Some(id) => id,
+            None => return,
+        };
+        let toc_nodes: Vec<(NodeId, u8)> = self
+            .find_toc_nodes(body_id)
+            .into_iter()
+            .map(|id| {
+                let max_level = self
+                    .model
+                    .node(id)
+                    .and_then(|n| n.attributes.get_i64(&AttributeKey::TocMaxLevel))
+                    .unwrap_or(3) as u8;
+                (id, max_level)
+            })
+            .collect();
+
+        if toc_nodes.is_empty() {
+            return;
+        }
+
+        // Collect headings (excluding any inside TOC nodes)
+        let headings = self.model.collect_headings();
+
+        for (toc_id, max_level) in toc_nodes {
+            self.generate_toc_entries(toc_id, max_level, &headings);
+        }
+    }
+
+    fn find_toc_nodes(&self, container_id: NodeId) -> Vec<NodeId> {
+        let mut result = Vec::new();
+        if let Some(node) = self.model.node(container_id) {
+            for &child_id in &node.children {
+                if let Some(child) = self.model.node(child_id) {
+                    if child.node_type == NodeType::TableOfContents {
+                        result.push(child_id);
+                    }
+                }
+            }
+        }
+        result
+    }
+
+    fn generate_toc_entries(
+        &mut self,
+        toc_id: NodeId,
+        max_level: u8,
+        headings: &[(NodeId, u8, String)],
+    ) {
+        // Remove existing children
+        if let Some(toc) = self.model.node(toc_id) {
+            let old_children: Vec<NodeId> = toc.children.clone();
+            for child_id in old_children {
+                let _ = self.model.remove_node(child_id);
+            }
+        }
+
+        // Generate new entry paragraphs
+        let mut child_index = 0;
+        for (_heading_id, level, text) in headings {
+            if *level > max_level {
+                continue;
+            }
+
+            // Create paragraph for this TOC entry
+            let para_id = self.model.next_id();
+            let mut para = Node::new(para_id, NodeType::Paragraph);
+            para.attributes.set(
+                AttributeKey::StyleId,
+                AttributeValue::String(format!("TOC{}", level)),
+            );
+            let _ = self.model.insert_node(toc_id, child_index, para);
+
+            // Add a run with the heading text
+            let run_id = self.model.next_id();
+            let _ = self.model.insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
+
+            let text_id = self.model.next_id();
+            let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text.clone()));
+
+            child_index += 1;
+        }
+    }
+
     // ─── Export ──────────────────────────────────────────────────────
 
     /// Export the document to bytes in the given format.
@@ -220,6 +313,8 @@ impl Document {
             Format::Odt => Ok(s1_format_odt::write(&self.model)?),
             #[cfg(feature = "txt")]
             Format::Txt => Ok(s1_format_txt::write(&self.model)),
+            #[cfg(feature = "md")]
+            Format::Md => Ok(s1_format_md::write_bytes(&self.model)),
             #[allow(unreachable_patterns)]
             _ => Err(Error::UnsupportedFormat(format!(
                 "{:?} export not available (check feature flags)",
@@ -228,11 +323,13 @@ impl Document {
         }
     }
 
-    /// Export the document as a string (useful for TXT format).
+    /// Export the document as a string (useful for TXT and Markdown formats).
     pub fn export_string(&self, format: Format) -> Result<String, Error> {
         match format {
             #[cfg(feature = "txt")]
             Format::Txt => Ok(s1_format_txt::write_string(&self.model)),
+            #[cfg(feature = "md")]
+            Format::Md => Ok(s1_format_md::write_string(&self.model)),
             _ => {
                 let bytes = self.export(format)?;
                 String::from_utf8(bytes)

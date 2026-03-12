@@ -2,7 +2,7 @@
 
 ## What Is This Project?
 
-s1engine is a modular document engine SDK built in Rust (with C/C++ FFI where necessary). It reads, writes, edits, and converts document formats (DOCX, ODT, PDF, TXT). The long-term goal is a CRDT-based collaborative editing engine.
+s1engine is a modular document engine SDK built in pure Rust. It reads, writes, edits, and converts document formats (DOCX, ODT, PDF, TXT). Includes CRDT-based collaborative editing.
 
 This is a **library**, not an application. Consumers build editors/tools on top of it.
 
@@ -25,7 +25,7 @@ This is a **library**, not an application. Consumers build editors/tools on top 
 ### 2. All Mutations Via Operations
 - NEVER modify the document tree directly
 - ALL changes go through `Operation` → applied via `s1-ops`
-- This is non-negotiable — it's the foundation for undo/redo and future CRDT support
+- This is non-negotiable — it's the foundation for undo/redo and CRDT collaboration
 - Every `Operation` must implement `invert()` for undo
 
 ### 3. Format Isolation
@@ -56,7 +56,7 @@ crates/
   s1-convert/        Format conversion pipelines (incl. DOC→DOCX)
   s1-crdt/           CRDT algorithms for collaborative editing
   s1-layout/         Page layout engine (pagination, line breaking)
-  s1-text/           Text processing (HarfBuzz, FreeType, ICU via FFI)
+  s1-text/           Text processing (rustybuzz, ttf-parser, fontdb — pure Rust)
   s1engine/          Facade crate — high-level public API
 ffi/
   c/                 C FFI bindings (cbindgen)
@@ -147,8 +147,8 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
-### Current Phase: Phase 5 — Production (in progress, hardening)
-### Status: s1-model (72), s1-ops (48), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1-format-pdf (21), s1-convert (15), s1-layout (38), s1-text (39), s1engine (46+11 integration), s1-crdt (172), s1engine-wasm (12), s1engine-c (10). 743 total tests + 4 doc-tests.
+### Current Phase: All phases complete (pre-release)
+### Status: s1-model (72), s1-ops (48), s1-format-txt (41), s1-format-docx (172), s1-format-odt (98), s1-format-md (32), s1-format-pdf (21), s1-convert (15), s1-layout (38), s1-text (39), s1engine (52+44 integration), s1-crdt (172), s1engine-wasm (12), s1engine-c (10), proptests (4). 870 total tests.
 
 ### Phase Completion Tracker
 
@@ -158,7 +158,7 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 | Phase 1: Foundation | COMPLETE | 2026-03-11 | 2026-03-11 | 7 milestones done; 206 tests |
 | Phase 2: Rich Documents | COMPLETE | 2026-03-11 | 2026-03-12 | 6 milestones; tables, images, lists, sections, ODT, advanced DOCX |
 | Phase 3: Layout & Export | COMPLETE | 2026-03-12 | 2026-03-12 | Layout complete; PDF polish (images, hyperlinks, bookmarks) deferred to 3.6 |
-| Phase 4: Collaboration | COMPLETE | 2026-03-12 | 2026-03-12 | 4 milestones; Fugue text CRDT, tree CRDT, LWW attributes/metadata, CollabDocument API, awareness, serialization, compression; 171 tests |
+| Phase 4: Collaboration | COMPLETE | 2026-03-12 | 2026-03-12 | 4 milestones; Fugue text CRDT, tree CRDT, LWW attributes/metadata, CollabDocument API, awareness, serialization, compression; 172 tests |
 | Phase 5: Production | COMPLETE | 2026-03-12 | 2026-03-12 | WASM bindings (12 tests), C FFI (10 tests), proptest (4 tests), security hardening (ZIP bomb limits, image dimension caps) |
 
 ### Milestone Tracker (Current Phase)
@@ -205,15 +205,16 @@ Phase 5 milestones:
 |---|---|---|---|
 | `s1-model` | **COMPLETE** | 72 passing | Core types, zero deps, all modules + numbering defs + sections + proptest tree invariants + Unicode text safety + cycle detection + is_descendant |
 | `s1-ops` | **COMPLETE** | 48 passing | Operations, transactions, undo/redo, cursor/selection + proptest inversion roundtrip + subtree undo + mixed attribute undo + Unicode text roundtrip |
-| `s1-format-docx` | **COMPLETE** | 167 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields, hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, round-trip. ZIP bomb protection. |
-| `s1-format-odt` | **COMPLETE** | 63 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, round-trip. ZIP bomb protection. |
+| `s1-format-docx` | **COMPLETE** | 172 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields, hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, TOC (SDT), round-trip. ZIP bomb protection. |
+| `s1-format-odt` | **COMPLETE** | 98 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, TOC, superscript/subscript, character spacing, paragraph shading, keep-lines-together, hyperlinks, bookmarks, tab stops, paragraph borders, comments (annotations), round-trip. ZIP bomb protection. |
+| `s1-format-md` | **COMPLETE** | 32 passing | Reader (pulldown-cmark): headings, bold/italic/strikethrough, code, links, lists, GFM tables, thematic breaks. Writer: Markdown generation from DocumentModel. |
 | `s1-format-pdf` | **COMPLETE** | 21 passing | PDF export: font embedding/subsetting, text rendering, tables, metadata, images (JPEG/PNG), hyperlinks, bookmarks. Image dimension caps. |
-| `s1-format-txt` | **COMPLETE** | 25 passing | Reader (UTF-8/UTF-16/Latin-1 detection), writer, round-trip |
+| `s1-format-txt` | **COMPLETE** | 41 passing | Reader (UTF-8/UTF-16/Latin-1 detection, heading/list/break markers), writer (headings, lists, TOC, thematic breaks), round-trip |
 | `s1-convert` | **COMPLETE** | 15 passing | DOC reader (OLE2/CFB heuristic), cross-format conversion (DOC/DOCX/ODT → DOCX/ODT), format detection |
 | `s1-layout` | **COMPLETE** | 38 passing | Style resolution, Knuth-Plass line breaking, pagination, table layout, image placement, header/footer placement, widow/orphan control, page-number field substitution, incremental layout cache |
 | `s1-text` | **COMPLETE** | 39 passing | Pure Rust: text shaping (rustybuzz), font parsing (ttf-parser), font discovery (fontdb), BiDi, line breaking |
 | `s1-crdt` | **COMPLETE** | 172 passing | Fugue text CRDT, tree CRDT, LWW attr/metadata, resolver, CollabDocument, awareness, binary serialization, compression, tombstones; 16 convergence + 17 scenario + 1 proptest integration tests |
-| `s1engine` | **COMPLETE** | 46 passing | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript builder; open/create/export; undo/redo; ODT support; feature-gated CRDT re-exports + create_collab/open_collab |
+| `s1engine` | **COMPLETE** | 96 passing (52 unit + 44 integration) | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript/TOC builder; open/create/export; undo/redo; ODT support; feature-gated CRDT re-exports + create_collab/open_collab |
 | `s1engine-wasm` | **COMPLETE** | 12 passing | WASM bindings: WasmEngine, WasmDocument, WasmDocumentBuilder, WasmFontDatabase, format detection |
 | `s1engine-c` | **COMPLETE** | 10 passing | C FFI: opaque handles, null-safety, error handling, format roundtrip |
 
@@ -253,6 +254,13 @@ Phase 5 milestones:
 | 2026-03-12 | P0 Correctness: Unicode-safe text ops (char_offset_to_byte helper, char-based validation), cycle detection (is_descendant + move_node guard), subtree undo (full DFS snapshot + restore_node), mixed attribute undo (remove added keys + restore overwritten values). 21 new regression tests. | crates/s1-model/src/tree.rs, crates/s1-ops/src/operation.rs |
 | 2026-03-12 | P1 Documentation truthfulness: Rewrote README.md (actual status, real API examples, format support matrix), API_DESIGN.md (examples matching real facade API), DEPENDENCIES.md (pure Rust stack, correct deps), ARCHITECTURE.md (correct file tree, no C++ FFI, Fugue CRDT). Added model_mut() escape hatch documentation. | README.md, docs/API_DESIGN.md, docs/DEPENDENCIES.md, docs/ARCHITECTURE.md, crates/s1engine/src/document.rs |
 | 2026-03-12 | P2 Hardening: 11 invariant integration tests (undo/redo reversibility, cross-format text preservation, builder output validity, Unicode roundtrip, tree integrity). CLI examples (convert, create_report). CHANGELOG.md. | crates/s1engine/tests/invariants.rs, crates/s1engine/examples/convert.rs, crates/s1engine/examples/create_report.rs, CHANGELOG.md |
+| 2026-03-12 | Table of Contents support — NodeType::TableOfContents, TocMaxLevel/TocTitle attributes, collect_headings(), update_toc(), builder API (table_of_contents/table_of_contents_with_title), DOCX SDT read/write, ODT text:table-of-content read/write, TXT fallback generation, layout engine expansion. 14 new tests. | node.rs, attributes.rs, tree.rs, document.rs, builder.rs, content_parser.rs, content_writer.rs (docx+odt), writer.rs (txt), engine.rs (layout) |
+| 2026-03-12 | Fidelity F.1: ODT Quick Wins — superscript/subscript (style:text-position), character spacing (fo:letter-spacing), paragraph shading (fo:background-color), keep-lines-together (fo:keep-together). 10 new tests. | crates/s1-format-odt/src/property_parser.rs, property_writer.rs |
+| 2026-03-12 | Fidelity F.2: Markdown Format — s1-format-md crate with pulldown-cmark reader and Markdown writer. Headings, bold/italic/strikethrough, inline code, code blocks, hyperlinks, ordered/unordered/nested lists, GFM tables, line breaks, thematic breaks, Unicode. Integrated into s1engine facade (Format::Md, open/export). 32 new tests. | crates/s1-format-md/src/* (lib.rs, reader.rs, writer.rs), Cargo.toml, crates/s1engine/src/* |
+| 2026-03-12 | Fidelity F.3: ODT Hyperlinks + Bookmarks — parse_hyperlink_into for <text:a> with xlink:href, bookmark-start/end/collapsed parsing, stateful hyperlink writing. 8 new tests. | crates/s1-format-odt/src/content_parser.rs, content_writer.rs |
+| 2026-03-12 | Fidelity F.4: ODT Tab Stops + Paragraph Borders — parse_paragraph_properties_children for <style:tab-stops>, parse_border_value for fo:border-*, border_side_to_odf writer, tab stop child elements. 7 new tests. | crates/s1-format-odt/src/property_parser.rs, property_writer.rs, style_parser.rs |
+| 2026-03-12 | Fidelity F.5: TXT Fidelity — heading # markers, bullet - markers, numbered N. markers, nested list indent, thematic break --- (PageBreakBefore), marker detection in reader. 14 new tests. | crates/s1-format-txt/src/writer.rs, reader.rs |
+| 2026-03-12 | Fidelity F.6: ODT Comments — parse/write office:annotation with dc:creator, dc:date, text:p body. CommentStart/CommentEnd inline, CommentBody on root. annotation-end parsing. 7 new tests. | crates/s1-format-odt/src/content_parser.rs, content_writer.rs |
 
 ---
 

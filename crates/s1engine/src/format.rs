@@ -19,6 +19,8 @@ pub enum Format {
     Txt,
     /// Legacy Microsoft Word binary (`.doc`) -- read only, requires `doc-legacy` feature
     Doc,
+    /// Markdown (`.md`, `.markdown`)
+    Md,
 }
 
 impl Format {
@@ -33,6 +35,7 @@ impl Format {
             "pdf" => Ok(Self::Pdf),
             "txt" | "text" => Ok(Self::Txt),
             "doc" => Ok(Self::Doc),
+            "md" | "markdown" => Ok(Self::Md),
             _ => Err(Error::UnsupportedFormat(format!(
                 "Unknown file extension: .{ext}"
             ))),
@@ -84,6 +87,7 @@ impl Format {
             Self::Pdf => "pdf",
             Self::Txt => "txt",
             Self::Doc => "doc",
+            Self::Md => "md",
         }
     }
 
@@ -95,6 +99,7 @@ impl Format {
             Self::Pdf => "application/pdf",
             Self::Txt => "text/plain",
             Self::Doc => "application/msword",
+            Self::Md => "text/markdown",
         }
     }
 }

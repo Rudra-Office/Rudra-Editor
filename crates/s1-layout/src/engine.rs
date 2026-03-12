@@ -281,6 +281,16 @@ impl<'a> LayoutEngine<'a> {
                         NodeType::Paragraph | NodeType::Table | NodeType::Image => {
                             blocks.push((child_id, child.node_type));
                         }
+                        NodeType::TableOfContents => {
+                            // Expand TOC child paragraphs inline
+                            for &toc_child_id in &child.children {
+                                if let Some(toc_child) = self.doc.node(toc_child_id) {
+                                    if toc_child.node_type == NodeType::Paragraph {
+                                        blocks.push((toc_child_id, NodeType::Paragraph));
+                                    }
+                                }
+                            }
+                        }
                         _ => {}
                     }
                 }

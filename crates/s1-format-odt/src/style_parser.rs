@@ -7,7 +7,9 @@ use quick_xml::Reader;
 use s1_model::{AttributeMap, DocumentModel, Style, StyleType};
 
 use crate::error::OdtError;
-use crate::property_parser::{parse_paragraph_properties, parse_text_properties};
+use crate::property_parser::{
+    parse_paragraph_properties, parse_paragraph_properties_children, parse_text_properties,
+};
 use crate::xml_util::get_attr;
 
 /// Parse `styles.xml` and populate `doc` with named styles.
@@ -63,7 +65,24 @@ pub fn parse_automatic_styles(
                 // Parse child property elements
                 loop {
                     match reader.read_event() {
-                        Ok(Event::Start(ref pe)) | Ok(Event::Empty(ref pe)) => {
+                        Ok(Event::Start(ref pe)) => {
+                            let local = pe.local_name();
+                            match local.as_ref() {
+                                b"text-properties" => {
+                                    attrs.merge(&parse_text_properties(pe));
+                                    // Skip to end of text-properties
+                                    skip_to_end(reader, b"text-properties")?;
+                                }
+                                b"paragraph-properties" => {
+                                    let mut para_attrs = parse_paragraph_properties(pe);
+                                    // Parse children (tab stops, etc.)
+                                    parse_paragraph_properties_children(reader, &mut para_attrs);
+                                    attrs.merge(&para_attrs);
+                                }
+                                _ => {}
+                            }
+                        }
+                        Ok(Event::Empty(ref pe)) => {
                             let local = pe.local_name();
                             match local.as_ref() {
                                 b"text-properties" => {
@@ -154,7 +173,22 @@ fn parse_style_element(
     // Parse child property elements
     loop {
         match reader.read_event() {
-            Ok(Event::Start(ref pe)) | Ok(Event::Empty(ref pe)) => {
+            Ok(Event::Start(ref pe)) => {
+                let local = pe.local_name();
+                match local.as_ref() {
+                    b"text-properties" => {
+                        attrs.merge(&parse_text_properties(pe));
+                        skip_to_end(reader, b"text-properties")?;
+                    }
+                    b"paragraph-properties" => {
+                        let mut para_attrs = parse_paragraph_properties(pe);
+                        parse_paragraph_properties_children(reader, &mut para_attrs);
+                        attrs.merge(&para_attrs);
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(ref pe)) => {
                 let local = pe.local_name();
                 match local.as_ref() {
                     b"text-properties" => attrs.merge(&parse_text_properties(pe)),

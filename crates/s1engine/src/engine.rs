@@ -52,6 +52,11 @@ impl Engine {
                 let result = s1_format_txt::read(data)?;
                 result.document
             }
+            #[cfg(feature = "md")]
+            Format::Md => {
+                s1_format_md::read_bytes(data)
+                    .map_err(|e| Error::Format(e.to_string()))?
+            }
             #[cfg(feature = "convert")]
             Format::Doc => {
                 s1_convert::doc_reader::read_doc(data)

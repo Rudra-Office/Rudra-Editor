@@ -10,6 +10,7 @@ Phase 2: Rich Documents     █████████████████�
 Phase 3: Layout & Export    ████████████████████  COMPLETE (all milestones)
 Phase 4: Collaboration      ████████████████████  COMPLETE (4/4 milestones)
 Phase 5: Production Ready   ████████████████████  COMPLETE (WASM, C FFI, hardening)
+Phase 6: Fidelity & MD      ████████░░░░░░░░░░░░  IN PROGRESS (F.1-F.3 done, F.4-F.7 remaining)
 ```
 
 ---
@@ -401,26 +402,97 @@ assert_eq!(doc_a.text_content(node), doc_b.text_content(node));
 ### Milestone 5.4-5.5: Documentation & Release
 - [x] CLAUDE.md project state fully updated
 - [x] ROADMAP.md fully updated
-- [ ] README.md update with quick start and badges
-- [ ] CHANGELOG.md
+- [x] README.md — complete rewrite with format support matrix, real API examples, architecture diagram
+- [x] CHANGELOG.md — complete changelog from Phase 0 through Phase 5
+- [x] API_DESIGN.md — rewritten with correct facade API examples
+- [x] ARCHITECTURE.md — corrected (no C++ FFI, correct file tree, Fugue CRDT)
+- [x] DEPENDENCIES.md — rewritten with pure Rust stack
+- [x] CLI examples: `convert.rs`, `create_report.rs`
 - [ ] Doc comment audit on all public items
 - [ ] User guide (`docs/GUIDE.md`)
 - [ ] `cargo publish` in dependency order
 - [ ] `wasm-pack publish` for NPM
 
+### Post-Phase 5: Correctness & Hardening
+- [x] Unicode-safe text operations (char_offset_to_byte helper, char-based validation)
+- [x] Cycle detection for tree moves (is_descendant + move_node guard)
+- [x] Subtree undo (full DFS snapshot + restore_node)
+- [x] Mixed attribute undo (remove added keys + restore overwritten values)
+- [x] 11 invariant integration tests (undo reversibility, cross-format preservation, tree integrity)
+- [x] 21 regression tests across s1-model and s1-ops
+
+### Post-Phase 5: Table of Contents
+- [x] `NodeType::TableOfContents` block container
+- [x] `TocMaxLevel`, `TocTitle` attributes, `collect_headings()`, `update_toc()`
+- [x] DOCX SDT (`<w:sdt>` with `<w:docPartGallery>`) read/write
+- [x] ODT `<text:table-of-content>` read/write
+- [x] TXT fallback text generation
+- [x] Layout engine expansion (TOC entry paragraphs)
+- [x] Builder API: `table_of_contents()`, `table_of_contents_with_title()`
+- [x] 14 new tests across DOCX, ODT, TXT, builder
+
+---
+
+## Phase 6: Format Fidelity & Markdown (IN PROGRESS)
+
+**Started**: 2026-03-12
+**Goal**: Close fidelity gaps across ODT and TXT, add Markdown as a new format.
+
+### Milestone F.1: ODT Quick Wins (COMPLETE — 10 tests)
+- [x] Superscript/subscript via `style:text-position` (super/sub/percentage)
+- [x] Character spacing via `fo:letter-spacing`
+- [x] Paragraph shading via `fo:background-color` on paragraph properties
+- [x] Keep-lines-together via `fo:keep-together="always"`
+- [x] Property parser tests (5) + property writer tests (5)
+
+### Milestone F.2: Markdown Format — `s1-format-md` (COMPLETE — 32 tests)
+- [x] New crate with `pulldown-cmark` parser and custom Markdown writer
+- [x] Reader: headings, bold/italic/strikethrough, inline code, code blocks, hyperlinks, ordered/unordered/nested lists, GFM tables, line breaks, thematic breaks, Unicode
+- [x] Writer: Markdown generation from DocumentModel (headings, formatting markers, links, lists, tables)
+- [x] Integrated into s1engine facade (`Format::Md`, `md` feature flag)
+- [x] 19 reader tests + 13 writer tests
+
+### Milestone F.3: ODT Hyperlinks + Bookmarks (COMPLETE — 8 tests)
+- [x] Parse `<text:a xlink:href="...">` → runs with `HyperlinkUrl` attribute
+- [x] Parse `<text:bookmark-start>`, `<text:bookmark-end>`, `<text:bookmark>` (collapsed)
+- [x] Write hyperlinks as `<text:a>` wrapping runs, bookmarks as `text:bookmark-start/end`
+- [x] Round-trip tests for hyperlinks and bookmarks
+
+### Milestone F.4: ODT Tab Stops + Paragraph Borders (~14 tests)
+- [ ] Parse `<style:tab-stops>` with position/type/leader
+- [ ] Parse `fo:border-*` for paragraph borders
+- [ ] Write tab stops and borders in ODT output
+- [ ] Round-trip tests
+
+### Milestone F.5: TXT Fidelity (~15 tests)
+- [ ] Writer: heading markers (`#`), bullet/numbered list markers, thematic breaks
+- [ ] Reader: detect structural markers on read
+- [ ] Round-trip tests
+
+### Milestone F.6: ODT Comments (~14 tests)
+- [ ] Parse `<office:annotation>` / `<office:annotation-end>` inline elements
+- [ ] Write comment annotations with `<dc:creator>`, `<dc:date>`, body text
+- [ ] Round-trip tests
+
+### Milestone F.7: ODT Headers/Footers/Sections (~18 tests)
+- [ ] Parse `<style:page-layout-properties>` for page dimensions/margins
+- [ ] Parse `<style:master-page>` for header/footer content
+- [ ] Write page layout and header/footer into styles.xml
+- [ ] Section breaks via `<text:section>`
+- [ ] Round-trip tests
+
 ---
 
 ## Risk Mitigation
 
-| Risk | Likelihood | Impact | Mitigation |
-|---|---|---|---|
-| OOXML spec complexity | High | High | Pragmatic subset; test against real files, not spec |
-| CRDT for tree structures | High | High | **RESOLVED**: Custom Fugue text + Kleppmann tree CRDTs in s1-crdt |
-| C++ FFI complexity | Medium | Medium | Use Rust wrappers; watch rustybuzz/icu4x for pure Rust |
-| Performance targets | Medium | Medium | Profile early; incremental layout is key |
-| DOC binary format | High | Medium | Use LibreOffice headless conversion, not native parsing |
-| Cross-platform fonts | Medium | Medium | Use fontdb; test on all platforms in CI |
-| WASM bundle size | Medium | Low | Feature flags, tree-shaking, split crates |
+| Risk | Likelihood | Impact | Mitigation | Status |
+|---|---|---|---|---|
+| OOXML spec complexity | High | High | Pragmatic subset; test against real files, not spec | Mitigated — 172 DOCX tests |
+| CRDT for tree structures | High | High | Custom Fugue text + Kleppmann tree CRDTs in s1-crdt | **RESOLVED** — 172 CRDT tests |
+| Performance targets | Medium | Medium | Profile early; incremental layout is key | Mitigated — incremental layout cache |
+| DOC binary format | High | Medium | Heuristic text extraction from OLE2 containers | **RESOLVED** — s1-convert |
+| Cross-platform fonts | Medium | Medium | Use fontdb; test on all platforms in CI | Mitigated — pure Rust |
+| WASM bundle size | Medium | Low | Feature flags, tree-shaking, split crates | Ongoing |
 
 ---
 
@@ -459,3 +531,8 @@ assert_eq!(doc_a.text_content(node), doc_b.text_content(node));
 |---|---|
 | `wasm-bindgen` | WASM FFI |
 | `cbindgen` | C header generation |
+
+### Phase 6 Crates
+| Crate | Purpose |
+|---|---|
+| `pulldown-cmark` | Markdown parsing (CommonMark + GFM) |

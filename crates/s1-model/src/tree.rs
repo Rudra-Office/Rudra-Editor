@@ -622,6 +622,74 @@ impl DocumentModel {
         result
     }
 
+    /// Collect all heading paragraphs in document order.
+    ///
+    /// Returns `(NodeId, heading_level, plain_text)` tuples for each heading
+    /// found in the body. Headings are identified by `StyleId` matching
+    /// `"Heading1"` through `"Heading9"`.
+    pub fn collect_headings(&self) -> Vec<(NodeId, u8, String)> {
+        let body_id = match self.body_id() {
+            Some(id) => id,
+            None => return Vec::new(),
+        };
+        let mut headings = Vec::new();
+        self.collect_headings_from(body_id, &mut headings);
+        headings
+    }
+
+    fn collect_headings_from(&self, container_id: NodeId, headings: &mut Vec<(NodeId, u8, String)>) {
+        let node = match self.node(container_id) {
+            Some(n) => n,
+            None => return,
+        };
+        let children: Vec<NodeId> = node.children.clone();
+        for child_id in children {
+            let child = match self.node(child_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            match child.node_type {
+                NodeType::Paragraph => {
+                    if let Some(level) = child
+                        .attributes
+                        .get_string(&crate::AttributeKey::StyleId)
+                        .and_then(|s| s.strip_prefix("Heading"))
+                        .and_then(|l| l.parse::<u8>().ok())
+                    {
+                        let mut text = String::new();
+                        self.extract_inline_text(child_id, &mut text);
+                        headings.push((child_id, level, text));
+                    }
+                }
+                NodeType::Section | NodeType::Body | NodeType::TableOfContents => {
+                    self.collect_headings_from(child_id, headings);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    /// Extract just the inline text content from a node (no paragraph separators).
+    fn extract_inline_text(&self, node_id: NodeId, out: &mut String) {
+        let node = match self.node(node_id) {
+            Some(n) => n,
+            None => return,
+        };
+        match node.node_type {
+            NodeType::Text => {
+                if let Some(text) = &node.text_content {
+                    out.push_str(text);
+                }
+            }
+            _ => {
+                let children: Vec<NodeId> = node.children.clone();
+                for child_id in children {
+                    self.extract_inline_text(child_id, out);
+                }
+            }
+        }
+    }
+
     fn extract_text(&self, node_id: NodeId, out: &mut String) {
         let node = match self.node(node_id) {
             Some(n) => n,
