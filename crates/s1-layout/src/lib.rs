@@ -7,7 +7,7 @@
 //!
 //! 1. **Style resolution** — compute effective attributes for every node
 //! 2. **Text shaping** — characters → positioned glyphs (via `s1-text`)
-//! 3. **Line breaking** — greedy algorithm (Knuth-Plass planned)
+//! 3. **Line breaking** — Knuth-Plass optimal or greedy fallback
 //! 4. **Block stacking** — paragraphs with spacing-before/after
 //! 5. **Pagination** — break into pages, handle page-break-before
 //! 6. **Output** — `LayoutDocument` with pages → blocks → lines → glyph runs

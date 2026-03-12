@@ -146,8 +146,8 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
-### Current Phase: Phase 3 — Layout & Export (complete)
-### Status: s1-model (61), s1-ops (37), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1-format-pdf (8), s1-convert (15), s1-layout (22), s1-text (39), s1engine (46). 483 total tests + 4 doc-tests.
+### Current Phase: Phase 3 — Layout & Export (complete, PDF polish deferred)
+### Status: s1-model (61), s1-ops (37), s1-format-txt (25), s1-format-docx (167), s1-format-odt (63), s1-format-pdf (8), s1-convert (15), s1-layout (30), s1-text (39), s1engine (46). 491 total tests + 4 doc-tests.
 
 ### Phase Completion Tracker
 
@@ -156,7 +156,7 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 | Phase 0: Planning | COMPLETE | 2026-03-11 | 2026-03-11 | Specs, architecture, roadmap finalized |
 | Phase 1: Foundation | COMPLETE | 2026-03-11 | 2026-03-11 | 7 milestones done; 206 tests |
 | Phase 2: Rich Documents | COMPLETE | 2026-03-11 | 2026-03-12 | 6 milestones; tables, images, lists, sections, ODT, advanced DOCX |
-| Phase 3: Layout & Export | COMPLETE | 2026-03-12 | 2026-03-12 | Text shaping, layout, PDF export, format conversion; 3.3 deferred |
+| Phase 3: Layout & Export | COMPLETE | 2026-03-12 | 2026-03-12 | Layout complete; PDF polish (images, hyperlinks, bookmarks) deferred to 3.6 |
 | Phase 4: Collaboration | NOT STARTED | — | — | CRDT integration |
 | Phase 5: Production | NOT STARTED | — | — | WASM, C FFI, hardening |
 
@@ -181,10 +181,11 @@ Phase 2 milestones:
 
 Phase 3 milestones:
 - [x] 3.1 Text Processing (`s1-text`) — Pure-Rust text shaping (rustybuzz), font parsing (ttf-parser), font discovery (fontdb), BiDi (unicode-bidi), line breaking (unicode-linebreak). 39 tests.
-- [x] 3.2 Layout Engine (`s1-layout`) — Style resolution, greedy line breaking, block stacking, pagination, table layout, image placement. 22 tests.
+- [x] 3.2 Layout Engine (`s1-layout`) — Style resolution, Knuth-Plass line breaking, block stacking, pagination, table layout, image placement, header/footer placement, widow/orphan control, page-number substitution. 30 tests.
 - [ ] 3.3 Incremental Layout — Dirty tracking, incremental re-layout (deferred)
-- [x] 3.4 PDF Export (`s1-format-pdf`) — PDF generation from layout tree with font embedding/subsetting, text rendering, table borders, metadata. 8 tests.
+- [x] 3.4 PDF Export (`s1-format-pdf`) — Core: font embedding/subsetting, text rendering, table borders, metadata. 8 tests.
 - [x] 3.5 Format Conversion (`s1-convert`) — DOC reader (OLE2/CFB heuristic text extraction), cross-format conversion pipeline (DOC/DOCX/ODT → DOCX/ODT), format detection. 15 tests.
+- [ ] 3.6 PDF Polish — Image embedding in PDF, hyperlink annotations, bookmarks/outline (deferred until after Phase 4).
 
 ### Crate Implementation Status
 
@@ -197,7 +198,7 @@ Phase 3 milestones:
 | `s1-format-pdf` | **Phase 3** | 8 passing | PDF export from layout tree: font embedding/subsetting, text rendering, tables, metadata |
 | `s1-format-txt` | **COMPLETE** | 25 passing | Reader (UTF-8/UTF-16/Latin-1 detection), writer, round-trip |
 | `s1-convert` | **Phase 3** | 15 passing | DOC reader (OLE2/CFB heuristic), cross-format conversion (DOC/DOCX/ODT → DOCX/ODT), format detection |
-| `s1-layout` | **Phase 3** | 22 passing | Style resolution, greedy line breaking, block stacking, pagination, table layout, image placement |
+| `s1-layout` | **Phase 3** | 30 passing | Style resolution, Knuth-Plass line breaking, pagination, table layout, image placement, header/footer placement, widow/orphan control, page-number field substitution |
 | `s1-text` | **Phase 3** | 39 passing | Pure Rust: text shaping (rustybuzz), font parsing (ttf-parser), font discovery (fontdb), BiDi, line breaking |
 | `s1engine` | **Phase 2** | 46 passing | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript builder; open/create/export; undo/redo; ODT support |
 
@@ -223,6 +224,7 @@ Phase 3 milestones:
 | 2026-03-12 | Milestone 3.2: Layout Engine — style resolver, greedy line breaking, block stacking with spacing, pagination, table layout, image placement, page-break-before support (22 tests) | crates/s1-layout/src/* (4 modules) |
 | 2026-03-12 | Milestone 3.4: PDF Export — PDF generation from LayoutDocument, CIDFont embedding with subsetting, glyph width tables, content streams, table border rendering, metadata, multi-page support (8 tests) | crates/s1-format-pdf/src/* (3 modules) |
 | 2026-03-12 | Milestone 3.5: Format Conversion — DOC reader (OLE2/CFB heuristic text extraction), cross-format pipeline (DOC/DOCX/ODT → DOCX/ODT), format detection, convert_to_model API (15 tests) | crates/s1-convert/src/* (4 modules) |
+| 2026-03-12 | Layout Polish: Knuth-Plass optimal line breaking, header/footer placement from SectionProperties, page-number field substitution (PAGE/NUMPAGES), widow/orphan control, section page size resolution (8 new tests, 30 total) | crates/s1-layout/src/engine.rs |
 
 ---
 

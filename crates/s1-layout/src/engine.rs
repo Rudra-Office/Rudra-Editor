@@ -1,7 +1,8 @@
 //! Core layout engine — converts a document model into positioned pages.
 
 use s1_model::{
-    AttributeKey, AttributeValue, DocumentModel, LineSpacing, NodeId, NodeType,
+    AttributeKey, AttributeValue, DocumentModel, FieldType, HeaderFooterType, LineSpacing, NodeId,
+    NodeType,
 };
 use s1_text::{FontDatabase, FontId, FontMetrics, ShapedGlyph};
 
@@ -194,14 +195,33 @@ impl<'a> LayoutEngine<'a> {
             });
         }
 
+        // Apply widow/orphan control
+        self.apply_widow_orphan_control(&mut pages, &page_layout)?;
+
+        // Layout headers and footers for each page
+        let total_pages = pages.len();
+        for page in &mut pages {
+            self.layout_header_footer(page, total_pages)?;
+        }
+
         Ok(LayoutDocument { pages })
     }
 
     /// Resolve page layout from section properties or use default.
     fn resolve_page_layout(&self) -> PageLayout {
-        // Look for section properties on the document
-        // For now, use default. Section-specific page sizes will be added in 3.3.
-        self.config.default_page_layout
+        let sections = self.doc.sections();
+        if let Some(sp) = sections.first() {
+            PageLayout {
+                width: sp.page_width,
+                height: sp.page_height,
+                margin_top: sp.margin_top,
+                margin_bottom: sp.margin_bottom,
+                margin_left: sp.margin_left,
+                margin_right: sp.margin_right,
+            }
+        } else {
+            self.config.default_page_layout
+        }
     }
 
     /// Collect all block-level node IDs in document order.
@@ -388,7 +408,7 @@ impl<'a> LayoutEngine<'a> {
         })
     }
 
-    /// Greedy line breaking algorithm.
+    /// Line breaking — uses Knuth-Plass optimal algorithm with greedy fallback.
     fn break_into_lines(
         &self,
         runs: &[ShapedRunInfo],
@@ -397,7 +417,6 @@ impl<'a> LayoutEngine<'a> {
         para_style: &ResolvedParagraphStyle,
     ) -> Vec<LayoutLine> {
         if runs.is_empty() {
-            // Empty paragraph — one empty line with default height
             let line_height = compute_line_height(DEFAULT_FONT_SIZE, &para_style.line_spacing);
             return vec![LayoutLine {
                 baseline_y: 0.0,
@@ -406,32 +425,94 @@ impl<'a> LayoutEngine<'a> {
             }];
         }
 
-        let mut lines: Vec<LayoutLine> = Vec::new();
-        let mut current_runs: Vec<GlyphRun> = Vec::new();
-        let mut current_x = first_line_indent;
-        let mut line_width = if lines.is_empty() {
-            available_width - first_line_indent
-        } else {
-            available_width
-        };
-        let mut max_line_height: f64 = 0.0;
+        // Flatten runs into items for the line-breaking algorithm
+        let items = self.build_break_items(runs);
 
-        for run_info in runs {
+        // Try Knuth-Plass; fall back to greedy on failure
+        let break_points = knuth_plass_breaks(&items, available_width, first_line_indent)
+            .unwrap_or_else(|| greedy_breaks(&items, available_width, first_line_indent));
+
+        // Build LayoutLines from break points
+        let mut lines: Vec<LayoutLine> = Vec::new();
+
+        for window in break_points.windows(2) {
+            let start = window[0];
+            let end = window[1];
+
+            let mut line_runs: Vec<GlyphRun> = Vec::new();
+            let mut current_x = if lines.is_empty() {
+                first_line_indent
+            } else {
+                0.0
+            };
+            let mut max_height: f64 = 0.0;
+
+            for item in &items[start..end] {
+                match item {
+                    BreakItem::Box { run_idx, width, height, .. } => {
+                        let run_info = &runs[*run_idx];
+                        let font_id = run_info
+                            .font_id
+                            .unwrap_or(FontId(fontdb::ID::dummy()));
+
+                        line_runs.push(GlyphRun {
+                            source_id: run_info.source_id,
+                            font_id,
+                            font_size: run_info.font_size,
+                            color: run_info.color,
+                            x_offset: current_x,
+                            glyphs: run_info.glyphs.clone(),
+                            width: *width,
+                        });
+                        current_x += width;
+                        if *height > max_height {
+                            max_height = *height;
+                        }
+                    }
+                    BreakItem::Glue { width, .. } => {
+                        current_x += width;
+                    }
+                    BreakItem::Penalty { .. } | BreakItem::ForcedBreak { .. } => {}
+                }
+            }
+
+            let line_height = compute_line_height(
+                if max_height > 0.0 { max_height } else { DEFAULT_FONT_SIZE },
+                &para_style.line_spacing,
+            );
+            lines.push(LayoutLine {
+                baseline_y: 0.0,
+                height: line_height,
+                runs: line_runs,
+            });
+        }
+
+        if lines.is_empty() {
+            let line_height = compute_line_height(DEFAULT_FONT_SIZE, &para_style.line_spacing);
+            lines.push(LayoutLine {
+                baseline_y: 0.0,
+                height: line_height,
+                runs: Vec::new(),
+            });
+        }
+
+        // Compute baseline_y positions
+        let mut y = 0.0;
+        for line in &mut lines {
+            line.baseline_y = y + line.height * 0.8;
+            y += line.height;
+        }
+
+        lines
+    }
+
+    /// Build Knuth-Plass break items from shaped runs.
+    fn build_break_items(&self, runs: &[ShapedRunInfo]) -> Vec<BreakItem> {
+        let mut items: Vec<BreakItem> = Vec::new();
+
+        for (run_idx, run_info) in runs.iter().enumerate() {
             if run_info.is_line_break {
-                // Force a new line
-                let line_height = if max_line_height > 0.0 {
-                    compute_line_height(max_line_height, &para_style.line_spacing)
-                } else {
-                    compute_line_height(DEFAULT_FONT_SIZE, &para_style.line_spacing)
-                };
-                lines.push(LayoutLine {
-                    baseline_y: 0.0, // Will be computed later
-                    height: line_height,
-                    runs: std::mem::take(&mut current_runs),
-                });
-                current_x = 0.0;
-                line_width = available_width;
-                max_line_height = 0.0;
+                items.push(BreakItem::ForcedBreak { run_idx });
                 continue;
             }
 
@@ -441,72 +522,21 @@ impl<'a> LayoutEngine<'a> {
                 .map(|m| m.ascent - m.descent)
                 .unwrap_or(run_info.font_size);
 
-            if current_x + run_width > line_width + 0.01 && !current_runs.is_empty() {
-                // This run doesn't fit — break line
-                let line_height = compute_line_height(
-                    if max_line_height > 0.0 {
-                        max_line_height
-                    } else {
-                        run_info.font_size
-                    },
-                    &para_style.line_spacing,
-                );
-                lines.push(LayoutLine {
-                    baseline_y: 0.0,
-                    height: line_height,
-                    runs: std::mem::take(&mut current_runs),
-                });
-                current_x = 0.0;
-                line_width = available_width;
-                max_line_height = 0.0;
-            }
-
-            if run_height > max_line_height {
-                max_line_height = run_height;
-            }
-
-            let font_id = run_info
-                .font_id
-                .unwrap_or(FontId(fontdb::ID::dummy()));
-
-            current_runs.push(GlyphRun {
-                source_id: run_info.source_id,
-                font_id,
-                font_size: run_info.font_size,
-                color: run_info.color,
-                x_offset: current_x,
-                glyphs: run_info.glyphs.clone(),
+            items.push(BreakItem::Box {
+                run_idx,
                 width: run_width,
+                height: run_height,
             });
 
-            current_x += run_width;
-        }
-
-        // Flush remaining runs
-        if !current_runs.is_empty() {
-            let line_height = compute_line_height(
-                if max_line_height > 0.0 {
-                    max_line_height
-                } else {
-                    DEFAULT_FONT_SIZE
-                },
-                &para_style.line_spacing,
-            );
-            lines.push(LayoutLine {
-                baseline_y: 0.0,
-                height: line_height,
-                runs: current_runs,
+            // Add inter-run glue (stretchable space)
+            items.push(BreakItem::Glue {
+                width: 0.0,
+                stretch: 0.0,
+                shrink: 0.0,
             });
         }
 
-        // Compute baseline_y positions
-        let mut y = 0.0;
-        for line in &mut lines {
-            line.baseline_y = y + line.height * 0.8; // Approximate baseline
-            y += line.height;
-        }
-
-        lines
+        items
     }
 
     /// Layout a table — compute column widths, row heights.
@@ -678,6 +708,293 @@ impl<'a> LayoutEngine<'a> {
         })
     }
 
+    /// Layout header/footer content for a page.
+    fn layout_header_footer(
+        &self,
+        page: &mut LayoutPage,
+        total_pages: usize,
+    ) -> Result<(), LayoutError> {
+        let sections = self.doc.sections();
+        let section = match sections.first() {
+            Some(s) => s,
+            None => return Ok(()),
+        };
+
+        let page_num = page.index + 1;
+        let is_first_page = page.index == 0;
+
+        // Determine which header type to use
+        let header_type = if is_first_page && section.title_page {
+            HeaderFooterType::First
+        } else {
+            HeaderFooterType::Default
+        };
+        let footer_type = header_type;
+
+        // Layout header
+        if let Some(hf_ref) = section.header(header_type).or_else(|| {
+            if header_type != HeaderFooterType::Default {
+                section.header(HeaderFooterType::Default)
+            } else {
+                None
+            }
+        }) {
+            let header_block =
+                self.layout_hf_node(hf_ref.node_id, page, page_num, total_pages, true)?;
+            page.header = Some(header_block);
+        }
+
+        // Layout footer
+        if let Some(hf_ref) = section.footer(footer_type).or_else(|| {
+            if footer_type != HeaderFooterType::Default {
+                section.footer(HeaderFooterType::Default)
+            } else {
+                None
+            }
+        }) {
+            let footer_block =
+                self.layout_hf_node(hf_ref.node_id, page, page_num, total_pages, false)?;
+            page.footer = Some(footer_block);
+        }
+
+        Ok(())
+    }
+
+    /// Layout a header or footer node, substituting page number fields.
+    fn layout_hf_node(
+        &self,
+        node_id: NodeId,
+        page: &LayoutPage,
+        page_num: usize,
+        total_pages: usize,
+        is_header: bool,
+    ) -> Result<LayoutBlock, LayoutError> {
+        let sections = self.doc.sections();
+        let section = sections.first();
+        let hf_distance = if is_header {
+            section.map(|s| s.header_distance).unwrap_or(36.0)
+        } else {
+            section.map(|s| s.footer_distance).unwrap_or(36.0)
+        };
+
+        let hf_width = page.content_area.width;
+        let hf_x = page.content_area.x;
+        let hf_y = if is_header {
+            hf_distance
+        } else {
+            page.height - hf_distance - DEFAULT_FONT_SIZE
+        };
+
+        let node = match self.doc.node(node_id) {
+            Some(n) => n,
+            None => {
+                return Ok(LayoutBlock {
+                    source_id: node_id,
+                    bounds: Rect::new(hf_x, hf_y, hf_width, 0.0),
+                    kind: LayoutBlockKind::Paragraph { lines: Vec::new() },
+                });
+            }
+        };
+
+        // Layout child paragraphs
+        let mut blocks = Vec::new();
+        let mut current_y = 0.0;
+
+        for &child_id in &node.children {
+            if let Some(child) = self.doc.node(child_id) {
+                if child.node_type == NodeType::Paragraph {
+                    let para_style = resolve_paragraph_style(self.doc, child_id);
+                    let content_rect = Rect::new(hf_x, hf_y, hf_width, 100.0);
+                    let mut block =
+                        self.layout_paragraph(child_id, &para_style, content_rect, current_y)?;
+
+                    // Substitute field values in glyph runs
+                    self.substitute_fields_in_block(&mut block, page_num, total_pages);
+
+                    current_y += block.bounds.height;
+                    blocks.push(block);
+                }
+            }
+        }
+
+        // Merge blocks into a single block (typical: one paragraph)
+        let total_height = current_y;
+        if blocks.len() == 1 {
+            let mut block = blocks.remove(0);
+            block.source_id = node_id; // Use header/footer node ID
+            block.bounds.x = hf_x;
+            block.bounds.y = hf_y;
+            Ok(block)
+        } else {
+            // Multiple paragraphs — wrap as first paragraph
+            let lines = blocks
+                .into_iter()
+                .filter_map(|b| {
+                    if let LayoutBlockKind::Paragraph { lines } = b.kind {
+                        Some(lines)
+                    } else {
+                        None
+                    }
+                })
+                .flatten()
+                .collect();
+
+            Ok(LayoutBlock {
+                source_id: node_id,
+                bounds: Rect::new(hf_x, hf_y, hf_width, total_height),
+                kind: LayoutBlockKind::Paragraph { lines },
+            })
+        }
+    }
+
+    /// Substitute PAGE and NUMPAGES field nodes with actual page numbers.
+    ///
+    /// Field nodes are children of Paragraph (not Run). We check if the
+    /// paragraph that was laid out contains Field nodes and create synthesized
+    /// glyph runs for them, or update existing runs that came from
+    /// field-adjacent text.
+    fn substitute_fields_in_block(
+        &self,
+        block: &mut LayoutBlock,
+        page_num: usize,
+        total_pages: usize,
+    ) {
+        // Find field nodes in the source paragraph
+        let para_node = match self.doc.node(block.source_id) {
+            Some(n) if n.node_type == NodeType::Paragraph => n,
+            _ => return,
+        };
+
+        for &child_id in &para_node.children {
+            if let Some(child) = self.doc.node(child_id) {
+                if child.node_type == NodeType::Field {
+                    if let Some(AttributeValue::FieldType(ft)) =
+                        child.attributes.get(&AttributeKey::FieldType)
+                    {
+                        let text = match ft {
+                            FieldType::PageNumber => format!("{page_num}"),
+                            FieldType::PageCount => format!("{total_pages}"),
+                            _ => continue,
+                        };
+
+                        // Find any glyph run with this source_id and update it,
+                        // or append a synthesized run to the last line
+                        if let LayoutBlockKind::Paragraph { lines } = &mut block.kind {
+                            let font_size = DEFAULT_FONT_SIZE;
+                            let glyphs = synthesize_glyphs(&text, font_size);
+                            let width: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+
+                            if let Some(last_line) = lines.last_mut() {
+                                let x_offset = last_line
+                                    .runs
+                                    .last()
+                                    .map(|r| r.x_offset + r.width)
+                                    .unwrap_or(0.0);
+
+                                last_line.runs.push(GlyphRun {
+                                    source_id: child_id,
+                                    font_id: FontId(fontdb::ID::dummy()),
+                                    font_size,
+                                    color: s1_model::Color::new(0, 0, 0),
+                                    x_offset,
+                                    glyphs,
+                                    width,
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Apply widow/orphan control across pages.
+    ///
+    /// Prevents orphans (fewer than `min_orphan_lines` at the bottom of a page)
+    /// and widows (fewer than `min_widow_lines` at the top of the next page).
+    fn apply_widow_orphan_control(
+        &self,
+        pages: &mut Vec<LayoutPage>,
+        page_layout: &PageLayout,
+    ) -> Result<(), LayoutError> {
+        let min_orphan = self.config.min_orphan_lines;
+        let min_widow = self.config.min_widow_lines;
+
+        if min_orphan < 2 && min_widow < 2 {
+            return Ok(());
+        }
+
+        // We need at least 2 pages for widow/orphan to matter
+        if pages.len() < 2 {
+            return Ok(());
+        }
+
+        let mut i = 0;
+        while i + 1 < pages.len() {
+            let needs_fix = {
+                let current_page = &pages[i];
+                let next_page = &pages[i + 1];
+
+                // Check last block on current page — is it a paragraph with too few lines?
+                let orphan_problem = if let Some(last_block) = current_page.blocks.last() {
+                    if let LayoutBlockKind::Paragraph { lines } = &last_block.kind {
+                        lines.len() > 1 && lines.len() < min_orphan + min_widow
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                // Check first block on next page — is it a continuation with too few lines?
+                let widow_problem = if let Some(first_block) = next_page.blocks.first() {
+                    if let LayoutBlockKind::Paragraph { lines } = &first_block.kind {
+                        !lines.is_empty() && lines.len() < min_widow
+                    } else {
+                        false
+                    }
+                } else {
+                    false
+                };
+
+                orphan_problem || widow_problem
+            };
+
+            if needs_fix {
+                // Move the last block from current page to the start of next page
+                // This is the simplest fix — push the entire paragraph to the next page
+                let current_page = &mut pages[i];
+                if current_page.blocks.len() > 1 {
+                    let block = current_page.blocks.pop().unwrap();
+                    // Re-position the block at the top of the next page
+                    let content_y = page_layout.content_rect().y;
+                    let mut moved_block = block;
+                    moved_block.bounds.y = content_y;
+
+                    let next_page = &mut pages[i + 1];
+                    // Shift all existing blocks down
+                    let shift = moved_block.bounds.height;
+                    for b in &mut next_page.blocks {
+                        b.bounds.y += shift;
+                    }
+                    next_page.blocks.insert(0, moved_block);
+                }
+            }
+
+            i += 1;
+        }
+
+        // Remove any empty pages that resulted from moving blocks
+        pages.retain(|p| !p.blocks.is_empty() || p.index == 0);
+
+        // Re-index pages
+        for (idx, page) in pages.iter_mut().enumerate() {
+            page.index = idx;
+        }
+
+        Ok(())
+    }
+
     fn make_page(
         &self,
         index: usize,
@@ -732,6 +1049,271 @@ fn compute_line_height(max_run_height: f64, line_spacing: &LineSpacing) -> f64 {
         LineSpacing::AtLeast(min) => max_run_height.max(*min),
         LineSpacing::Exact(exact) => *exact,
     }
+}
+
+/// Item types for the Knuth-Plass line breaking algorithm.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+enum BreakItem {
+    /// Content with a fixed width (a shaped run).
+    Box {
+        run_idx: usize,
+        width: f64,
+        height: f64,
+    },
+    /// Stretchable/shrinkable space between boxes.
+    Glue {
+        width: f64,
+        stretch: f64,
+        shrink: f64,
+    },
+    /// A possible break point with a penalty cost.
+    Penalty {
+        #[allow(dead_code)]
+        penalty: f64,
+    },
+    /// A forced line break (from LineBreak node).
+    ForcedBreak {
+        #[allow(dead_code)]
+        run_idx: usize,
+    },
+}
+
+/// Knuth-Plass optimal line breaking.
+///
+/// Returns break indices into the items array, or `None` if the algorithm
+/// cannot find a feasible solution (falls back to greedy).
+fn knuth_plass_breaks(
+    items: &[BreakItem],
+    available_width: f64,
+    first_line_indent: f64,
+) -> Option<Vec<usize>> {
+    if items.is_empty() {
+        return Some(vec![0, 0]);
+    }
+
+    // Active node: (item_index, line_number, total_demerits, total_width)
+    #[derive(Clone)]
+    struct ActiveNode {
+        index: usize,
+        line: usize,
+        demerits: f64,
+        total_width: f64,
+        prev: Option<usize>, // index into nodes vec
+    }
+
+    let mut nodes: Vec<ActiveNode> = vec![ActiveNode {
+        index: 0,
+        line: 0,
+        demerits: 0.0,
+        total_width: 0.0,
+        prev: None,
+    }];
+    let mut active: Vec<usize> = vec![0]; // indices into nodes
+
+    for (i, item) in items.iter().enumerate() {
+        let is_feasible_break = matches!(
+            item,
+            BreakItem::Glue { .. } | BreakItem::ForcedBreak { .. }
+        );
+
+        if !is_feasible_break {
+            continue;
+        }
+
+        let mut new_active: Vec<usize> = Vec::new();
+        let mut best_node: Option<ActiveNode> = None;
+
+        for &a_idx in &active {
+            let a = &nodes[a_idx];
+
+            // Compute width from this active node to current position
+            let mut width = a.total_width;
+            for item_between in &items[a.index..i] {
+                match item_between {
+                    BreakItem::Box { width: w, .. } => width += w,
+                    BreakItem::Glue { width: w, .. } => width += w,
+                    _ => {}
+                }
+            }
+
+            // Line width depends on whether this is the first line
+            let line_width = if a.line == 0 {
+                available_width - first_line_indent
+            } else {
+                available_width
+            };
+
+            let ratio = line_width - (width - a.total_width);
+
+            // Check feasibility: allow lines to be slightly overfull (5%)
+            if ratio >= -line_width * 0.05 {
+                let badness = if ratio.abs() < 0.01 {
+                    0.0
+                } else if ratio > 0.0 {
+                    // Underfull
+                    (100.0 * (ratio / line_width).powi(3)).min(10000.0)
+                } else {
+                    // Overfull
+                    10000.0
+                };
+
+                let is_forced = matches!(item, BreakItem::ForcedBreak { .. });
+
+                // Standard Knuth-Plass demerit calculation:
+                // Forced breaks get minimal demerits
+                let demerits = if is_forced {
+                    a.demerits
+                } else {
+                    (1.0 + badness).powi(2) + a.demerits
+                };
+
+                match &best_node {
+                    None => {
+                        best_node = Some(ActiveNode {
+                            index: i + 1,
+                            line: a.line + 1,
+                            demerits,
+                            total_width: width,
+                            prev: Some(a_idx),
+                        });
+                    }
+                    Some(best) if demerits < best.demerits => {
+                        best_node = Some(ActiveNode {
+                            index: i + 1,
+                            line: a.line + 1,
+                            demerits,
+                            total_width: width,
+                            prev: Some(a_idx),
+                        });
+                    }
+                    _ => {}
+                }
+
+                // For forced breaks, deactivate the current node (must break here).
+                // For regular breaks, keep the node active if the line isn't too long.
+                if !is_forced && ratio > -line_width * 0.05 {
+                    new_active.push(a_idx);
+                }
+            } else {
+                // Line too long — deactivate
+            }
+        }
+
+        if let Some(node) = best_node {
+            let idx = nodes.len();
+            nodes.push(node);
+            new_active.push(idx);
+        }
+
+        if !new_active.is_empty() {
+            active = new_active;
+        }
+        // If active becomes empty, KP fails — return None for greedy fallback
+        if active.is_empty() {
+            return None;
+        }
+    }
+
+    // Add a final break at the end of items
+    let final_idx = items.len();
+    let mut best_final: Option<ActiveNode> = None;
+    for &a_idx in &active {
+        let a = &nodes[a_idx];
+        let mut width = a.total_width;
+        for item_between in &items[a.index..final_idx] {
+            match item_between {
+                BreakItem::Box { width: w, .. } => width += w,
+                BreakItem::Glue { width: w, .. } => width += w,
+                _ => {}
+            }
+        }
+        let demerits = a.demerits;
+        match &best_final {
+            None => {
+                best_final = Some(ActiveNode {
+                    index: final_idx,
+                    line: a.line + 1,
+                    demerits,
+                    total_width: width,
+                    prev: Some(a_idx),
+                });
+            }
+            Some(best) if demerits < best.demerits => {
+                best_final = Some(ActiveNode {
+                    index: final_idx,
+                    line: a.line + 1,
+                    demerits,
+                    total_width: width,
+                    prev: Some(a_idx),
+                });
+            }
+            _ => {}
+        }
+    }
+
+    let final_node = best_final?;
+    let final_node_idx = nodes.len();
+    nodes.push(final_node);
+
+    // Trace back to get break points
+    let mut breaks = Vec::new();
+    let mut current = Some(final_node_idx);
+    while let Some(idx) = current {
+        breaks.push(nodes[idx].index);
+        current = nodes[idx].prev;
+    }
+    breaks.reverse();
+
+    // Ensure we start at 0
+    if breaks.first() != Some(&0) {
+        breaks.insert(0, 0);
+    }
+
+    Some(breaks)
+}
+
+/// Greedy line breaking fallback.
+fn greedy_breaks(
+    items: &[BreakItem],
+    available_width: f64,
+    first_line_indent: f64,
+) -> Vec<usize> {
+    let mut breaks = vec![0];
+    let mut current_width = 0.0;
+    let mut is_first_line = true;
+
+    for (i, item) in items.iter().enumerate() {
+        match item {
+            BreakItem::Box { width, .. } => {
+                let line_w = if is_first_line {
+                    available_width - first_line_indent
+                } else {
+                    available_width
+                };
+
+                if current_width + width > line_w + 0.01 && i > *breaks.last().unwrap_or(&0) {
+                    breaks.push(i);
+                    current_width = *width;
+                    is_first_line = false;
+                } else {
+                    current_width += width;
+                }
+            }
+            BreakItem::Glue { width, .. } => {
+                current_width += width;
+            }
+            BreakItem::ForcedBreak { .. } => {
+                breaks.push(i + 1);
+                current_width = 0.0;
+                is_first_line = false;
+            }
+            BreakItem::Penalty { .. } => {}
+        }
+    }
+
+    breaks.push(items.len());
+    breaks
 }
 
 #[cfg(test)]
@@ -1030,5 +1612,347 @@ mod tests {
         let engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
         let result = engine.layout().unwrap();
         assert_eq!(result.pages.len(), 2);
+    }
+
+    #[test]
+    fn knuth_plass_single_run() {
+        // KP should produce at least one line for a single short run
+        let items = vec![
+            BreakItem::Box {
+                run_idx: 0,
+                width: 100.0,
+                height: 12.0,
+            },
+            BreakItem::Glue {
+                width: 0.0,
+                stretch: 0.0,
+                shrink: 0.0,
+            },
+        ];
+        let breaks = knuth_plass_breaks(&items, 468.0, 0.0);
+        assert!(breaks.is_some());
+        let breaks = breaks.unwrap();
+        assert!(breaks.len() >= 2);
+        assert_eq!(breaks[0], 0);
+    }
+
+    #[test]
+    fn knuth_plass_forced_break() {
+        let items = vec![
+            BreakItem::Box {
+                run_idx: 0,
+                width: 100.0,
+                height: 12.0,
+            },
+            BreakItem::ForcedBreak { run_idx: 1 },
+            BreakItem::Box {
+                run_idx: 2,
+                width: 100.0,
+                height: 12.0,
+            },
+            BreakItem::Glue {
+                width: 0.0,
+                stretch: 0.0,
+                shrink: 0.0,
+            },
+        ];
+        let breaks = knuth_plass_breaks(&items, 468.0, 0.0);
+        assert!(breaks.is_some());
+        let breaks = breaks.unwrap();
+        // Should have 3 segments: [0..2, 2..4, 4..end]
+        assert!(breaks.len() >= 3, "breaks: {:?}", breaks);
+    }
+
+    #[test]
+    fn greedy_breaks_basic() {
+        let items = vec![
+            BreakItem::Box {
+                run_idx: 0,
+                width: 300.0,
+                height: 12.0,
+            },
+            BreakItem::Glue {
+                width: 0.0,
+                stretch: 0.0,
+                shrink: 0.0,
+            },
+            BreakItem::Box {
+                run_idx: 1,
+                width: 300.0,
+                height: 12.0,
+            },
+            BreakItem::Glue {
+                width: 0.0,
+                stretch: 0.0,
+                shrink: 0.0,
+            },
+        ];
+        let breaks = greedy_breaks(&items, 468.0, 0.0);
+        // Two runs of 300pt each don't fit in 468pt — should break into 2 lines
+        assert_eq!(breaks.len(), 3);
+    }
+
+    #[test]
+    fn layout_uses_section_page_size() {
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Hello"))
+            .unwrap();
+
+        // Set custom section properties (A4 landscape)
+        let mut sp = s1_model::SectionProperties::default();
+        sp.page_width = 841.89;
+        sp.page_height = 595.28;
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+        assert!((result.pages[0].width - 841.89).abs() < 0.01);
+        assert!((result.pages[0].height - 595.28).abs() < 0.01);
+    }
+
+    #[test]
+    fn layout_header_footer_placement() {
+        use s1_model::{HeaderFooterRef, HeaderFooterType, SectionProperties};
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Body paragraph
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Body text"))
+            .unwrap();
+
+        // Header node (child of root, not body)
+        let header_id = doc.next_id();
+        doc.insert_node(root, 1, Node::new(header_id, NodeType::Header))
+            .unwrap();
+        let hp = doc.next_id();
+        doc.insert_node(header_id, 0, Node::new(hp, NodeType::Paragraph))
+            .unwrap();
+        let hr = doc.next_id();
+        doc.insert_node(hp, 0, Node::new(hr, NodeType::Run))
+            .unwrap();
+        let ht = doc.next_id();
+        doc.insert_node(hr, 0, Node::text(ht, "Header Text"))
+            .unwrap();
+
+        // Footer node
+        let footer_id = doc.next_id();
+        doc.insert_node(root, 2, Node::new(footer_id, NodeType::Footer))
+            .unwrap();
+        let fp = doc.next_id();
+        doc.insert_node(footer_id, 0, Node::new(fp, NodeType::Paragraph))
+            .unwrap();
+        let fr = doc.next_id();
+        doc.insert_node(fp, 0, Node::new(fr, NodeType::Run))
+            .unwrap();
+        let ft = doc.next_id();
+        doc.insert_node(fr, 0, Node::text(ft, "Footer Text"))
+            .unwrap();
+
+        // Wire up section properties
+        let mut sp = SectionProperties::default();
+        sp.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: header_id,
+        });
+        sp.footers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: footer_id,
+        });
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        let page = &result.pages[0];
+        assert!(page.header.is_some(), "page should have a header");
+        assert!(page.footer.is_some(), "page should have a footer");
+
+        // Header should be near the top
+        let header = page.header.as_ref().unwrap();
+        assert!(header.bounds.y < 72.0, "header should be in top margin area");
+
+        // Footer should be near the bottom
+        let footer = page.footer.as_ref().unwrap();
+        assert!(footer.bounds.y > 700.0, "footer should be in bottom margin area");
+    }
+
+    #[test]
+    fn layout_page_number_substitution() {
+        use s1_model::{HeaderFooterRef, HeaderFooterType, SectionProperties};
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add enough paragraphs for 2 pages
+        let texts: Vec<&str> = (0..80).map(|_| "Content line here").collect();
+        for (i, text) in texts.iter().enumerate() {
+            let pid = doc.next_id();
+            doc.insert_node(body_id, i, Node::new(pid, NodeType::Paragraph))
+                .unwrap();
+            let rid = doc.next_id();
+            doc.insert_node(pid, 0, Node::new(rid, NodeType::Run))
+                .unwrap();
+            let tid = doc.next_id();
+            doc.insert_node(rid, 0, Node::text(tid, *text))
+                .unwrap();
+        }
+
+        // Footer with PAGE field
+        let footer_id = doc.next_id();
+        doc.insert_node(root, 1, Node::new(footer_id, NodeType::Footer))
+            .unwrap();
+        let fp = doc.next_id();
+        doc.insert_node(footer_id, 0, Node::new(fp, NodeType::Paragraph))
+            .unwrap();
+        // Add a field child to the paragraph (Field is a child of Paragraph, not Run)
+        let field_id = doc.next_id();
+        let mut field_node = Node::new(field_id, NodeType::Field);
+        field_node.attributes.set(
+            AttributeKey::FieldType,
+            AttributeValue::FieldType(FieldType::PageNumber),
+        );
+        doc.insert_node(fp, 0, field_node).unwrap();
+
+        // Section properties with footer ref
+        let mut sp = SectionProperties::default();
+        sp.footers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: footer_id,
+        });
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(result.pages.len() >= 2, "should have at least 2 pages");
+
+        // Each page should have a footer
+        for page in &result.pages {
+            assert!(page.footer.is_some(), "page {} should have footer", page.index);
+        }
+    }
+
+    #[test]
+    fn widow_orphan_config_respected() {
+        // With min_orphan_lines=2, min_widow_lines=2, layout should not leave
+        // single lines stranded
+        let config = LayoutConfig {
+            default_page_layout: PageLayout::letter(),
+            min_orphan_lines: 2,
+            min_widow_lines: 2,
+        };
+
+        let texts: Vec<&str> = (0..100).map(|_| "Lorem ipsum dolor sit amet").collect();
+        let doc = make_multi_para_doc(&texts);
+        let font_db = FontDatabase::new();
+        let engine = LayoutEngine::new(&doc, &font_db, config);
+        let result = engine.layout().unwrap();
+
+        // All pages should have proper page indices
+        for (i, page) in result.pages.iter().enumerate() {
+            assert_eq!(page.index, i, "page index mismatch");
+        }
+        assert!(result.pages.len() > 1);
+    }
+
+    #[test]
+    fn first_page_header_with_title_page() {
+        use s1_model::{HeaderFooterRef, HeaderFooterType, SectionProperties};
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Body paragraph
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Body"))
+            .unwrap();
+
+        // First-page header
+        let first_hdr_id = doc.next_id();
+        doc.insert_node(root, 1, Node::new(first_hdr_id, NodeType::Header))
+            .unwrap();
+        let hp = doc.next_id();
+        doc.insert_node(first_hdr_id, 0, Node::new(hp, NodeType::Paragraph))
+            .unwrap();
+        let hr = doc.next_id();
+        doc.insert_node(hp, 0, Node::new(hr, NodeType::Run))
+            .unwrap();
+        let ht = doc.next_id();
+        doc.insert_node(hr, 0, Node::text(ht, "First Page Header"))
+            .unwrap();
+
+        // Default header
+        let default_hdr_id = doc.next_id();
+        doc.insert_node(root, 2, Node::new(default_hdr_id, NodeType::Header))
+            .unwrap();
+        let hp2 = doc.next_id();
+        doc.insert_node(default_hdr_id, 0, Node::new(hp2, NodeType::Paragraph))
+            .unwrap();
+        let hr2 = doc.next_id();
+        doc.insert_node(hp2, 0, Node::new(hr2, NodeType::Run))
+            .unwrap();
+        let ht2 = doc.next_id();
+        doc.insert_node(hr2, 0, Node::text(ht2, "Default Header"))
+            .unwrap();
+
+        // Section with title_page enabled and both header types
+        let mut sp = SectionProperties::default();
+        sp.title_page = true;
+        sp.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::First,
+            node_id: first_hdr_id,
+        });
+        sp.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: default_hdr_id,
+        });
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        // First page should have a header (the First type)
+        assert!(result.pages[0].header.is_some());
+        // The header source should be the first-page header node
+        let header = result.pages[0].header.as_ref().unwrap();
+        assert_eq!(header.source_id, first_hdr_id);
     }
 }

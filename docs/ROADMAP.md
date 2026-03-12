@@ -6,7 +6,7 @@
 Phase 0: Planning           ████████████████████  COMPLETE
 Phase 1: Foundation         ████████████████████  COMPLETE
 Phase 2: Rich Documents     ████████████████████  COMPLETE (6/6 milestones)
-Phase 3: Layout & Export    ████████████████████  COMPLETE (4/5 milestones, 3.3 deferred)
+Phase 3: Layout & Export    ████████████████████  COMPLETE (layout done, PDF polish deferred)
 Phase 4: Collaboration      ░░░░░░░░░░░░░░░░░░░░  Months 9-14
 Phase 5: Production Ready   ░░░░░░░░░░░░░░░░░░░░  Months 14-18
 ```
@@ -239,9 +239,9 @@ Full DOCX and ODT read/write covering text, formatting, tables, images, lists, h
 - [x] Font metrics (ascent, descent, line gap, underline)
 - [x] OpenType feature support (ligatures, kerning, etc.)
 
-### Milestone 3.2: Layout Engine — `s1-layout` (COMPLETE — 22 tests)
+### Milestone 3.2: Layout Engine — `s1-layout` (COMPLETE — 30 tests)
 - [x] Style resolution: compute effective attributes for every node
-- [x] Greedy line breaking algorithm
+- [x] Knuth-Plass optimal line breaking (with greedy fallback)
 - [x] Paragraph layout → `Vec<LayoutLine>` with glyph runs
 - [x] Block stacking (paragraphs with spacing-before/after)
 - [x] Page breaking / pagination
@@ -250,9 +250,10 @@ Full DOCX and ODT read/write covering text, formatting, tables, images, lists, h
 - [x] Image placement (inline sizing with content-width constraint)
 - [x] Page-break-before support
 - [x] `LayoutDocument` output with pages, blocks, lines, glyph runs
-- [ ] Knuth-Plass line breaking (enhancement)
-- [ ] Widow/orphan control (enhancement)
-- [ ] Header/footer placement with page-number substitution (enhancement)
+- [x] Widow/orphan control (configurable min_orphan_lines, min_widow_lines)
+- [x] Header/footer placement from SectionProperties
+- [x] Page-number field substitution (PAGE/NUMPAGES)
+- [x] Section page size resolution (reads from DocumentModel.sections())
 
 ### Milestone 3.3: Incremental Layout (DEFERRED)
 - [ ] Dirty tracking: flag paragraphs that changed
@@ -282,6 +283,11 @@ Full DOCX and ODT read/write covering text, formatting, tables, images, lists, h
 - [x] `convert()`, `convert_to_model()`, `detect_format()` API
 - [x] SourceFormat (Doc, Docx, Odt), TargetFormat (Docx, Odt) enums
 - [x] 15 tests (doc reader, format detection, cross-format round-trips)
+
+### Milestone 3.6: PDF Polish (DEFERRED — after Phase 4)
+- [ ] Image embedding in PDF (JPEG pass-through, PNG encoding)
+- [ ] Hyperlinks as PDF link annotations
+- [ ] Bookmarks / document outline in PDF
 
 ### Phase 3 Deliverable
 ```rust
