@@ -9,6 +9,7 @@ use crate::crdt_op::CrdtOperation;
 use crate::error::CrdtError;
 use crate::metadata_crdt::MetadataCrdt;
 use crate::op_id::OpId;
+use crate::state_vector::StateVector;
 use crate::text_crdt::TextCrdt;
 use crate::tombstone::TombstoneTracker;
 use crate::tree_crdt::TreeCrdt;
@@ -407,6 +408,20 @@ impl CrdtResolver {
         } else {
             Ok(None) // All characters already deleted
         }
+    }
+
+    /// Get the total number of tombstones (text + tree) tracked by the resolver.
+    pub fn tombstone_count(&self) -> usize {
+        self.tombstones.text_tombstone_count() + self.tombstones.tree_tombstone_count()
+    }
+
+    /// Garbage-collect tombstones that all replicas have acknowledged.
+    ///
+    /// `min_state` should be the intersection of all connected replicas' state vectors.
+    /// Tombstones whose deleting operations are included in `min_state` can be safely removed.
+    /// Returns the number of tombstones removed.
+    pub fn gc_tombstones(&mut self, min_state: &StateVector) -> usize {
+        self.tombstones.gc(min_state)
     }
 
     /// Prepare a local operation for broadcast.

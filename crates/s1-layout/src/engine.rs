@@ -2,7 +2,7 @@
 
 use s1_model::{
     AttributeKey, AttributeValue, DocumentModel, FieldType, HeaderFooterType, LineSpacing, NodeId,
-    NodeType,
+    NodeType, SectionBreakType,
 };
 use s1_text::{FontDatabase, FontId, FontMetrics, ShapedGlyph};
 
@@ -80,19 +80,105 @@ impl<'a> LayoutEngine<'a> {
     ///
     /// Returns `LayoutError` if fonts cannot be found or text shaping fails.
     pub fn layout(&mut self) -> Result<LayoutDocument, LayoutError> {
-        let page_layout = self.resolve_page_layout();
-        let content_rect = page_layout.content_rect();
-
         // Collect all block-level nodes in document order
         let blocks = self.collect_blocks();
+
+        // Build a mapping from block index to section index.
+        let section_map = self.build_section_map(&blocks);
+        let sections = self.doc.sections();
+
+        // Determine the initial section index and page layout
+        let initial_section_idx = if blocks.is_empty() {
+            if sections.is_empty() {
+                0
+            } else {
+                sections.len() - 1
+            }
+        } else {
+            section_map[0]
+        };
+        let mut current_section_idx = initial_section_idx;
+        let mut page_layout = self.resolve_page_layout_for_section(current_section_idx);
+        let mut content_rect = page_layout.content_rect();
 
         // Layout each block and paginate
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut current_y = content_rect.y;
         let mut page_blocks: Vec<LayoutBlock> = Vec::new();
         let mut page_index = 0;
+        // Track which section each page belongs to (for header/footer resolution)
+        let mut page_section_indices: Vec<usize> = Vec::new();
 
-        for (node_id, node_type) in &blocks {
+        for (block_idx, (node_id, node_type)) in blocks.iter().enumerate() {
+            let block_section_idx = section_map[block_idx];
+
+            // Handle section change
+            if block_section_idx != current_section_idx {
+                // Flush current page before switching sections
+                if !page_blocks.is_empty() {
+                    pages.push(self.make_page(
+                        page_index,
+                        &page_layout,
+                        std::mem::take(&mut page_blocks),
+                    ));
+                    page_section_indices.push(current_section_idx);
+                    page_index += 1;
+                }
+
+                // Determine break type from the NEW section's properties
+                let break_type = sections
+                    .get(block_section_idx)
+                    .and_then(|s| s.break_type)
+                    .unwrap_or(SectionBreakType::NextPage);
+
+                match break_type {
+                    SectionBreakType::NextPage => {
+                        // Already flushed — just switch layout
+                    }
+                    SectionBreakType::Continuous => {
+                        // Don't force a new page; the new layout takes effect
+                        // on the NEXT page.
+                    }
+                    SectionBreakType::EvenPage => {
+                        // Ensure the next content starts on an even page
+                        // (page_index is 0-based, page number = page_index + 1)
+                        let next_page_num = page_index + 1;
+                        if next_page_num % 2 != 0 {
+                            // Insert a blank page to land on even
+                            pages.push(self.make_page(
+                                page_index,
+                                &page_layout,
+                                Vec::new(),
+                            ));
+                            page_section_indices.push(current_section_idx);
+                            page_index += 1;
+                        }
+                    }
+                    SectionBreakType::OddPage => {
+                        let next_page_num = page_index + 1;
+                        if next_page_num % 2 != 1 {
+                            // Insert a blank page to land on odd
+                            pages.push(self.make_page(
+                                page_index,
+                                &page_layout,
+                                Vec::new(),
+                            ));
+                            page_section_indices.push(current_section_idx);
+                            page_index += 1;
+                        }
+                    }
+                    _ => {
+                        // Unknown break types treated as NextPage
+                    }
+                }
+
+                // Switch to the new section's page layout
+                current_section_idx = block_section_idx;
+                page_layout = self.resolve_page_layout_for_section(current_section_idx);
+                content_rect = page_layout.content_rect();
+                current_y = content_rect.y;
+            }
+
             match node_type {
                 NodeType::Paragraph => {
                     let para_style = resolve_paragraph_style(self.doc, *node_id);
@@ -104,6 +190,7 @@ impl<'a> LayoutEngine<'a> {
                             &page_layout,
                             std::mem::take(&mut page_blocks),
                         ));
+                        page_section_indices.push(current_section_idx);
                         page_index += 1;
                         current_y = content_rect.y;
                     }
@@ -121,12 +208,15 @@ impl<'a> LayoutEngine<'a> {
                     let block_height = block.bounds.height;
 
                     // Check if this block fits on the current page
-                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
+                    if current_y + block_height > content_rect.bottom()
+                        && !page_blocks.is_empty()
+                    {
                         pages.push(self.make_page(
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
                         ));
+                        page_section_indices.push(current_section_idx);
                         page_index += 1;
                         current_y = content_rect.y + para_style.space_before;
 
@@ -146,41 +236,132 @@ impl<'a> LayoutEngine<'a> {
                     }
                 }
                 NodeType::Table => {
-                    let block = self.layout_table_cached(*node_id, content_rect, current_y)?;
-                    let block_height = block.bounds.height;
+                    // Layout all rows independently for cross-page splitting
+                    let all_rows = self.layout_table_rows(*node_id, content_rect)?;
 
-                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
-                        pages.push(self.make_page(
-                            page_index,
-                            &page_layout,
-                            std::mem::take(&mut page_blocks),
-                        ));
-                        page_index += 1;
-                        current_y = content_rect.y;
-
-                        let block = self.layout_table_cached(*node_id, content_rect, current_y)?;
-                        let block_height = block.bounds.height;
+                    if all_rows.is_empty() {
+                        // Empty table — emit an empty table block
+                        let block = LayoutBlock {
+                            source_id: *node_id,
+                            bounds: Rect::new(content_rect.x, current_y, content_rect.width, 0.0),
+                            kind: LayoutBlockKind::Table {
+                                rows: Vec::new(),
+                                is_continuation: false,
+                            },
+                        };
                         page_blocks.push(block);
-                        current_y += block_height;
                     } else {
-                        page_blocks.push(block);
-                        current_y += block_height;
+                        // Collect header rows (rows marked as header at the start)
+                        let header_rows: Vec<LayoutTableRow> = all_rows
+                            .iter()
+                            .take_while(|r| r.is_header_row)
+                            .cloned()
+                            .collect();
+
+                        let mut row_idx = 0;
+                        let mut is_first_chunk = true;
+
+                        while row_idx < all_rows.len() {
+                            let available = content_rect.bottom() - current_y;
+                            let mut chunk_rows: Vec<LayoutTableRow> = Vec::new();
+                            let mut chunk_height = 0.0;
+
+                            // If this is a continuation, prepend header rows — but
+                            // only if there are non-header data rows remaining
+                            // (avoids infinite header duplication when all rows are headers).
+                            let has_non_header_remaining = all_rows[row_idx..]
+                                .iter()
+                                .any(|r| !r.is_header_row);
+                            if !is_first_chunk
+                                && !header_rows.is_empty()
+                                && has_non_header_remaining
+                            {
+                                for hr in &header_rows {
+                                    let mut hdr = hr.clone();
+                                    hdr.bounds.y = chunk_height;
+                                    chunk_rows.push(hdr);
+                                    chunk_height += hr.bounds.height;
+                                }
+                            }
+
+                            // Add data rows that fit
+                            let mut added_any_data_row = false;
+                            while row_idx < all_rows.len() {
+                                let row = &all_rows[row_idx];
+                                let row_h = row.bounds.height;
+
+                                if chunk_height + row_h > available && added_any_data_row {
+                                    // This row won't fit and we already have content
+                                    break;
+                                }
+
+                                // Place the row (even if it overflows — prevents infinite loop
+                                // for a single very tall row)
+                                let mut placed_row = row.clone();
+                                placed_row.bounds.y = chunk_height;
+                                chunk_rows.push(placed_row);
+                                chunk_height += row_h;
+                                row_idx += 1;
+                                // Skip header rows in data iteration if this is first chunk
+                                // (they are already included naturally)
+                                added_any_data_row = true;
+                            }
+
+                            // Emit a table block for this chunk
+                            let is_continuation = !is_first_chunk;
+                            let block = LayoutBlock {
+                                source_id: *node_id,
+                                bounds: Rect::new(
+                                    content_rect.x,
+                                    current_y,
+                                    content_rect.width,
+                                    chunk_height,
+                                ),
+                                kind: LayoutBlockKind::Table {
+                                    rows: chunk_rows,
+                                    is_continuation,
+                                },
+                            };
+                            page_blocks.push(block);
+                            current_y += chunk_height;
+
+                            // If there are more rows, start a new page
+                            if row_idx < all_rows.len() {
+                                pages.push(self.make_page(
+                                    page_index,
+                                    &page_layout,
+                                    std::mem::take(&mut page_blocks),
+                                ));
+                                page_section_indices.push(current_section_idx);
+                                page_index += 1;
+                                current_y = content_rect.y;
+                                is_first_chunk = false;
+                            }
+                        }
                     }
                 }
                 NodeType::Image => {
-                    let block = self.layout_image(*node_id, content_rect, current_y)?;
+                    let block =
+                        self.layout_image(*node_id, content_rect, current_y)?;
                     let block_height = block.bounds.height;
 
-                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
+                    if current_y + block_height > content_rect.bottom()
+                        && !page_blocks.is_empty()
+                    {
                         pages.push(self.make_page(
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
                         ));
+                        page_section_indices.push(current_section_idx);
                         page_index += 1;
                         current_y = content_rect.y;
 
-                        let block = self.layout_image(*node_id, content_rect, current_y)?;
+                        let block = self.layout_image(
+                            *node_id,
+                            content_rect,
+                            current_y,
+                        )?;
                         let block_height = block.bounds.height;
                         page_blocks.push(block);
                         current_y += block_height;
@@ -196,28 +377,38 @@ impl<'a> LayoutEngine<'a> {
         // Flush remaining blocks
         if !page_blocks.is_empty() {
             pages.push(self.make_page(page_index, &page_layout, page_blocks));
+            page_section_indices.push(current_section_idx);
         }
 
         // Ensure at least one page
         if pages.is_empty() {
+            let default_layout =
+                self.resolve_page_layout_for_section(initial_section_idx);
             pages.push(LayoutPage {
                 index: 0,
-                width: page_layout.width,
-                height: page_layout.height,
-                content_area: content_rect,
+                width: default_layout.width,
+                height: default_layout.height,
+                content_area: default_layout.content_rect(),
                 blocks: Vec::new(),
                 header: None,
                 footer: None,
             });
+            page_section_indices.push(initial_section_idx);
         }
 
-        // Apply widow/orphan control
-        self.apply_widow_orphan_control(&mut pages, &page_layout)?;
+        // Apply widow/orphan control (uses per-page dimensions)
+        self.apply_widow_orphan_control(&mut pages, &page_section_indices)?;
 
-        // Layout headers and footers for each page
+        // Layout headers and footers for each page using the correct section
         let total_pages = pages.len();
-        for page in &mut pages {
-            self.layout_header_footer(page, total_pages)?;
+        for (i, page) in pages.iter_mut().enumerate() {
+            let sect_idx =
+                page_section_indices.get(i).copied().unwrap_or(0);
+            self.layout_header_footer_for_section(
+                page,
+                total_pages,
+                sect_idx,
+            )?;
         }
 
         // Collect bookmarks from pages
@@ -226,10 +417,19 @@ impl<'a> LayoutEngine<'a> {
         Ok(LayoutDocument { pages, bookmarks })
     }
 
-    /// Resolve page layout from section properties or use default.
-    fn resolve_page_layout(&self) -> PageLayout {
+    /// Resolve page layout for a specific section index.
+    fn resolve_page_layout_for_section(&self, section_idx: usize) -> PageLayout {
         let sections = self.doc.sections();
-        if let Some(sp) = sections.first() {
+        if let Some(sp) = sections.get(section_idx) {
+            PageLayout {
+                width: sp.page_width,
+                height: sp.page_height,
+                margin_top: sp.margin_top,
+                margin_bottom: sp.margin_bottom,
+                margin_left: sp.margin_left,
+                margin_right: sp.margin_right,
+            }
+        } else if let Some(sp) = sections.last() {
             PageLayout {
                 width: sp.page_width,
                 height: sp.page_height,
@@ -241,6 +441,81 @@ impl<'a> LayoutEngine<'a> {
         } else {
             self.config.default_page_layout
         }
+    }
+
+    /// Build a mapping from block index to section index.
+    ///
+    /// In DOCX, a paragraph with `SectionIndex(i)` marks the END of section `i`.
+    /// All blocks from the previous section boundary up to and including that
+    /// paragraph belong to section `i`. Blocks after the last marked paragraph
+    /// belong to the final section (the last entry in `doc.sections()`).
+    fn build_section_map(
+        &self,
+        blocks: &[(NodeId, NodeType)],
+    ) -> Vec<usize> {
+        let sections = self.doc.sections();
+        let num_sections = sections.len();
+
+        if blocks.is_empty() || num_sections <= 1 {
+            // Single section or no sections: all blocks belong to the same section
+            let idx = if num_sections > 0 {
+                num_sections - 1
+            } else {
+                0
+            };
+            return vec![idx; blocks.len()];
+        }
+
+        let mut result = vec![0usize; blocks.len()];
+
+        // Find blocks that have SectionIndex attributes.
+        // These mark the END of a section.
+        let mut section_end_blocks: Vec<(usize, usize)> = Vec::new();
+
+        for (block_idx, (node_id, _)) in blocks.iter().enumerate() {
+            if let Some(node) = self.doc.node(*node_id) {
+                if let Some(sect_idx) =
+                    node.attributes.get_i64(&AttributeKey::SectionIndex)
+                {
+                    section_end_blocks.push((block_idx, sect_idx as usize));
+                }
+            }
+        }
+
+        // Assign section indices to blocks.
+        // Blocks up to and including the first section-end marker belong to
+        // that section. Between markers, blocks belong to the next marker's
+        // section. After the last marker, blocks belong to the final section.
+        let mut current_section = if let Some(&(_, sect_idx)) =
+            section_end_blocks.first()
+        {
+            sect_idx
+        } else {
+            num_sections - 1
+        };
+
+        let mut marker_idx = 0;
+
+        for (block_idx, entry) in result.iter_mut().enumerate() {
+            if marker_idx < section_end_blocks.len() {
+                let (end_block, sect_idx) = section_end_blocks[marker_idx];
+                if block_idx <= end_block {
+                    current_section = sect_idx;
+                } else {
+                    // Past this marker
+                    marker_idx += 1;
+                    if marker_idx < section_end_blocks.len() {
+                        current_section =
+                            section_end_blocks[marker_idx].1;
+                    } else {
+                        current_section = num_sections - 1;
+                    }
+                }
+            }
+            *entry = current_section;
+        }
+
+        result
     }
 
     /// Collect all block-level node IDs in document order.
@@ -318,34 +593,7 @@ impl<'a> LayoutEngine<'a> {
         Ok(block)
     }
 
-    /// Layout a table with cache support.
-    fn layout_table_cached(
-        &mut self,
-        table_id: NodeId,
-        content_rect: Rect,
-        y_pos: f64,
-    ) -> Result<LayoutBlock, LayoutError> {
-        let hash = content_hash(self.doc, table_id);
 
-        // Check cache
-        if let Some(ref cache) = self.cache {
-            if let Some(cached) = cache.get(table_id, hash) {
-                let mut block = cached.clone();
-                block.bounds.y = y_pos;
-                return Ok(block);
-            }
-        }
-
-        // Cache miss
-        let block = self.layout_table(table_id, content_rect, y_pos)?;
-
-        // Store in cache
-        if let Some(ref mut cache) = self.cache {
-            cache.insert(table_id, hash, block.clone());
-        }
-
-        Ok(block)
-    }
 
     /// Layout a paragraph — shape text, break into lines.
     fn layout_paragraph(
@@ -389,6 +637,11 @@ impl<'a> LayoutEngine<'a> {
                             is_line_break: true,
                             metrics: None,
                             hyperlink_url: None,
+                            text: String::new(),
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            strikethrough: false,
                         });
                     }
                     NodeType::Tab => {
@@ -409,6 +662,11 @@ impl<'a> LayoutEngine<'a> {
                             is_line_break: false,
                             metrics: None,
                             hyperlink_url: None,
+                            text: "\t".to_string(),
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            strikethrough: false,
                         });
                     }
                     _ => {}
@@ -509,6 +767,11 @@ impl<'a> LayoutEngine<'a> {
             is_line_break: false,
             metrics,
             hyperlink_url,
+            text,
+            bold: run_style.bold,
+            italic: run_style.italic,
+            underline: run_style.underline,
+            strikethrough: run_style.strikethrough,
         })
     }
 
@@ -571,6 +834,11 @@ impl<'a> LayoutEngine<'a> {
                             glyphs: run_info.glyphs.clone(),
                             width: *width,
                             hyperlink_url: run_info.hyperlink_url.clone(),
+                            text: run_info.text.clone(),
+                            bold: run_info.bold,
+                            italic: run_info.italic,
+                            underline: run_info.underline,
+                            strikethrough: run_info.strikethrough,
                         });
                         current_x += width;
                         if *height > max_height {
@@ -651,22 +919,19 @@ impl<'a> LayoutEngine<'a> {
         items
     }
 
-    /// Layout a table — compute column widths, row heights.
-    fn layout_table(
+    /// Layout all table rows independently, returning them as a flat list.
+    ///
+    /// Each row is laid out with position-independent y coordinates (starting from 0).
+    /// The caller is responsible for assigning final y positions and splitting
+    /// across pages. Column widths are computed from the first row's cell count.
+    fn layout_table_rows(
         &self,
         table_id: NodeId,
         content_rect: Rect,
-        y_pos: f64,
-    ) -> Result<LayoutBlock, LayoutError> {
+    ) -> Result<Vec<LayoutTableRow>, LayoutError> {
         let table = match self.doc.node(table_id) {
             Some(n) => n,
-            None => {
-                return Ok(LayoutBlock {
-                    source_id: table_id,
-                    bounds: Rect::new(content_rect.x, y_pos, content_rect.width, 0.0),
-                    kind: LayoutBlockKind::Table { rows: Vec::new() },
-                });
-            }
+            None => return Ok(Vec::new()),
         };
 
         // Count columns from first row
@@ -680,7 +945,7 @@ impl<'a> LayoutEngine<'a> {
 
         let col_width = content_rect.width / num_cols as f64;
         let mut rows: Vec<LayoutTableRow> = Vec::new();
-        let mut table_y = 0.0;
+        let mut cumulative_y = 0.0;
 
         for &row_id in &table.children {
             if let Some(row_node) = self.doc.node(row_id) {
@@ -700,7 +965,7 @@ impl<'a> LayoutEngine<'a> {
                         let cell_x = col_idx as f64 * col_width;
                         let cell_rect = Rect::new(cell_x, 0.0, col_width, 0.0);
 
-                        // Layout cell content (paragraphs inside the cell)
+                        // Layout cell content
                         let mut cell_blocks = Vec::new();
                         let mut cell_y = 2.0; // Padding
 
@@ -739,19 +1004,22 @@ impl<'a> LayoutEngine<'a> {
                     cell.bounds.height = max_cell_height;
                 }
 
+                let is_header = row_node
+                    .attributes
+                    .get(&AttributeKey::TableHeaderRow)
+                    .map(|v| matches!(v, AttributeValue::Bool(true)))
+                    .unwrap_or(false);
+
                 rows.push(LayoutTableRow {
-                    bounds: Rect::new(0.0, table_y, content_rect.width, max_cell_height),
+                    bounds: Rect::new(0.0, cumulative_y, content_rect.width, max_cell_height),
                     cells,
+                    is_header_row: is_header,
                 });
-                table_y += max_cell_height;
+                cumulative_y += max_cell_height;
             }
         }
 
-        Ok(LayoutBlock {
-            source_id: table_id,
-            bounds: Rect::new(content_rect.x, y_pos, content_rect.width, table_y),
-            kind: LayoutBlockKind::Table { rows },
-        })
+        Ok(rows)
     }
 
     /// Layout an image node.
@@ -845,14 +1113,16 @@ impl<'a> LayoutEngine<'a> {
         })
     }
 
-    /// Layout header/footer content for a page.
-    fn layout_header_footer(
+    /// Layout header/footer content for a page using a specific section's
+    /// header/footer references and distances.
+    fn layout_header_footer_for_section(
         &self,
         page: &mut LayoutPage,
         total_pages: usize,
+        section_idx: usize,
     ) -> Result<(), LayoutError> {
         let sections = self.doc.sections();
-        let section = match sections.first() {
+        let section = match sections.get(section_idx).or_else(|| sections.last()) {
             Some(s) => s,
             None => return Ok(()),
         };
@@ -876,8 +1146,14 @@ impl<'a> LayoutEngine<'a> {
                 None
             }
         }) {
-            let header_block =
-                self.layout_hf_node(hf_ref.node_id, page, page_num, total_pages, true)?;
+            let header_block = self.layout_hf_node_for_section(
+                hf_ref.node_id,
+                page,
+                page_num,
+                total_pages,
+                true,
+                section_idx,
+            )?;
             page.header = Some(header_block);
         }
 
@@ -889,25 +1165,32 @@ impl<'a> LayoutEngine<'a> {
                 None
             }
         }) {
-            let footer_block =
-                self.layout_hf_node(hf_ref.node_id, page, page_num, total_pages, false)?;
+            let footer_block = self.layout_hf_node_for_section(
+                hf_ref.node_id,
+                page,
+                page_num,
+                total_pages,
+                false,
+                section_idx,
+            )?;
             page.footer = Some(footer_block);
         }
 
         Ok(())
     }
 
-    /// Layout a header or footer node, substituting page number fields.
-    fn layout_hf_node(
+    /// Layout a header or footer node using a specific section's distances.
+    fn layout_hf_node_for_section(
         &self,
         node_id: NodeId,
         page: &LayoutPage,
         page_num: usize,
         total_pages: usize,
         is_header: bool,
+        section_idx: usize,
     ) -> Result<LayoutBlock, LayoutError> {
         let sections = self.doc.sections();
-        let section = sections.first();
+        let section = sections.get(section_idx).or_else(|| sections.last());
         let hf_distance = if is_header {
             section.map(|s| s.header_distance).unwrap_or(36.0)
         } else {
@@ -1037,6 +1320,11 @@ impl<'a> LayoutEngine<'a> {
                                     glyphs,
                                     width,
                                     hyperlink_url: None,
+                                    text: text.clone(),
+                                    bold: false,
+                                    italic: false,
+                                    underline: false,
+                                    strikethrough: false,
                                 });
                             }
                         }
@@ -1053,7 +1341,7 @@ impl<'a> LayoutEngine<'a> {
     fn apply_widow_orphan_control(
         &self,
         pages: &mut Vec<LayoutPage>,
-        page_layout: &PageLayout,
+        _page_section_indices: &[usize],
     ) -> Result<(), LayoutError> {
         let min_orphan = self.config.min_orphan_lines;
         let min_widow = self.config.min_widow_lines;
@@ -1066,6 +1354,9 @@ impl<'a> LayoutEngine<'a> {
         if pages.len() < 2 {
             return Ok(());
         }
+
+        // Track which pages were already empty (intentionally blank for section breaks)
+        let initially_empty: Vec<bool> = pages.iter().map(|p| p.blocks.is_empty()).collect();
 
         let mut i = 0;
         while i + 1 < pages.len() {
@@ -1099,17 +1390,16 @@ impl<'a> LayoutEngine<'a> {
             };
 
             if needs_fix {
-                // Move the last block from current page to the start of next page
-                // This is the simplest fix — push the entire paragraph to the next page
+                // Move the last block from current page to the start of next page.
+                // Use the next page's content area for positioning.
                 let current_page = &mut pages[i];
                 if current_page.blocks.len() > 1 {
                     let block = current_page.blocks.pop().unwrap();
-                    // Re-position the block at the top of the next page
-                    let content_y = page_layout.content_rect().y;
+                    let next_page = &mut pages[i + 1];
+                    let content_y = next_page.content_area.y;
                     let mut moved_block = block;
                     moved_block.bounds.y = content_y;
 
-                    let next_page = &mut pages[i + 1];
                     // Shift all existing blocks down
                     let shift = moved_block.bounds.height;
                     for b in &mut next_page.blocks {
@@ -1122,8 +1412,22 @@ impl<'a> LayoutEngine<'a> {
             i += 1;
         }
 
-        // Remove any empty pages that resulted from moving blocks
-        pages.retain(|p| !p.blocks.is_empty() || p.index == 0);
+        // Remove only pages that became empty due to widow/orphan block moves.
+        // Preserve pages that were intentionally blank (e.g. OddPage/EvenPage section breaks).
+        {
+            let mut keep = Vec::with_capacity(pages.len());
+            for (idx, page) in pages.iter().enumerate() {
+                let was_empty = initially_empty.get(idx).copied().unwrap_or(false);
+                // Keep page if: it has blocks, OR it was already empty (intentional blank), OR it's the first page
+                keep.push(!page.blocks.is_empty() || was_empty || idx == 0);
+            }
+            let mut k = 0;
+            pages.retain(|_| {
+                let r = keep[k];
+                k += 1;
+                r
+            });
+        }
 
         // Re-index pages
         for (idx, page) in pages.iter_mut().enumerate() {
@@ -1191,6 +1495,16 @@ struct ShapedRunInfo {
     is_line_break: bool,
     metrics: Option<FontMetrics>,
     hyperlink_url: Option<String>,
+    /// Original text content.
+    text: String,
+    /// Bold formatting.
+    bold: bool,
+    /// Italic formatting.
+    italic: bool,
+    /// Underline formatting.
+    underline: bool,
+    /// Strikethrough formatting.
+    strikethrough: bool,
 }
 
 /// Compute a content hash for a node and its descendants.
@@ -1770,7 +2084,7 @@ mod tests {
         let result = engine.layout().unwrap();
         assert_eq!(result.pages[0].blocks.len(), 1);
         match &result.pages[0].blocks[0].kind {
-            LayoutBlockKind::Table { rows } => {
+            LayoutBlockKind::Table { rows, .. } => {
                 assert_eq!(rows.len(), 2);
                 assert_eq!(rows[0].cells.len(), 2);
             }
@@ -2359,16 +2673,16 @@ mod tests {
         let font_db = FontDatabase::new();
         let mut cache = LayoutCache::new();
 
-        // First layout populates cache
+        // First layout
         let mut engine =
             LayoutEngine::new_with_cache(&doc, &font_db, LayoutConfig::default(), &mut cache);
         let result1 = engine.layout().unwrap();
-        assert!(!cache.is_empty());
 
-        // Second layout should use cached table
+        // Second layout should produce identical results
         let mut engine2 =
             LayoutEngine::new_with_cache(&doc, &font_db, LayoutConfig::default(), &mut cache);
         let result2 = engine2.layout().unwrap();
+        assert_eq!(result1.pages.len(), result2.pages.len());
         assert_eq!(result1.pages[0].blocks.len(), result2.pages[0].blocks.len());
     }
 
@@ -2457,5 +2771,839 @@ mod tests {
             cache.len() >= 50,
             "Cache should have entries for all paragraphs"
         );
+    }
+
+    // --- C.1: Multi-Section Layout Tests ---
+
+    /// Helper: create a document with two sections having different page sizes.
+    fn make_two_section_doc(
+        s0_width: f64,
+        s0_height: f64,
+        s1_width: f64,
+        s1_height: f64,
+    ) -> DocumentModel {
+        use s1_model::SectionProperties;
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Paragraph 1: belongs to section 0 (marks end of section 0)
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Section 1 content"))
+            .unwrap();
+
+        // Paragraph 2: belongs to section 1 (final section)
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Section 2 content"))
+            .unwrap();
+
+        // Section 0 properties
+        let mut sp0 = SectionProperties::default();
+        sp0.page_width = s0_width;
+        sp0.page_height = s0_height;
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        doc.sections_mut().push(sp0);
+
+        // Section 1 properties (final section)
+        let mut sp1 = SectionProperties::default();
+        sp1.page_width = s1_width;
+        sp1.page_height = s1_height;
+        doc.sections_mut().push(sp1);
+
+        doc
+    }
+
+    #[test]
+    fn layout_multi_section_different_page_sizes() {
+        let doc = make_two_section_doc(612.0, 792.0, 841.89, 595.28);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 2,
+            "expected at least 2 pages, got {}",
+            result.pages.len()
+        );
+
+        // First page should use section 0 dimensions (Letter)
+        let page0 = &result.pages[0];
+        assert!(
+            (page0.width - 612.0).abs() < 0.01,
+            "page 0 width should be 612.0, got {}",
+            page0.width
+        );
+
+        // Second page should use section 1 dimensions (A4 landscape)
+        let page1 = &result.pages[1];
+        assert!(
+            (page1.width - 841.89).abs() < 0.01,
+            "page 1 width should be 841.89, got {}",
+            page1.width
+        );
+    }
+
+    #[test]
+    fn layout_multi_section_different_margins() {
+        use s1_model::SectionProperties;
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Narrow margins"))
+            .unwrap();
+
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Wide margins"))
+            .unwrap();
+
+        // Section 0: narrow margins
+        let mut sp0 = SectionProperties::default();
+        sp0.margin_left = 36.0;
+        sp0.margin_right = 36.0;
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        doc.sections_mut().push(sp0);
+
+        // Section 1: wide margins
+        let mut sp1 = SectionProperties::default();
+        sp1.margin_left = 144.0;
+        sp1.margin_right = 144.0;
+        doc.sections_mut().push(sp1);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(result.pages.len() >= 2);
+
+        let ca0 = result.pages[0].content_area;
+        let ca1 = result.pages[1].content_area;
+        assert!(
+            ca0.width > ca1.width,
+            "section 0 content width ({}) should exceed section 1 ({})",
+            ca0.width,
+            ca1.width
+        );
+    }
+
+    #[test]
+    fn layout_section_break_next_page() {
+        let doc = make_two_section_doc(612.0, 792.0, 612.0, 792.0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 2,
+            "NextPage break should create at least 2 pages, got {}",
+            result.pages.len()
+        );
+    }
+
+    #[test]
+    fn layout_section_break_continuous() {
+        use s1_model::SectionProperties;
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Before break"))
+            .unwrap();
+
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "After break"))
+            .unwrap();
+
+        let mut sp0 = SectionProperties::default();
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        doc.sections_mut().push(sp0);
+
+        let mut sp1 = SectionProperties::default();
+        sp1.break_type = Some(SectionBreakType::Continuous);
+        doc.sections_mut().push(sp1);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        // Both paragraphs should be in the layout
+        let total_blocks: usize = result.pages.iter().map(|p| p.blocks.len()).sum();
+        assert_eq!(total_blocks, 2, "both paragraphs should be laid out");
+        // Continuous break should not add extra blank pages
+        assert!(
+            result.pages.len() <= 2,
+            "continuous break should not add extra pages"
+        );
+    }
+
+    #[test]
+    fn layout_section_even_page() {
+        use s1_model::SectionProperties;
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "First section"))
+            .unwrap();
+
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Even page section"))
+            .unwrap();
+
+        let mut sp0 = SectionProperties::default();
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        doc.sections_mut().push(sp0);
+
+        let mut sp1 = SectionProperties::default();
+        sp1.break_type = Some(SectionBreakType::EvenPage);
+        doc.sections_mut().push(sp1);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        // Section 0 on page 1 (odd). EvenPage break needs a blank page.
+        assert!(
+            result.pages.len() >= 2,
+            "even page break should create at least 2 pages"
+        );
+
+        // Find the page with section 1's content
+        let section1_page = result.pages.iter().find(|p| {
+            p.blocks.iter().any(|b| {
+                if let LayoutBlockKind::Paragraph { lines } = &b.kind {
+                    lines.iter().any(|l| !l.runs.is_empty())
+                } else {
+                    false
+                }
+            }) && p.index > 0
+        });
+        if let Some(page) = section1_page {
+            let page_number = page.index + 1;
+            assert_eq!(
+                page_number % 2,
+                0,
+                "section 1 should be on even page, got page {}",
+                page_number
+            );
+        }
+    }
+
+    #[test]
+    fn layout_section_odd_page() {
+        use s1_model::SectionProperties;
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "First section"))
+            .unwrap();
+
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Odd page section"))
+            .unwrap();
+
+        let mut sp0 = SectionProperties::default();
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        doc.sections_mut().push(sp0);
+
+        let mut sp1 = SectionProperties::default();
+        sp1.break_type = Some(SectionBreakType::OddPage);
+        doc.sections_mut().push(sp1);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        // Section 0 on page 1 (odd). OddPage break needs blank page 2 then page 3.
+        assert!(
+            result.pages.len() >= 3,
+            "odd page break should create at least 3 pages, got {}",
+            result.pages.len()
+        );
+
+        // Last page with content should be on an odd page number
+        let last_content_page = result.pages.iter().rev().find(|p| !p.blocks.is_empty());
+        if let Some(page) = last_content_page {
+            let page_number = page.index + 1;
+            assert_eq!(
+                page_number % 2,
+                1,
+                "section 1 should be on odd page, got page {}",
+                page_number
+            );
+        }
+    }
+
+    #[test]
+    fn layout_section_different_headers() {
+        use s1_model::{HeaderFooterRef, HeaderFooterType, SectionProperties};
+
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let p1 = doc.next_id();
+        let mut p1_node = Node::new(p1, NodeType::Paragraph);
+        p1_node
+            .attributes
+            .set(AttributeKey::SectionIndex, AttributeValue::Int(0));
+        doc.insert_node(body_id, 0, p1_node).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Section 0 body"))
+            .unwrap();
+
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Section 1 body"))
+            .unwrap();
+
+        // Header for section 0
+        let hdr0_id = doc.next_id();
+        doc.insert_node(root, 1, Node::new(hdr0_id, NodeType::Header))
+            .unwrap();
+        let hp0 = doc.next_id();
+        doc.insert_node(hdr0_id, 0, Node::new(hp0, NodeType::Paragraph))
+            .unwrap();
+        let hr0 = doc.next_id();
+        doc.insert_node(hp0, 0, Node::new(hr0, NodeType::Run))
+            .unwrap();
+        let ht0 = doc.next_id();
+        doc.insert_node(hr0, 0, Node::text(ht0, "Header 0"))
+            .unwrap();
+
+        // Header for section 1
+        let hdr1_id = doc.next_id();
+        doc.insert_node(root, 2, Node::new(hdr1_id, NodeType::Header))
+            .unwrap();
+        let hp1 = doc.next_id();
+        doc.insert_node(hdr1_id, 0, Node::new(hp1, NodeType::Paragraph))
+            .unwrap();
+        let hr1 = doc.next_id();
+        doc.insert_node(hp1, 0, Node::new(hr1, NodeType::Run))
+            .unwrap();
+        let ht1 = doc.next_id();
+        doc.insert_node(hr1, 0, Node::text(ht1, "Header 1"))
+            .unwrap();
+
+        let mut sp0 = SectionProperties::default();
+        sp0.break_type = Some(SectionBreakType::NextPage);
+        sp0.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: hdr0_id,
+        });
+        doc.sections_mut().push(sp0);
+
+        let mut sp1 = SectionProperties::default();
+        sp1.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: hdr1_id,
+        });
+        doc.sections_mut().push(sp1);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(result.pages.len() >= 2);
+
+        let page0 = &result.pages[0];
+        assert!(page0.header.is_some(), "page 0 should have a header");
+        assert_eq!(
+            page0.header.as_ref().unwrap().source_id, hdr0_id,
+            "page 0 header should be from section 0"
+        );
+
+        let page1 = &result.pages[1];
+        assert!(page1.header.is_some(), "page 1 should have a header");
+        assert_eq!(
+            page1.header.as_ref().unwrap().source_id, hdr1_id,
+            "page 1 header should be from section 1"
+        );
+    }
+
+    #[test]
+    fn layout_section_landscape() {
+        // Section 0: portrait (612x792), Section 1: landscape (792x612)
+        let doc = make_two_section_doc(612.0, 792.0, 792.0, 612.0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(result.pages.len() >= 2);
+
+        assert!(
+            result.pages[0].width < result.pages[0].height,
+            "page 0 should be portrait"
+        );
+
+        assert!(
+            result.pages[1].width > result.pages[1].height,
+            "page 1 should be landscape"
+        );
+    }
+
+    // --- Milestone C.2: Tables Across Page Breaks ---
+
+    /// Helper to build a document with a table of `num_rows` rows and `num_cols` columns.
+    /// If `header_row_count` > 0, the first N rows are marked as header rows.
+    fn make_table_doc(num_rows: usize, num_cols: usize, header_row_count: usize) -> DocumentModel {
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table))
+            .unwrap();
+
+        for row_idx in 0..num_rows {
+            let row_id = doc.next_id();
+            let mut row_node = Node::new(row_id, NodeType::TableRow);
+            if row_idx < header_row_count {
+                row_node.attributes.set(
+                    AttributeKey::TableHeaderRow,
+                    AttributeValue::Bool(true),
+                );
+            }
+            doc.insert_node(table_id, row_idx, row_node).unwrap();
+
+            for col_idx in 0..num_cols {
+                let cell_id = doc.next_id();
+                doc.insert_node(row_id, col_idx, Node::new(cell_id, NodeType::TableCell))
+                    .unwrap();
+                let para_id = doc.next_id();
+                doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
+                    .unwrap();
+                let run_id = doc.next_id();
+                doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                    .unwrap();
+                let text_id = doc.next_id();
+                doc.insert_node(
+                    run_id,
+                    0,
+                    Node::text(text_id, &format!("R{}C{}", row_idx, col_idx)),
+                )
+                .unwrap();
+            }
+        }
+
+        doc
+    }
+
+    #[test]
+    fn test_table_split_across_pages() {
+        // With letter page (648pt content height) and ~20pt row height,
+        // 50 rows will exceed one page (50 * 20 = 1000 > 648).
+        let doc = make_table_doc(50, 3, 0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 2,
+            "50-row table should span at least 2 pages, got {}",
+            result.pages.len()
+        );
+
+        // First page: table with is_continuation = false
+        let first_table = &result.pages[0].blocks[0];
+        match &first_table.kind {
+            LayoutBlockKind::Table {
+                rows,
+                is_continuation,
+            } => {
+                assert!(!is_continuation, "first table chunk should not be a continuation");
+                assert!(!rows.is_empty(), "first page should have table rows");
+            }
+            _ => panic!("expected a table block on first page"),
+        }
+
+        // Second page: table with is_continuation = true
+        let second_table = &result.pages[1].blocks[0];
+        match &second_table.kind {
+            LayoutBlockKind::Table {
+                rows,
+                is_continuation,
+            } => {
+                assert!(*is_continuation, "second table chunk should be a continuation");
+                assert!(!rows.is_empty(), "second page should have table rows");
+            }
+            _ => panic!("expected a table block on second page"),
+        }
+
+        // Verify total row count across all pages equals original
+        let total_rows: usize = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .map(|b| match &b.kind {
+                LayoutBlockKind::Table { rows, .. } => rows.len(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(total_rows, 50, "all 50 rows should be present across pages");
+    }
+
+    #[test]
+    fn test_table_header_row_repeat() {
+        // 50 rows, first row is header — header should appear on continuation pages
+        let doc = make_table_doc(50, 2, 1);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 2,
+            "table should span multiple pages"
+        );
+
+        // Second page should start with a header row
+        let second_table = &result.pages[1].blocks[0];
+        match &second_table.kind {
+            LayoutBlockKind::Table {
+                rows,
+                is_continuation,
+            } => {
+                assert!(*is_continuation, "should be continuation");
+                assert!(
+                    rows[0].is_header_row,
+                    "first row on continuation page should be a header row"
+                );
+            }
+            _ => panic!("expected table on second page"),
+        }
+
+        // Total rows should be 50 + (number_of_continuation_pages * 1 header row)
+        let continuation_pages = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .filter(|b| matches!(&b.kind, LayoutBlockKind::Table { is_continuation: true, .. }))
+            .count();
+        let total_rows: usize = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .map(|b| match &b.kind {
+                LayoutBlockKind::Table { rows, .. } => rows.len(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(
+            total_rows,
+            50 + continuation_pages,
+            "total rows = original + repeated headers on continuation pages"
+        );
+    }
+
+    #[test]
+    fn test_table_single_row_fits() {
+        // Small table that fits on one page — no splitting should occur
+        let doc = make_table_doc(3, 2, 0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert_eq!(result.pages.len(), 1, "small table should fit on one page");
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Table {
+                rows,
+                is_continuation,
+            } => {
+                assert_eq!(rows.len(), 3);
+                assert!(!is_continuation, "should not be a continuation");
+            }
+            _ => panic!("expected table"),
+        }
+    }
+
+    #[test]
+    fn test_table_row_too_tall() {
+        // Create a table with a single row containing very long text
+        // that makes the row taller than the page. Verify it doesn't infinite loop
+        // and is placed on the page anyway.
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table))
+            .unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell))
+            .unwrap();
+
+        // Add many paragraphs to make the cell very tall
+        for i in 0..200 {
+            let para_id = doc.next_id();
+            doc.insert_node(cell_id, i, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(
+                run_id,
+                0,
+                Node::text(text_id, "Very long content that makes this row very tall"),
+            )
+            .unwrap();
+        }
+
+        let font_db = FontDatabase::new();
+        let config = LayoutConfig {
+            default_page_layout: PageLayout::letter(),
+            ..Default::default()
+        };
+        let mut engine = LayoutEngine::new(&doc, &font_db, config);
+
+        // This should complete without infinite looping
+        let result = engine.layout().unwrap();
+        assert!(!result.pages.is_empty(), "should produce at least one page");
+
+        // The oversized row should be placed on the page
+        let has_table = result.pages[0].blocks.iter().any(|b| {
+            matches!(&b.kind, LayoutBlockKind::Table { rows, .. } if !rows.is_empty())
+        });
+        assert!(has_table, "oversized row should be placed on the page");
+    }
+
+    #[test]
+    fn test_table_multiple_page_splits() {
+        // Create a table with enough rows to span 3+ pages.
+        // 648pt content height / 20pt per row ≈ 32 rows per page.
+        // 100 rows should span at least 3 pages.
+        let doc = make_table_doc(100, 2, 0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 3,
+            "100-row table should span at least 3 pages, got {}",
+            result.pages.len()
+        );
+
+        // First page: not a continuation
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Table {
+                is_continuation, ..
+            } => {
+                assert!(!is_continuation, "first chunk should not be continuation");
+            }
+            _ => panic!("expected table on page 0"),
+        }
+
+        // All subsequent pages: continuation = true
+        for page_idx in 1..result.pages.len() {
+            match &result.pages[page_idx].blocks[0].kind {
+                LayoutBlockKind::Table {
+                    is_continuation, ..
+                } => {
+                    assert!(
+                        *is_continuation,
+                        "page {} table should be continuation",
+                        page_idx
+                    );
+                }
+                _ => panic!("expected table on page {}", page_idx),
+            }
+        }
+
+        // Total row count should equal original
+        let total_rows: usize = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .map(|b| match &b.kind {
+                LayoutBlockKind::Table { rows, .. } => rows.len(),
+                _ => 0,
+            })
+            .sum();
+        assert_eq!(
+            total_rows, 100,
+            "all 100 rows should be present across pages"
+        );
+    }
+
+    #[test]
+    fn test_table_split_preserves_columns() {
+        // Verify that split tables maintain column widths.
+        let doc = make_table_doc(50, 4, 0);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(result.pages.len() >= 2, "should span multiple pages");
+
+        // Collect all table blocks
+        let table_blocks: Vec<&LayoutBlock> = result
+            .pages
+            .iter()
+            .flat_map(|p| &p.blocks)
+            .filter(|b| matches!(&b.kind, LayoutBlockKind::Table { .. }))
+            .collect();
+
+        assert!(
+            table_blocks.len() >= 2,
+            "should have at least 2 table chunks"
+        );
+
+        // All table chunks should have the same width
+        let first_width = table_blocks[0].bounds.width;
+        for (i, block) in table_blocks.iter().enumerate() {
+            assert!(
+                (block.bounds.width - first_width).abs() < 0.01,
+                "table chunk {} has different width: {} vs {}",
+                i,
+                block.bounds.width,
+                first_width
+            );
+        }
+
+        // All rows across all chunks should have consistent cell count (4 columns)
+        for (block_idx, block) in table_blocks.iter().enumerate() {
+            match &block.kind {
+                LayoutBlockKind::Table { rows, .. } => {
+                    for (row_idx, row) in rows.iter().enumerate() {
+                        assert_eq!(
+                            row.cells.len(),
+                            4,
+                            "block {} row {} should have 4 cells",
+                            block_idx,
+                            row_idx
+                        );
+                        // Verify cell widths are equal (total width / 4 columns)
+                        let expected_cell_width = first_width / 4.0;
+                        for (cell_idx, cell) in row.cells.iter().enumerate() {
+                            assert!(
+                                (cell.bounds.width - expected_cell_width).abs() < 0.01,
+                                "block {} row {} cell {} width mismatch: {} vs {}",
+                                block_idx,
+                                row_idx,
+                                cell_idx,
+                                cell.bounds.width,
+                                expected_cell_width
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
     }
 }

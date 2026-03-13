@@ -1225,6 +1225,8 @@ name = "s1engine-wasm"
 version = "1.0.0"
 dependencies = [
  "js-sys",
+ "s1-format-pdf",
+ "s1-layout",
  "s1-model",
  "s1-text",
  "s1engine",

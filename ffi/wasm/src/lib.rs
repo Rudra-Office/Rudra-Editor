@@ -6,6 +6,7 @@
 use wasm_bindgen::prelude::*;
 
 use s1_model::{AttributeKey, AttributeValue, DocumentModel, NodeId, NodeType};
+use s1_layout::{layout_to_html, LayoutConfig, PageLayout};
 
 // --- WasmEngine ---
 
@@ -62,6 +63,124 @@ impl Default for WasmEngine {
     }
 }
 
+// --- WasmLayoutConfig ---
+
+/// Configuration for paginated HTML layout.
+///
+/// Controls page dimensions and margins for the layout engine.
+/// Defaults to US Letter (8.5" x 11") with 1-inch margins.
+#[wasm_bindgen]
+pub struct WasmLayoutConfig {
+    page_width_pt: f64,
+    page_height_pt: f64,
+    margin_top_pt: f64,
+    margin_bottom_pt: f64,
+    margin_left_pt: f64,
+    margin_right_pt: f64,
+}
+
+#[wasm_bindgen]
+impl WasmLayoutConfig {
+    /// Create a new layout configuration with US Letter defaults.
+    ///
+    /// Page: 612pt x 792pt (8.5" x 11")
+    /// Margins: 72pt (1") on all sides.
+    #[wasm_bindgen(constructor)]
+    pub fn new() -> Self {
+        Self {
+            page_width_pt: 612.0,
+            page_height_pt: 792.0,
+            margin_top_pt: 72.0,
+            margin_bottom_pt: 72.0,
+            margin_left_pt: 72.0,
+            margin_right_pt: 72.0,
+        }
+    }
+
+    /// Set the page width in points.
+    pub fn set_page_width(&mut self, width: f64) {
+        self.page_width_pt = width;
+    }
+
+    /// Set the page height in points.
+    pub fn set_page_height(&mut self, height: f64) {
+        self.page_height_pt = height;
+    }
+
+    /// Set the top margin in points.
+    pub fn set_margin_top(&mut self, margin: f64) {
+        self.margin_top_pt = margin;
+    }
+
+    /// Set the bottom margin in points.
+    pub fn set_margin_bottom(&mut self, margin: f64) {
+        self.margin_bottom_pt = margin;
+    }
+
+    /// Set the left margin in points.
+    pub fn set_margin_left(&mut self, margin: f64) {
+        self.margin_left_pt = margin;
+    }
+
+    /// Set the right margin in points.
+    pub fn set_margin_right(&mut self, margin: f64) {
+        self.margin_right_pt = margin;
+    }
+
+    /// Get the page width in points.
+    pub fn page_width(&self) -> f64 {
+        self.page_width_pt
+    }
+
+    /// Get the page height in points.
+    pub fn page_height(&self) -> f64 {
+        self.page_height_pt
+    }
+
+    /// Get the top margin in points.
+    pub fn margin_top(&self) -> f64 {
+        self.margin_top_pt
+    }
+
+    /// Get the bottom margin in points.
+    pub fn margin_bottom(&self) -> f64 {
+        self.margin_bottom_pt
+    }
+
+    /// Get the left margin in points.
+    pub fn margin_left(&self) -> f64 {
+        self.margin_left_pt
+    }
+
+    /// Get the right margin in points.
+    pub fn margin_right(&self) -> f64 {
+        self.margin_right_pt
+    }
+}
+
+impl Default for WasmLayoutConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl WasmLayoutConfig {
+    /// Convert to a [`LayoutConfig`] for the layout engine.
+    fn to_layout_config(&self) -> LayoutConfig {
+        LayoutConfig {
+            default_page_layout: PageLayout {
+                width: self.page_width_pt,
+                height: self.page_height_pt,
+                margin_top: self.margin_top_pt,
+                margin_bottom: self.margin_bottom_pt,
+                margin_left: self.margin_left_pt,
+                margin_right: self.margin_right_pt,
+            },
+            ..LayoutConfig::default()
+        }
+    }
+}
+
 // --- WasmDocument ---
 
 /// A document handle for reading, editing, and exporting.
@@ -106,6 +225,117 @@ impl WasmDocument {
         Ok(doc.paragraph_count())
     }
 
+    /// Render the document as paginated HTML using the layout engine.
+    ///
+    /// Produces CSS-positioned HTML with real page boundaries. Each page
+    /// is rendered as a separate div with absolute-positioned content.
+    /// Uses US Letter page size (612pt x 792pt) with 1-inch margins.
+    ///
+    /// Text is positioned using fallback font metrics (no system fonts
+    /// are available in WASM). For more accurate layout, use
+    /// `to_paginated_html_with_fonts()` after loading fonts via
+    /// `WasmFontDatabase`.
+    pub fn to_paginated_html(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let font_db = s1_text::FontDatabase::empty();
+        let layout = doc
+            .layout(&font_db)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(layout_to_html(&layout))
+    }
+
+    /// Render the document as paginated HTML with a custom layout configuration.
+    ///
+    /// Use this to control page dimensions and margins.
+    pub fn to_paginated_html_with_config(
+        &self,
+        config: &WasmLayoutConfig,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let font_db = s1_text::FontDatabase::empty();
+        let layout_config = config.to_layout_config();
+        let layout = doc
+            .layout_with_config(&font_db, layout_config)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(layout_to_html(&layout))
+    }
+
+    /// Render the document as paginated HTML with loaded fonts.
+    ///
+    /// Use this when you have loaded fonts via `WasmFontDatabase` for
+    /// accurate text shaping and positioning.
+    pub fn to_paginated_html_with_fonts(
+        &self,
+        font_db: &WasmFontDatabase,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(&font_db.inner)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(layout_to_html(&layout))
+    }
+
+    /// Render the document as paginated HTML with loaded fonts and custom config.
+    ///
+    /// Combines custom page dimensions/margins with loaded font data for
+    /// the most accurate layout.
+    pub fn to_paginated_html_with_fonts_and_config(
+        &self,
+        font_db: &WasmFontDatabase,
+        config: &WasmLayoutConfig,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let layout_config = config.to_layout_config();
+        let layout = doc
+            .layout_with_config(&font_db.inner, layout_config)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(layout_to_html(&layout))
+    }
+
+    /// Export the document as PDF bytes.
+    ///
+    /// Uses fallback font metrics (no system fonts). For more accurate
+    /// output, use `to_pdf_with_fonts()` after loading fonts via
+    /// `WasmFontDatabase`.
+    ///
+    /// Returns the raw PDF bytes suitable for download or embedding.
+    pub fn to_pdf(&self) -> Result<Vec<u8>, JsError> {
+        let doc = self.doc()?;
+        let font_db = s1_text::FontDatabase::empty();
+        doc.export_pdf(&font_db)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Export the document as PDF bytes using loaded fonts.
+    ///
+    /// Use this when you have loaded fonts via `WasmFontDatabase` for
+    /// accurate text shaping and glyph embedding.
+    pub fn to_pdf_with_fonts(&self, font_db: &WasmFontDatabase) -> Result<Vec<u8>, JsError> {
+        let doc = self.doc()?;
+        doc.export_pdf(&font_db.inner)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Export the document as a PDF data URL.
+    ///
+    /// Returns a string like `data:application/pdf;base64,...` suitable
+    /// for embedding in iframes, download links, or `window.open()`.
+    pub fn to_pdf_data_url(&self) -> Result<String, JsError> {
+        let bytes = self.to_pdf()?;
+        let b64 = base64_encode(&bytes);
+        Ok(format!("data:application/pdf;base64,{}", b64))
+    }
+
+    /// Export the document as a PDF data URL using loaded fonts.
+    pub fn to_pdf_data_url_with_fonts(
+        &self,
+        font_db: &WasmFontDatabase,
+    ) -> Result<String, JsError> {
+        let bytes = self.to_pdf_with_fonts(font_db)?;
+        let b64 = base64_encode(&bytes);
+        Ok(format!("data:application/pdf;base64,{}", b64))
+    }
+
     /// Render the document as HTML with formatting, images, and hyperlinks.
     pub fn to_html(&self) -> Result<String, JsError> {
         let doc = self.doc()?;
@@ -116,11 +346,10 @@ impl WasmDocument {
         // Render headers from sections
         let sections = doc.sections();
         if !sections.is_empty() {
-            for hf in &sections[0].headers {
+            if let Some(hf) = sections[0].headers.first() {
                 html.push_str("<header style=\"border-bottom:1px solid #444;padding:8px 0;margin-bottom:16px;color:#aaa\">");
                 render_children(model, hf.node_id, &mut html);
                 html.push_str("</header>");
-                break; // only first header
             }
         }
 
@@ -129,15 +358,40 @@ impl WasmDocument {
 
         // Render footers from sections
         if !sections.is_empty() {
-            for hf in &sections[0].footers {
+            if let Some(hf) = sections[0].footers.first() {
                 html.push_str("<footer style=\"border-top:1px solid #444;padding:8px 0;margin-top:16px;color:#aaa\">");
                 render_children(model, hf.node_id, &mut html);
                 html.push_str("</footer>");
-                break; // only first footer
             }
         }
 
         Ok(html)
+    }
+
+    /// Get the number of tracked changes in the document.
+    pub fn tracked_changes_count(&self) -> Result<usize, JsError> {
+        let doc = self.doc()?;
+        Ok(doc.tracked_changes().len())
+    }
+
+    /// Accept all tracked changes in the document.
+    ///
+    /// Insertions keep their content; deletions are removed; format changes
+    /// keep the new formatting. All revision attributes are stripped.
+    pub fn accept_all_changes(&mut self) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        doc.accept_all_changes()
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Reject all tracked changes in the document.
+    ///
+    /// Insertions are removed; deletions are un-deleted; format changes
+    /// restore original formatting. All revision attributes are stripped.
+    pub fn reject_all_changes(&mut self) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        doc.reject_all_changes()
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Free the document, releasing memory.
@@ -157,6 +411,12 @@ impl WasmDocument {
     fn doc(&self) -> Result<&s1engine::Document, JsError> {
         self.inner
             .as_ref()
+            .ok_or_else(|| JsError::new("Document has been freed"))
+    }
+
+    fn doc_mut(&mut self) -> Result<&mut s1engine::Document, JsError> {
+        self.inner
+            .as_mut()
             .ok_or_else(|| JsError::new("Document has been freed"))
     }
 }
@@ -343,21 +603,16 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
 
     // Build inline style
     let mut style = String::new();
-    if let Some(align) = para.attributes.get(&AttributeKey::Alignment) {
-        match align {
-            AttributeValue::Alignment(a) => {
-                let val = match a {
-                    s1_model::Alignment::Left => "left",
-                    s1_model::Alignment::Center => "center",
-                    s1_model::Alignment::Right => "right",
-                    s1_model::Alignment::Justify => "justify",
-                    _ => "",
-                };
-                if !val.is_empty() {
-                    style.push_str(&format!("text-align:{val};"));
-                }
-            }
-            _ => {}
+    if let Some(AttributeValue::Alignment(a)) = para.attributes.get(&AttributeKey::Alignment) {
+        let val = match a {
+            s1_model::Alignment::Left => "left",
+            s1_model::Alignment::Center => "center",
+            s1_model::Alignment::Right => "right",
+            s1_model::Alignment::Justify => "justify",
+            _ => "",
+        };
+        if !val.is_empty() {
+            style.push_str(&format!("text-align:{val};"));
         }
     }
 
@@ -432,6 +687,9 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
     let subscript = run.attributes.get_bool(&AttributeKey::Subscript) == Some(true);
     let hyperlink_url = run.attributes.get_string(&AttributeKey::HyperlinkUrl);
 
+    // Track changes: detect revision type for visual indicator
+    let revision_type = run.attributes.get_string(&AttributeKey::RevisionType);
+
     // Inline style for font, size, color
     let mut style = String::new();
     if let Some(font) = run.attributes.get_string(&AttributeKey::FontFamily) {
@@ -442,6 +700,20 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
     }
     if let Some(AttributeValue::Color(c)) = run.attributes.get(&AttributeKey::Color) {
         style.push_str(&format!("color:#{};", c.to_hex()));
+    }
+
+    // Track changes visual styling
+    match revision_type {
+        Some("Insert") => {
+            style.push_str("color:#22863a;text-decoration:underline;text-decoration-color:#22863a;");
+        }
+        Some("Delete") => {
+            style.push_str("color:#cb2431;text-decoration:line-through;text-decoration-color:#cb2431;");
+        }
+        Some("FormatChange") => {
+            style.push_str("border-bottom:2px dotted #b08800;");
+        }
+        _ => {}
     }
 
     // Open tags
@@ -586,7 +858,7 @@ fn escape_html(s: &str) -> String {
 
 fn base64_encode(data: &[u8]) -> String {
     const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut result = String::with_capacity((data.len() + 2) / 3 * 4);
+    let mut result = String::with_capacity(data.len().div_ceil(3) * 4);
     for chunk in data.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = if chunk.len() > 1 { chunk[1] as u32 } else { 0 };
@@ -772,5 +1044,197 @@ mod tests {
         let text = reopened.to_plain_text().unwrap();
         assert!(text.contains("Heading"));
         assert!(text.contains("Body text"));
+    }
+
+    // ─── Paginated HTML Tests ────────────────────────────────────
+
+    #[test]
+    fn test_paginated_html_empty() {
+        let engine = WasmEngine::new();
+        let doc = engine.create();
+        let html = doc.to_paginated_html().unwrap();
+        // Should produce valid paginated HTML with at least one page
+        assert!(html.contains("s1-page"), "empty doc should have a page div");
+        assert!(
+            html.contains("s1-document"),
+            "should have a document wrapper"
+        );
+    }
+
+    #[test]
+    fn test_paginated_html_basic() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder
+            .heading(1, "Title")
+            .text("Hello world")
+            .build()
+            .unwrap();
+        let html = doc.to_paginated_html().unwrap();
+        assert!(html.contains("s1-page"), "should have page div");
+        assert!(html.contains("s1-block"), "should have block div");
+        assert!(html.contains("Hello world"), "should contain text content");
+        assert!(html.contains("Title"), "should contain heading text");
+    }
+
+    #[test]
+    fn test_paginated_html_with_config() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder.text("Config test").build().unwrap();
+
+        // Use A4 dimensions
+        let mut config = WasmLayoutConfig::new();
+        config.set_page_width(595.28);
+        config.set_page_height(841.89);
+        config.set_margin_top(50.0);
+        config.set_margin_bottom(50.0);
+
+        let html = doc.to_paginated_html_with_config(&config).unwrap();
+        assert!(html.contains("s1-page"), "should have page div");
+        // The page width should reflect A4 dimensions
+        assert!(
+            html.contains("width:595.3pt") || html.contains("width:595pt"),
+            "should have A4 page width: {html}"
+        );
+    }
+
+    #[test]
+    fn test_layout_config_defaults() {
+        let config = WasmLayoutConfig::new();
+        assert!((config.page_width() - 612.0).abs() < 0.01, "default width should be US Letter");
+        assert!((config.page_height() - 792.0).abs() < 0.01, "default height should be US Letter");
+        assert!((config.margin_top() - 72.0).abs() < 0.01, "default top margin should be 1 inch");
+        assert!((config.margin_bottom() - 72.0).abs() < 0.01, "default bottom margin should be 1 inch");
+        assert!((config.margin_left() - 72.0).abs() < 0.01, "default left margin should be 1 inch");
+        assert!((config.margin_right() - 72.0).abs() < 0.01, "default right margin should be 1 inch");
+    }
+
+    #[test]
+    fn test_layout_config_setters() {
+        let mut config = WasmLayoutConfig::new();
+        config.set_page_width(500.0);
+        config.set_page_height(700.0);
+        config.set_margin_top(36.0);
+        config.set_margin_bottom(36.0);
+        config.set_margin_left(48.0);
+        config.set_margin_right(48.0);
+
+        assert!((config.page_width() - 500.0).abs() < 0.01);
+        assert!((config.page_height() - 700.0).abs() < 0.01);
+        assert!((config.margin_top() - 36.0).abs() < 0.01);
+        assert!((config.margin_bottom() - 36.0).abs() < 0.01);
+        assert!((config.margin_left() - 48.0).abs() < 0.01);
+        assert!((config.margin_right() - 48.0).abs() < 0.01);
+
+        // Verify the conversion to LayoutConfig
+        let layout_config = config.to_layout_config();
+        assert!((layout_config.default_page_layout.width - 500.0).abs() < 0.01);
+        assert!((layout_config.default_page_layout.margin_left - 48.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn test_paginated_html_contains_pages() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder
+            .text("Page content line one")
+            .text("Page content line two")
+            .text("Page content line three")
+            .build()
+            .unwrap();
+        let html = doc.to_paginated_html().unwrap();
+
+        // Count page divs — should have at least one
+        let page_count = html.matches("s1-page").count();
+        assert!(
+            page_count >= 1,
+            "should have at least one s1-page div, got {page_count}"
+        );
+        // Should have the document wrapper
+        assert!(html.contains("s1-document"));
+        // Should contain positioned blocks
+        assert!(
+            html.contains("position:absolute") || html.contains("position:relative"),
+            "paginated HTML should use CSS positioning"
+        );
+    }
+
+    // ─── PDF Export Tests ────────────────────────────────────────
+
+    #[test]
+    fn test_to_pdf_empty() {
+        let engine = WasmEngine::new();
+        let doc = engine.create();
+        let pdf_bytes = doc.to_pdf().unwrap();
+        // PDF files start with %PDF
+        assert!(
+            pdf_bytes.len() >= 4,
+            "PDF should have at least 4 bytes, got {}",
+            pdf_bytes.len()
+        );
+        assert_eq!(
+            &pdf_bytes[0..5],
+            b"%PDF-",
+            "PDF should start with %PDF- magic bytes"
+        );
+    }
+
+    #[test]
+    fn test_to_pdf_with_content() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder
+            .title("PDF Test")
+            .heading(1, "Hello PDF")
+            .text("This is a test document for PDF export.")
+            .build()
+            .unwrap();
+        let pdf_bytes = doc.to_pdf().unwrap();
+        assert_eq!(
+            &pdf_bytes[0..5],
+            b"%PDF-",
+            "PDF should start with %PDF- magic"
+        );
+        // A document with content should produce a reasonably sized PDF
+        assert!(
+            pdf_bytes.len() > 100,
+            "PDF with content should be > 100 bytes, got {}",
+            pdf_bytes.len()
+        );
+    }
+
+    #[test]
+    fn test_to_pdf_data_url() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder.text("Data URL test").build().unwrap();
+        let data_url = doc.to_pdf_data_url().unwrap();
+        assert!(
+            data_url.starts_with("data:application/pdf;base64,"),
+            "Data URL should start with the correct prefix, got: {}",
+            &data_url[..50.min(data_url.len())]
+        );
+        // The base64 portion should be non-empty
+        let b64_part = &data_url["data:application/pdf;base64,".len()..];
+        assert!(
+            !b64_part.is_empty(),
+            "Base64 portion of data URL should not be empty"
+        );
+    }
+
+    #[test]
+    fn test_to_pdf_has_content() {
+        let builder = WasmDocumentBuilder::new();
+        let doc = builder
+            .heading(1, "Title")
+            .text("First paragraph")
+            .text("Second paragraph")
+            .build()
+            .unwrap();
+        let pdf_bytes = doc.to_pdf().unwrap();
+        // Verify it looks like a valid PDF (starts with header, ends near %%EOF)
+        assert_eq!(&pdf_bytes[0..5], b"%PDF-");
+        // PDF files typically end with %%EOF (possibly with trailing whitespace)
+        let tail = String::from_utf8_lossy(&pdf_bytes[pdf_bytes.len().saturating_sub(32)..]);
+        assert!(
+            tail.contains("%%EOF"),
+            "PDF should end with %%EOF marker, tail: {tail}"
+        );
     }
 }

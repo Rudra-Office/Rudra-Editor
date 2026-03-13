@@ -14,11 +14,13 @@
 
 pub mod engine;
 pub mod error;
+pub mod html;
 pub mod style_resolver;
 pub mod types;
 
 pub use engine::{LayoutConfig, LayoutEngine};
 pub use error::LayoutError;
+pub use html::{layout_to_html, layout_to_html_with_options, HtmlOptions};
 pub use style_resolver::{
     resolve_paragraph_style, resolve_run_style, ResolvedParagraphStyle, ResolvedRunStyle,
 };

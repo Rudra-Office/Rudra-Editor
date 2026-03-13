@@ -83,7 +83,7 @@ fn parse_hf_xml(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use s1_model::NumberingDefinitions;
+    use s1_model::{AttributeKey, AttributeValue, FieldType, NumberingDefinitions};
 
     #[test]
     fn parse_header_with_paragraph() {
@@ -143,5 +143,43 @@ mod tests {
 
         let hdr = doc.node(hdr_id).unwrap();
         assert_eq!(hdr.children.len(), 2);
+    }
+
+    #[test]
+    fn parse_footer_with_complex_field_page_number() {
+        // Footer with non-self-closing fldChar elements spanning multiple runs
+        let xml = r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:ftr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+    <w:p>
+        <w:r><w:fldChar w:fldCharType="begin"></w:fldChar></w:r>
+        <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+        <w:r><w:fldChar w:fldCharType="separate"></w:fldChar></w:r>
+        <w:r><w:t>1</w:t></w:r>
+        <w:r><w:fldChar w:fldCharType="end"></w:fldChar></w:r>
+    </w:p>
+</w:ftr>"#;
+
+        let mut doc = DocumentModel::new();
+        let rels = HashMap::new();
+        let media = HashMap::new();
+        let numbering = NumberingDefinitions::default();
+
+        let ftr_id = parse_footer_xml(xml, &mut doc, &rels, &media, &numbering).unwrap();
+
+        let ftr = doc.node(ftr_id).unwrap();
+        assert_eq!(ftr.node_type, NodeType::Footer);
+        assert_eq!(ftr.children.len(), 1);
+
+        let para = doc.node(ftr.children[0]).unwrap();
+        assert_eq!(para.node_type, NodeType::Paragraph);
+
+        // Should have a Field node for PAGE
+        assert!(!para.children.is_empty(), "Footer paragraph should have a field node");
+        let field = doc.node(para.children[0]).unwrap();
+        assert_eq!(field.node_type, NodeType::Field);
+        assert_eq!(
+            field.attributes.get(&AttributeKey::FieldType),
+            Some(&AttributeValue::FieldType(FieldType::PageNumber))
+        );
     }
 }

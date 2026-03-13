@@ -65,7 +65,7 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, OdtError> {
 
     // 9. Write META-INF/manifest.xml
     let image_paths: Vec<&str> = image_entries.iter().map(|e| e.href.as_str()).collect();
-    let manifest = write_manifest_xml(&image_paths);
+    let manifest = write_manifest_xml(&image_paths, meta_xml.is_some());
     zip.start_file("META-INF/manifest.xml", deflated)?;
     zip.write_all(manifest.as_bytes())?;
 

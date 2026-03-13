@@ -137,7 +137,8 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
 
     // word/media/* (image files from body + headers/footers, deduplicated)
     {
-        let mut written_media_paths: std::collections::HashSet<String> = std::collections::HashSet::new();
+        let mut written_media_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         for rel in image_rels.iter().chain(hf_image_rels.iter()) {
             let path = format!("word/{}", rel.target);
             if written_media_paths.contains(&path) {
@@ -1838,5 +1839,190 @@ mod tests {
             cb2.attributes.get_string(&AttributeKey::CommentAuthor),
             Some("Tester")
         );
+    }
+
+    #[test]
+    fn roundtrip_ins() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Insert".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(1));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Alice".into()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2024-06-01T00:00:00Z".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "inserted text"))
+            .unwrap();
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let body2 = doc2.node(doc2.body_id().unwrap()).unwrap();
+        let para2 = doc2.node(body2.children[0]).unwrap();
+        assert!(!para2.children.is_empty());
+
+        let run2 = doc2.node(para2.children[0]).unwrap();
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Alice")
+        );
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionDate),
+            Some("2024-06-01T00:00:00Z")
+        );
+        assert_eq!(run2.attributes.get_i64(&AttributeKey::RevisionId), Some(1));
+        assert_eq!(doc2.to_plain_text(), "inserted text");
+    }
+
+    #[test]
+    fn roundtrip_del() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Delete".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(2));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "deleted text"))
+            .unwrap();
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let body2 = doc2.node(doc2.body_id().unwrap()).unwrap();
+        let para2 = doc2.node(body2.children[0]).unwrap();
+        assert!(!para2.children.is_empty());
+
+        let run2 = doc2.node(para2.children[0]).unwrap();
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Delete")
+        );
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Bob")
+        );
+        assert_eq!(doc2.to_plain_text(), "deleted text");
+    }
+
+    #[test]
+    fn roundtrip_mixed_tracked() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Normal run
+        let r1_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(r1_id, NodeType::Run))
+            .unwrap();
+        let t1_id = doc.next_id();
+        doc.insert_node(r1_id, 0, Node::text(t1_id, "normal "))
+            .unwrap();
+
+        // Insert run
+        let r2_id = doc.next_id();
+        let mut r2 = Node::new(r2_id, NodeType::Run);
+        r2.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Insert".into()),
+        );
+        r2.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(10));
+        r2.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Carl".into()),
+        );
+        doc.insert_node(para_id, 1, r2).unwrap();
+        let t2_id = doc.next_id();
+        doc.insert_node(r2_id, 0, Node::text(t2_id, "added"))
+            .unwrap();
+
+        // Delete run
+        let r3_id = doc.next_id();
+        let mut r3 = Node::new(r3_id, NodeType::Run);
+        r3.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Delete".into()),
+        );
+        r3.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(11));
+        r3.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Dana".into()),
+        );
+        doc.insert_node(para_id, 2, r3).unwrap();
+        let t3_id = doc.next_id();
+        doc.insert_node(r3_id, 0, Node::text(t3_id, " removed"))
+            .unwrap();
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let body2 = doc2.node(doc2.body_id().unwrap()).unwrap();
+        let para2 = doc2.node(body2.children[0]).unwrap();
+        assert_eq!(para2.children.len(), 3);
+
+        // Normal run
+        let r1_2 = doc2.node(para2.children[0]).unwrap();
+        assert!(r1_2
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+
+        // Insert run
+        let r2_2 = doc2.node(para2.children[1]).unwrap();
+        assert_eq!(
+            r2_2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+
+        // Delete run
+        let r3_2 = doc2.node(para2.children[2]).unwrap();
+        assert_eq!(
+            r3_2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Delete")
+        );
+
+        assert_eq!(doc2.to_plain_text(), "normal added removed");
     }
 }

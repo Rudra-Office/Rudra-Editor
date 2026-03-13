@@ -38,7 +38,7 @@ pub fn write_content_xml(doc: &DocumentModel) -> (String, Vec<ImageEntry>) {
     // Build the full content.xml
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0">"#,
+<office:document-content xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:table="urn:oasis:names:tc:opendocument:xmlns:table:1.0" xmlns:draw="urn:oasis:names:tc:opendocument:xmlns:drawing:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:xlink="http://www.w3.org/1999/xlink" xmlns:svg="urn:oasis:names:tc:opendocument:xmlns:svg-compatible:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" office:version="1.2">"#,
     );
 
     // Write automatic styles
@@ -94,8 +94,14 @@ fn write_body(
         None => return xml,
     };
 
-    // Track list state for reconstructing nested lists
-    let mut list_stack: Vec<u8> = Vec::new(); // stack of list levels
+    // Track list nesting depth for reconstructing ODF nested lists.
+    // The stack depth represents the current nesting level (0 = top-level list).
+    // We track whether the current list-item at each level is still open (needs closing
+    // before opening a sibling or before closing the enclosing list).
+    let mut list_depth: usize = 0; // number of currently open <text:list> levels
+    let mut list_item_open: Vec<bool> = Vec::new(); // per-level: is a <text:list-item> open?
+
+    let mut table_counter = 0u32;
 
     for &child_id in &body.children {
         let child = match doc.node(child_id) {
@@ -108,33 +114,47 @@ fn write_body(
                 // Check if this paragraph is a list item
                 let list_info = child.attributes.get(&AttributeKey::ListInfo);
                 if let Some(AttributeValue::ListInfo(info)) = list_info {
-                    let target_level = info.level;
+                    let target_level = info.level as usize;
+                    let target_depth = target_level + 1; // depth 1 = level 0
 
-                    // Close list levels that are deeper than target
-                    while !list_stack.is_empty()
-                        && list_stack.last().copied().unwrap_or(0) > target_level
-                    {
-                        xml.push_str("</text:list-item></text:list>");
-                        list_stack.pop();
-                    }
-
-                    // Open new list levels as needed
-                    while list_stack.len() <= target_level as usize {
-                        let current_depth = list_stack.len() as u8;
-                        if current_depth > 0 {
-                            // Open a nested list within the current list-item
+                    // If we need to go shallower, close levels
+                    while list_depth > target_depth {
+                        // Close list-item if open at this depth
+                        if list_item_open.last().copied().unwrap_or(false) {
+                            xml.push_str("</text:list-item>");
                         }
-                        xml.push_str("<text:list>");
-                        list_stack.push(current_depth);
+                        xml.push_str("</text:list>");
+                        list_item_open.pop();
+                        list_depth -= 1;
                     }
 
+                    // At the same depth, close previous list-item (sibling)
+                    if list_depth == target_depth
+                        && list_item_open.last().copied().unwrap_or(false)
+                    {
+                        xml.push_str("</text:list-item>");
+                        *list_item_open.last_mut().unwrap() = false;
+                    }
+
+                    // If we need to go deeper, open nested lists
+                    while list_depth < target_depth {
+                        // For deeper levels, we need the parent list-item to remain open.
+                        // If we are at depth 0, open the top-level list. Otherwise open
+                        // a nested <text:list> inside the current (still-open) list-item.
+                        xml.push_str("<text:list>");
+                        list_depth += 1;
+                        list_item_open.push(false);
+                    }
+
+                    // Open a new list-item at the target depth
                     xml.push_str("<text:list-item>");
+                    *list_item_open.last_mut().unwrap() = true;
+
                     write_paragraph(doc, child_id, &mut xml, auto_styles, counter, images);
-                    // Don't close list-item yet — next item might need nesting
-                    xml.push_str("</text:list-item>");
+                    // Don't close list-item yet — next item might nest inside it
                 } else {
                     // Close any open lists
-                    close_list_stack(&mut list_stack, &mut xml);
+                    close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
 
                     // Check if heading
                     let is_heading = child
@@ -156,26 +176,38 @@ fn write_body(
                 }
             }
             NodeType::Table => {
-                close_list_stack(&mut list_stack, &mut xml);
-                write_table(doc, child_id, &mut xml, auto_styles, counter, images);
+                close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
+                write_table(
+                    doc,
+                    child_id,
+                    &mut xml,
+                    auto_styles,
+                    counter,
+                    images,
+                    &mut table_counter,
+                );
             }
             NodeType::TableOfContents => {
-                close_list_stack(&mut list_stack, &mut xml);
+                close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
                 write_toc_odt(doc, child_id, &mut xml, auto_styles, counter, images);
             }
             _ => {}
         }
     }
 
-    close_list_stack(&mut list_stack, &mut xml);
+    close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
     xml
 }
 
 /// Close all open list levels.
-fn close_list_stack(stack: &mut Vec<u8>, xml: &mut String) {
-    while !stack.is_empty() {
+fn close_list_stack(depth: &mut usize, item_open: &mut Vec<bool>, xml: &mut String) {
+    while *depth > 0 {
+        if item_open.last().copied().unwrap_or(false) {
+            xml.push_str("</text:list-item>");
+        }
         xml.push_str("</text:list>");
-        stack.pop();
+        item_open.pop();
+        *depth -= 1;
     }
 }
 
@@ -473,7 +505,7 @@ fn write_run(
         match child.node_type {
             NodeType::Text => {
                 if let Some(ref text) = child.text_content {
-                    xml.push_str(&escape_xml(text));
+                    write_text_with_breaks(text, xml);
                 }
             }
             NodeType::LineBreak => xml.push_str("<text:line-break/>"),
@@ -491,9 +523,31 @@ fn write_run(
 fn write_field(node: &s1_model::Node, xml: &mut String) {
     if let Some(AttributeValue::FieldType(ft)) = node.attributes.get(&AttributeKey::FieldType) {
         match ft {
-            FieldType::PageNumber => xml.push_str("<text:page-number/>"),
-            FieldType::PageCount => xml.push_str("<text:page-count/>"),
+            FieldType::PageNumber => {
+                xml.push_str(r#"<text:page-number text:select-page="current"/>"#)
+            }
+            FieldType::PageCount => {
+                xml.push_str(r#"<text:page-count text:select-page="current"/>"#)
+            }
             _ => {}
+        }
+    }
+}
+
+/// Write text content, converting embedded `\n` to `<text:line-break/>`
+/// and `\t` to `<text:tab/>`.
+fn write_text_with_breaks(text: &str, xml: &mut String) {
+    let mut first_line = true;
+    for line in text.split('\n') {
+        if !first_line {
+            xml.push_str("<text:line-break/>");
+        }
+        first_line = false;
+        for (i, part) in line.split('\t').enumerate() {
+            if i > 0 {
+                xml.push_str("<text:tab/>");
+            }
+            xml.push_str(&escape_xml(part));
         }
     }
 }
@@ -538,7 +592,7 @@ fn write_image(
     });
 
     xml.push_str(&format!(
-        r#"<draw:frame draw:name="{}" svg:width="{}" svg:height="{}">"#,
+        r#"<draw:frame draw:name="{}" svg:width="{}" svg:height="{}" text:anchor-type="as-char">"#,
         escape_xml(alt_text),
         points_to_cm(width),
         points_to_cm(height),
@@ -619,13 +673,42 @@ fn write_table(
     auto_styles: &mut HashMap<AutoStyleKey, String>,
     counter: &mut u32,
     images: &mut Vec<ImageEntry>,
+    table_counter: &mut u32,
 ) {
     let table = match doc.node(table_id) {
         Some(n) => n,
         None => return,
     };
 
-    xml.push_str("<table:table>");
+    *table_counter += 1;
+    xml.push_str(&format!(
+        r#"<table:table table:name="Table{}">"#,
+        *table_counter
+    ));
+
+    // Emit <table:table-column> elements — count columns from first row
+    let col_count = table
+        .children
+        .iter()
+        .filter_map(|&row_id| doc.node(row_id))
+        .find(|n| n.node_type == NodeType::TableRow)
+        .map(|row| {
+            row.children
+                .iter()
+                .filter(|&&cid| {
+                    doc.node(cid)
+                        .is_some_and(|n| n.node_type == NodeType::TableCell)
+                })
+                .count()
+        })
+        .unwrap_or(0);
+
+    if col_count > 0 {
+        xml.push_str(&format!(
+            r#"<table:table-column table:number-columns-repeated="{}"/>"#,
+            col_count
+        ));
+    }
 
     for &row_id in &table.children {
         let row = match doc.node(row_id) {
@@ -855,7 +938,8 @@ mod tests {
             .unwrap();
 
         let (xml, _) = write_content_xml(&doc);
-        assert!(xml.contains("<table:table>"));
+        assert!(xml.contains(r#"<table:table table:name="Table1">"#));
+        assert!(xml.contains(r#"<table:table-column table:number-columns-repeated="1"/>"#));
         assert!(xml.contains("<table:table-row>"));
         assert!(xml.contains("<table:table-cell>"));
         assert!(xml.contains("Cell"));
@@ -1243,5 +1327,164 @@ mod tests {
             }
         }
         assert!(found_body, "CommentBody not preserved in round-trip");
+    }
+
+    #[test]
+    fn test_nested_list_xml_wellformed() {
+        use s1_model::{AttributeKey, AttributeValue, ListFormat, ListInfo};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Level 0 item
+        let p0 = doc.next_id();
+        let mut para0 = Node::new(p0, NodeType::Paragraph);
+        para0.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 0,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 0, para0).unwrap();
+        let r0 = doc.next_id();
+        doc.insert_node(p0, 0, Node::new(r0, NodeType::Run))
+            .unwrap();
+        let t0 = doc.next_id();
+        doc.insert_node(r0, 0, Node::text(t0, "Level 0"))
+            .unwrap();
+
+        // Level 1 item
+        let p1 = doc.next_id();
+        let mut para1 = Node::new(p1, NodeType::Paragraph);
+        para1.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 1,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 1, para1).unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Level 1"))
+            .unwrap();
+
+        // Level 2 item
+        let p2 = doc.next_id();
+        let mut para2 = Node::new(p2, NodeType::Paragraph);
+        para2.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 2,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 2, para2).unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Level 2"))
+            .unwrap();
+
+        // Write to ODT and extract content.xml
+        let odt_bytes = crate::write(&doc).unwrap();
+        let cursor = std::io::Cursor::new(&odt_bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut content_xml = String::new();
+        {
+            use std::io::Read as _;
+            archive
+                .by_name("content.xml")
+                .unwrap()
+                .read_to_string(&mut content_xml)
+                .unwrap();
+        }
+
+        // Verify well-formed XML by parsing with quick_xml
+        let mut reader = quick_xml::Reader::from_str(&content_xml);
+        loop {
+            match reader.read_event() {
+                Ok(quick_xml::events::Event::Eof) => break,
+                Err(e) => panic!("content.xml is not well-formed XML: {e}"),
+                _ => {}
+            }
+        }
+
+        // Verify nested <text:list> inside <text:list-item>
+        assert!(
+            content_xml.contains("<text:list-item><text:p>Level 0</text:p><text:list>"),
+            "Level 0 item should contain a nested <text:list>. XML: {content_xml}"
+        );
+        assert!(
+            content_xml.contains("<text:list-item><text:p>Level 1</text:p><text:list>"),
+            "Level 1 item should contain a nested <text:list>. XML: {content_xml}"
+        );
+        assert!(
+            content_xml.contains("<text:list-item><text:p>Level 2</text:p>"),
+            "Level 2 item should exist. XML: {content_xml}"
+        );
+    }
+
+    #[test]
+    fn test_table_has_columns() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table))
+            .unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow))
+            .unwrap();
+
+        // Add 3 cells
+        for i in 0..3 {
+            let cell_id = doc.next_id();
+            doc.insert_node(row_id, i, Node::new(cell_id, NodeType::TableCell))
+                .unwrap();
+            let para_id = doc.next_id();
+            doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(run_id, 0, Node::text(text_id, &format!("C{i}")))
+                .unwrap();
+        }
+
+        // Write to ODT and extract content.xml
+        let odt_bytes = crate::write(&doc).unwrap();
+        let cursor = std::io::Cursor::new(&odt_bytes);
+        let mut archive = zip::ZipArchive::new(cursor).unwrap();
+        let mut content_xml = String::new();
+        {
+            use std::io::Read as _;
+            archive
+                .by_name("content.xml")
+                .unwrap()
+                .read_to_string(&mut content_xml)
+                .unwrap();
+        }
+
+        assert!(
+            content_xml.contains(r#"<table:table-column table:number-columns-repeated="3"/>"#),
+            "Table should have table-column element with 3 columns. XML: {content_xml}"
+        );
+        assert!(
+            content_xml.contains(r#"table:name="Table1""#),
+            "Table should have a table:name attribute. XML: {content_xml}"
+        );
     }
 }

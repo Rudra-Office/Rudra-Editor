@@ -147,8 +147,8 @@ This eliminates all C/C++ dependencies while providing full Unicode support.
 
 > **This section MUST be updated after every significant change, milestone completion, or phase transition.**
 
-### Current Phase: 1.0.0 release
-### Status: s1-model (72), s1-ops (48), s1-format-txt (41), s1-format-docx (175), s1-format-odt (110), s1-format-md (32), s1-format-pdf (21), s1-convert (15), s1-layout (38), s1-text (39), s1engine (52+44 integration), s1-crdt (172), s1engine-wasm (12), s1engine-c (10), proptests (4). 885 total tests.
+### Current Phase: Post-1.0.0 — Production Hardening
+### Status: s1-model (72), s1-ops (48), s1-format-txt (41), s1-format-docx (194), s1-format-odt (113), s1-format-md (32), s1-format-pdf (21), s1-convert (90), s1-layout (62), s1-text (39), s1engine (64+6+12+19+19 integration), s1-crdt (182), s1engine-wasm (22), s1engine-c (10), proptests (5). 1,051 total tests.
 
 ### Phase Completion Tracker
 
@@ -205,17 +205,17 @@ Phase 5 milestones:
 |---|---|---|---|
 | `s1-model` | **COMPLETE** | 72 passing | Core types, zero deps, all modules + numbering defs + sections + proptest tree invariants + Unicode text safety + cycle detection + is_descendant |
 | `s1-ops` | **COMPLETE** | 48 passing | Operations, transactions, undo/redo, cursor/selection + proptest inversion roundtrip + subtree undo + mixed attribute undo + Unicode text roundtrip |
-| `s1-format-docx` | **COMPLETE** | 175 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields (fldSimple + fldChar complex), hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, TOC (SDT), mc:AlternateContent image support, round-trip. ZIP bomb protection. |
-| `s1-format-odt` | **COMPLETE** | 110 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, auto-styles, TOC, superscript/subscript, character spacing, paragraph shading, keep-lines-together, hyperlinks, bookmarks, tab stops, paragraph borders, comments (annotations), headers/footers (with page number/count fields), sections (page size, margins, orientation), round-trip. ZIP bomb protection. |
+| `s1-format-docx` | **COMPLETE** | 194 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables, images, lists, sections, headers/footers, fields (fldSimple + fldChar complex, non-self-closing), hyperlinks, bookmarks, tab stops, paragraph borders/shading, character spacing, superscript/subscript, comments, TOC (SDT), mc:AlternateContent image support (run + paragraph level, fallback skipping), track changes (w:ins/w:del/w:rPrChange), round-trip. ZIP bomb protection. |
+| `s1-format-odt` | **COMPLETE** | 113 passing | Reader + writer: paragraphs, runs, formatting, styles, metadata, tables (with table:name, table-column), images (text:anchor-type), lists (nested XML well-formed), auto-styles, TOC, superscript/subscript, character spacing, paragraph shading, keep-lines-together, hyperlinks, bookmarks, tab stops, paragraph borders, comments (annotations, xmlns:dc), headers/footers (with page-number text:select-page), sections (page size, margins, orientation), office:version="1.2", text line-break/tab conversion, conditional manifest. ZIP bomb protection. |
 | `s1-format-md` | **COMPLETE** | 32 passing | Reader (pulldown-cmark): headings, bold/italic/strikethrough, code, links, lists, GFM tables, thematic breaks. Writer: Markdown generation from DocumentModel. |
 | `s1-format-pdf` | **COMPLETE** | 21 passing | PDF export: font embedding/subsetting, text rendering, tables, metadata, images (JPEG/PNG), hyperlinks, bookmarks. Image dimension caps. |
 | `s1-format-txt` | **COMPLETE** | 41 passing | Reader (UTF-8/UTF-16/Latin-1 detection, heading/list/break markers), writer (headings, lists, TOC, thematic breaks), round-trip |
-| `s1-convert` | **COMPLETE** | 15 passing | DOC reader (OLE2/CFB heuristic), cross-format conversion (DOC/DOCX/ODT → DOCX/ODT), format detection |
-| `s1-layout` | **COMPLETE** | 38 passing | Style resolution, Knuth-Plass line breaking, pagination, table layout, image placement, header/footer placement, widow/orphan control, page-number field substitution, incremental layout cache |
+| `s1-convert` | **COMPLETE** | 90 passing | DOC reader (FIB + piece table + CHPx/SPRM char formatting + PAPx/SPRM para formatting + font table + stylesheet + table detection + SummaryInformation metadata), cross-format conversion (DOC/DOCX/ODT → DOCX/ODT), format detection |
+| `s1-layout` | **COMPLETE** | 62 passing | Style resolution, Knuth-Plass line breaking, pagination, row-by-row table splitting across pages (header repeat, continuation flag), image placement, header/footer placement, widow/orphan control, page-number field substitution, incremental layout cache, multi-section layout, paginated HTML output (layout_to_html) |
 | `s1-text` | **COMPLETE** | 39 passing | Pure Rust: text shaping (rustybuzz), font parsing (ttf-parser), font discovery (fontdb), BiDi, line breaking |
-| `s1-crdt` | **COMPLETE** | 172 passing | Fugue text CRDT, tree CRDT, LWW attr/metadata, resolver, CollabDocument, awareness, binary serialization, compression, tombstones; 16 convergence + 17 scenario + 1 proptest integration tests |
-| `s1engine` | **COMPLETE** | 96 passing (52 unit + 44 integration) | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript/TOC builder; open/create/export; undo/redo; ODT support; feature-gated CRDT re-exports + create_collab/open_collab |
-| `s1engine-wasm` | **COMPLETE** | 12 passing | WASM bindings: WasmEngine, WasmDocument, WasmDocumentBuilder, WasmFontDatabase, format detection |
+| `s1-crdt` | **COMPLETE** | 182 passing | Fugue text CRDT, tree CRDT, LWW attr/metadata, resolver, CollabDocument, awareness, binary serialization, compression, tombstones, op_log compaction, gc_tombstones, auto_compact, snapshot_and_truncate; 16 convergence + 17 scenario + 1 proptest integration tests |
+| `s1engine` | **COMPLETE** | 120 passing (64 unit + 56 integration) | Engine, Document, Format, Error, DocumentBuilder, TableBuilder, list builder, section/header/footer builder, hyperlink/bookmark/superscript/subscript/TOC builder; open/create/export; undo/redo; ODT support; feature-gated CRDT re-exports; feature-gated layout facade; feature-gated PDF export (export_pdf/export_pdf_with_config); track changes accept/reject API; 12 fidelity integration tests |
+| `s1engine-wasm` | **COMPLETE** | 22 passing | WASM bindings: WasmEngine, WasmDocument, WasmDocumentBuilder, WasmFontDatabase, format detection, to_paginated_html (with config/fonts), to_pdf (with fonts/data_url), track changes accept/reject, visual indicators |
 | `s1engine-c` | **COMPLETE** | 10 passing | C FFI: opaque handles, null-safety, error handling, format roundtrip |
 
 ### Recent Changes Log
@@ -266,6 +266,16 @@ Phase 5 milestones:
 | 2026-03-13 | Bug Fix: Complex field (fldChar) parsing — added FieldState machine to track fldChar begin/instrText/separate/end across runs within a paragraph. Creates Field nodes (PageNumber/PageCount/etc.) for complex field format. Fixes page number loss in footers. 1 new test (single-run), 1 new test (cross-run). | crates/s1-format-docx/src/content_parser.rs |
 | 2026-03-13 | Bug Fix: mc:AlternateContent image parsing — added `parse_alternate_content()` to descend into `<mc:Choice>` and extract `<w:drawing>` elements. Fixes image loss in DOCX files produced by Google Docs and other editors that wrap drawings in AlternateContent. 1 new test. | crates/s1-format-docx/src/content_parser.rs |
 | 2026-03-13 | WASM: Header/footer rendering in to_html() — renders first header and footer from sections with border styling. Build tooling: Makefile (build/test/wasm/demo targets), scripts/build-wasm.sh, scripts/test.sh. | ffi/wasm/src/lib.rs, Makefile, scripts/*.sh |
+| 2026-03-13 | Milestone B.1: Expose Layout Engine Through Facade — `layout` feature flag (optional), `Document::layout()` and `layout_with_config()` methods, `LayoutError` variant in Error enum, conditional re-exports for layout/text types. 6 new tests. | crates/s1engine/Cargo.toml, src/document.rs, src/error.rs, src/lib.rs |
+| 2026-03-13 | Milestone C.1: Multi-Section Layout — refactored layout engine for multi-section support. Per-section page sizes/margins via `resolve_page_layout_for_section()`, section block mapping via `build_section_map()`, section break types (NextPage/Continuous/EvenPage/OddPage with blank page insertion), per-section header/footer layout. Fixed widow/orphan control to preserve intentionally blank pages. 8 new tests. | crates/s1-layout/src/engine.rs |
+| 2026-03-13 | Milestone C.3: Track Changes Read/Write — RevisionType/Author/Date/Id/OriginalFormatting attribute keys in s1-model. DOCX parser: w:ins, w:del (block + inline), w:rPrChange, w:delText. DOCX writer: grouping tracked runs under w:ins/w:del wrappers, w:delText for deleted content, w:rPrChange emission. 14 new tests (8 parser, 3 writer, 3 roundtrip). | crates/s1-model/src/attributes.rs, crates/s1-format-docx/src/content_parser.rs, content_writer.rs, property_parser.rs, writer.rs |
+| 2026-03-14 | Milestone B.4: Browser Demo Paginated Viewer — Added "Pages" tab to demo/index.html showing paginated layout view from `to_paginated_html()`. Page navigation (Previous/Next with scroll-to-page), page count indicator, page dimensions display, lazy rendering on tab switch, graceful fallback when layout engine not available in WASM build. Styled pages with white backgrounds on gray container, drop shadows, 20px gaps, centered layout. | demo/index.html |
+| 2026-03-14 | Hardening Plan Phase 1 — A.1 FIB/Piece Table (24 tests), B.1 Layout Facade (6 tests), B.2 Paginated HTML (10 tests), C.1 Multi-Section Layout (8 tests), C.5 CRDT Hardening (10 tests). | crates/s1-convert/src/fib.rs, piece_table.rs; crates/s1-layout/src/html.rs, engine.rs; crates/s1-crdt/src/collab.rs, compression.rs, resolver.rs |
+| 2026-03-14 | Hardening Plan Phase 2 — A.2 CHPx/SPRM char formatting (12 tests), A.3 PAPx/SPRM para formatting (14 tests), C.2 Tables across page breaks (6 tests), B.3 Wire HTML into WASM (6 tests). | crates/s1-convert/src/sprm.rs, chpx.rs, papx.rs; crates/s1-layout/src/engine.rs, types.rs; ffi/wasm/src/lib.rs |
+| 2026-03-14 | Hardening Plan Phase 3 — A.4 Style sheet/font table (17 tests), A.5 Tables/metadata (8 tests), C.4 Track changes accept/reject API (6 tests), C.6 Fidelity testing (12 tests). | crates/s1-convert/src/font_table.rs, stylesheet.rs, summary_info.rs, doc_reader.rs; crates/s1engine/src/document.rs; crates/s1engine/tests/fidelity.rs |
+| 2026-03-14 | Bug Fixes: ODT content.xml — nested lists well-formed XML, xmlns:dc namespace, office:version="1.2", table:table-column/table:name, text:anchor-type on images, text line-break/tab conversion, conditional manifest meta.xml, text:select-page on page-number. 3 new tests. | crates/s1-format-odt/src/content_writer.rs, style_writer.rs, manifest_writer.rs, writer.rs |
+| 2026-03-14 | Bug Fix: Footer page numbers — handle_fld_char helper for non-self-closing fldChar elements. Google Docs images — parse_alternate_content_into_paragraph for paragraph-level mc:AlternateContent, fallback skipping. 5 new tests. | crates/s1-format-docx/src/content_parser.rs, header_footer_parser.rs |
+| 2026-03-14 | WASM PDF Export — to_pdf(), to_pdf_with_fonts(), to_pdf_data_url(), to_pdf_data_url_with_fonts() on WasmDocument. Feature-gated pdf export on s1engine (export_pdf, export_pdf_with_config). 4 new tests. | ffi/wasm/src/lib.rs, Cargo.toml; crates/s1engine/src/document.rs, error.rs, Cargo.toml |
 
 ---
 
@@ -437,6 +447,20 @@ Phase 5 milestones:
 - [x] `write_no_comments_returns_none` — No comments → no file (Phase 2)
 - [x] `write_comment_with_date` — Comment with date attribute (Phase 2)
 - [x] `roundtrip_comments` — Full comment round-trip (Phase 2)
+- [x] `parse_ins_basic` — Parse w:ins with single run (Track Changes)
+- [x] `parse_ins_with_author_date` — Parse w:ins with author/date attributes (Track Changes)
+- [x] `parse_del_basic` — Parse w:del with single run (Track Changes)
+- [x] `parse_del_text_content` — Parse w:delText content in deleted runs (Track Changes)
+- [x] `parse_rpr_change` — Parse w:rPrChange format change tracking (Track Changes)
+- [x] `parse_mixed_tracked_untracked` — Mixed tracked and untracked paragraphs (Track Changes)
+- [x] `parse_ins_multiple_runs` — Multiple runs within single w:ins (Track Changes)
+- [x] `parse_nested_ins_del` — Nested w:ins and w:del in same paragraph (Track Changes)
+- [x] `write_ins_basic` — Write w:ins wrapper around inserted runs (Track Changes)
+- [x] `write_del_basic` — Write w:del with w:delText (Track Changes)
+- [x] `write_rpr_change` — Write w:rPrChange in run properties (Track Changes)
+- [x] `roundtrip_ins` — Round-trip inserted text track change (Track Changes)
+- [x] `roundtrip_del` — Round-trip deleted text track change (Track Changes)
+- [x] `roundtrip_mixed_tracked` — Round-trip mixed tracked/untracked content (Track Changes)
 - [ ] `fuzz_reader` — Fuzz DOCX reader with random ZIP/XML input
 
 #### s1-format-odt (Phase 2)

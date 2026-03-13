@@ -40,6 +40,27 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         }
                         skip_to_end(reader)?;
                     }
+                    b"rPrChange" => {
+                        // Track changes — format change revision
+                        attrs.set(
+                            AttributeKey::RevisionType,
+                            AttributeValue::String("FormatChange".into()),
+                        );
+                        if let Some(id) = get_attr(&e, b"id") {
+                            if let Ok(id_val) = id.parse::<i64>() {
+                                attrs.set(AttributeKey::RevisionId, AttributeValue::Int(id_val));
+                            }
+                        }
+                        if let Some(author) = get_attr(&e, b"author") {
+                            attrs.set(AttributeKey::RevisionAuthor, AttributeValue::String(author));
+                        }
+                        if let Some(date) = get_attr(&e, b"date") {
+                            attrs.set(AttributeKey::RevisionDate, AttributeValue::String(date));
+                        }
+                        // Skip the inner <w:rPr> (old formatting) — we don't
+                        // store it in a structured way for now
+                        skip_to_end(reader)?;
+                    }
                     _ => {
                         skip_to_end(reader)?;
                     }

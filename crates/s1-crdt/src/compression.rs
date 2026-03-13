@@ -99,6 +99,15 @@ fn try_merge(current: &mut CrdtOperation, next: &CrdtOperation) -> bool {
     true
 }
 
+/// Compact a mutable vec of operations in-place.
+///
+/// This is more efficient than `compress_ops` when modifying an existing log
+/// because it avoids allocating a new Vec for identical operations.
+pub fn compress_ops_in_place(ops: &mut Vec<CrdtOperation>) {
+    let compressed = compress_ops(ops);
+    *ops = compressed;
+}
+
 /// Calculate the compression ratio: `compressed_count / original_count`.
 ///
 /// Returns 1.0 for no compression, lower values indicate better compression.

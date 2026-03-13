@@ -114,6 +114,30 @@ fn parse_body(
                         let raw = parse_section_properties(reader)?;
                         raw_sections.push(raw);
                     }
+                    b"ins" => {
+                        let rev = extract_revision_attrs(&e, "Insert");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            body_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"ins",
+                        )?;
+                    }
+                    b"del" => {
+                        let rev = extract_revision_attrs(&e, "Delete");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            body_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"del",
+                        )?;
+                    }
                     _ => {
                         skip_element(reader)?;
                     }
@@ -163,6 +187,30 @@ pub(crate) fn parse_block_content(
                         parse_table(reader, doc, parent_id, child_index, &ctx)?;
                         child_index += 1;
                     }
+                    b"ins" => {
+                        let rev = extract_revision_attrs(&e, "Insert");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            parent_id,
+                            &mut child_index,
+                            &ctx,
+                            &rev,
+                            b"ins",
+                        )?;
+                    }
+                    b"del" => {
+                        let rev = extract_revision_attrs(&e, "Delete");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            parent_id,
+                            &mut child_index,
+                            &ctx,
+                            &rev,
+                            b"del",
+                        )?;
+                    }
                     _ => {
                         skip_element(reader)?;
                     }
@@ -209,7 +257,14 @@ fn parse_paragraph(
                         inline_section = sect;
                     }
                     b"r" => {
-                        parse_run(reader, doc, para_id, &mut child_index, ctx, &mut field_state)?;
+                        parse_run(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &mut field_state,
+                        )?;
                     }
                     // Simple fields (e.g., page number)
                     b"fldSimple" => {
@@ -217,7 +272,15 @@ fn parse_paragraph(
                     }
                     // Hyperlinks contain runs with a URL target
                     b"hyperlink" => {
-                        parse_hyperlink_runs(&e, reader, doc, para_id, &mut child_index, ctx, &mut field_state)?;
+                        parse_hyperlink_runs(
+                            &e,
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &mut field_state,
+                        )?;
                     }
                     // Bookmark start/end
                     b"bookmarkStart" => {
@@ -266,6 +329,42 @@ fn parse_paragraph(
                             .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
                         child_index += 1;
                         skip_element(reader)?;
+                    }
+                    // mc:AlternateContent can appear as direct child of paragraph
+                    b"AlternateContent" => {
+                        parse_alternate_content_into_paragraph(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                        )?;
+                    }
+                    b"ins" => {
+                        let rev = extract_revision_attrs(&e, "Insert");
+                        parse_tracked_inline_runs(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            &mut field_state,
+                            b"ins",
+                        )?;
+                    }
+                    b"del" => {
+                        let rev = extract_revision_attrs(&e, "Delete");
+                        parse_tracked_inline_runs(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            &mut field_state,
+                            b"del",
+                        )?;
                     }
                     _ => {
                         skip_element(reader)?;
@@ -642,6 +741,30 @@ fn parse_table_cell(
                         parse_table(reader, doc, cell_id, child_index, ctx)?;
                         child_index += 1;
                     }
+                    b"ins" => {
+                        let rev = extract_revision_attrs(&e, "Insert");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            cell_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"ins",
+                        )?;
+                    }
+                    b"del" => {
+                        let rev = extract_revision_attrs(&e, "Delete");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            cell_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"del",
+                        )?;
+                    }
                     _ => {
                         skip_element(reader)?;
                     }
@@ -688,6 +811,44 @@ struct ImageInfo {
     alt_text: Option<String>,
 }
 
+/// Handle a `<w:fldChar>` element (whether self-closing or not).
+///
+/// Processes the `fldCharType` attribute to drive the field state machine
+/// and creates a `RunContent::Field` when the field ends.
+fn handle_fld_char(
+    e: &quick_xml::events::BytesStart<'_>,
+    field_state: &mut FieldState,
+    content: &mut Vec<RunContent>,
+) {
+    let fld_type = get_attr(e, b"fldCharType");
+    match fld_type.as_deref() {
+        Some("begin") => {
+            *field_state = FieldState::Begin;
+        }
+        Some("separate") => {
+            // Move instruction text into Separate state
+            let instr = match std::mem::replace(field_state, FieldState::None) {
+                FieldState::HasInstr(s) => s,
+                _ => String::new(),
+            };
+            *field_state = FieldState::Separate(instr);
+        }
+        Some("end") => {
+            // Extract instruction and create Field content
+            let instr = match std::mem::replace(field_state, FieldState::None) {
+                FieldState::Separate(s) => s,
+                FieldState::HasInstr(s) => s,
+                _ => String::new(),
+            };
+            if !instr.is_empty() {
+                let ft = parse_field_instruction(&instr);
+                content.push(RunContent::Field(ft, instr.trim().to_string()));
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Parse `<w:r>` — a run of text with formatting.
 fn parse_run(
     reader: &mut Reader<&[u8]>,
@@ -708,8 +869,8 @@ fn parse_run(
                     b"rPr" => {
                         run_attrs = parse_run_properties(reader)?;
                     }
-                    b"t" => {
-                        let text = read_text_content(reader)?;
+                    b"t" | b"delText" => {
+                        let text = read_text_content_tag(reader, &name)?;
                         if !text.is_empty() {
                             // When in the "separate" phase of a complex field,
                             // the <w:t> holds the display value — skip it.
@@ -733,6 +894,12 @@ fn parse_run(
                     // mc:AlternateContent wraps drawing in some DOCX files
                     b"AlternateContent" => {
                         parse_alternate_content(reader, &mut content, ctx)?;
+                    }
+                    // fldChar can appear as non-self-closing element in some DOCX producers
+                    b"fldChar" => {
+                        handle_fld_char(&e, field_state, &mut content);
+                        // Consume the closing </w:fldChar> tag
+                        skip_element(reader)?;
                     }
                     _ => {
                         skip_element(reader)?;
@@ -758,33 +925,7 @@ fn parse_run(
                         // Self-closing <w:t/> — empty text, skip
                     }
                     b"fldChar" => {
-                        let fld_type = get_attr(&e, b"fldCharType");
-                        match fld_type.as_deref() {
-                            Some("begin") => {
-                                *field_state = FieldState::Begin;
-                            }
-                            Some("separate") => {
-                                // Move instruction text into Separate state
-                                let instr = match std::mem::replace(field_state, FieldState::None) {
-                                    FieldState::HasInstr(s) => s,
-                                    _ => String::new(),
-                                };
-                                *field_state = FieldState::Separate(instr);
-                            }
-                            Some("end") => {
-                                // Extract instruction and create Field content
-                                let instr = match std::mem::replace(field_state, FieldState::None) {
-                                    FieldState::Separate(s) => s,
-                                    FieldState::HasInstr(s) => s,
-                                    _ => String::new(),
-                                };
-                                if !instr.is_empty() {
-                                    let ft = parse_field_instruction(&instr);
-                                    content.push(RunContent::Field(ft, instr.trim().to_string()));
-                                }
-                            }
-                            _ => {}
-                        }
+                        handle_fld_char(&e, field_state, &mut content);
                     }
                     _ => {}
                 }
@@ -831,10 +972,9 @@ fn parse_run(
                     AttributeKey::FieldType,
                     AttributeValue::FieldType(field_type),
                 );
-                field_node.attributes.set(
-                    AttributeKey::FieldCode,
-                    AttributeValue::String(instr),
-                );
+                field_node
+                    .attributes
+                    .set(AttributeKey::FieldCode, AttributeValue::String(instr));
                 doc.insert_node(para_id, *child_index, field_node)
                     .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
                 *child_index += 1;
@@ -867,29 +1007,95 @@ fn read_instr_text_content(reader: &mut Reader<&[u8]>) -> Result<String, DocxErr
     Ok(text)
 }
 
-/// Parse `<mc:AlternateContent>` — descend into `<mc:Choice>` to find
-/// `<w:drawing>` elements. This is how some DOCX producers wrap inline images.
+/// Parse `<mc:AlternateContent>` inside a run — descend into `<mc:Choice>` to find
+/// `<w:drawing>` elements. Skips `<mc:Fallback>` content to avoid duplicates.
+/// This is how some DOCX producers (Google Docs, etc.) wrap inline images.
 fn parse_alternate_content(
     reader: &mut Reader<&[u8]>,
     content: &mut Vec<RunContent>,
     ctx: &ParseContext,
 ) -> Result<(), DocxError> {
     let mut depth = 1u32;
+    let mut in_fallback = false;
+    let mut fallback_depth = 0u32;
 
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 depth += 1;
                 let name = e.local_name().as_ref().to_vec();
-                if name == b"drawing" {
-                    if let Some(info) = parse_drawing(reader, ctx)? {
-                        content.push(RunContent::Image(info));
+                match name.as_slice() {
+                    b"Fallback" => {
+                        in_fallback = true;
+                        fallback_depth = depth;
                     }
-                    depth -= 1; // parse_drawing consumed the </drawing> end tag
+                    b"drawing" if !in_fallback => {
+                        if let Some(info) = parse_drawing(reader, ctx)? {
+                            content.push(RunContent::Image(info));
+                        }
+                        depth -= 1; // parse_drawing consumed the </drawing> end tag
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::Empty(_)) => {}
             Ok(Event::End(_)) => {
+                if in_fallback && depth == fallback_depth {
+                    in_fallback = false;
+                }
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse `<mc:AlternateContent>` as a direct child of a paragraph.
+///
+/// Descends into `<mc:Choice>` to find `<w:drawing>` elements and inserts
+/// any found images directly as children of the paragraph. Skips `<mc:Fallback>`.
+fn parse_alternate_content_into_paragraph(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    para_id: NodeId,
+    child_index: &mut usize,
+    ctx: &ParseContext,
+) -> Result<(), DocxError> {
+    let mut depth = 1u32;
+    let mut in_fallback = false;
+    let mut fallback_depth = 0u32;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                depth += 1;
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"Fallback" => {
+                        in_fallback = true;
+                        fallback_depth = depth;
+                    }
+                    b"drawing" if !in_fallback => {
+                        if let Some(info) = parse_drawing(reader, ctx)? {
+                            insert_image_node(doc, para_id, child_index, &info, ctx)?;
+                        }
+                        depth -= 1; // parse_drawing consumed the </drawing> end tag
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Empty(_)) => {}
+            Ok(Event::End(_)) => {
+                if in_fallback && depth == fallback_depth {
+                    in_fallback = false;
+                }
                 depth -= 1;
                 if depth == 0 {
                     break;
@@ -1086,6 +1292,7 @@ fn flush_texts_to_run(
 }
 
 /// Read text content inside `<w:t>...</w:t>`.
+#[allow(dead_code)]
 fn read_text_content(reader: &mut Reader<&[u8]>) -> Result<String, DocxError> {
     let mut text = String::new();
 
@@ -1457,6 +1664,196 @@ fn collect_para_text(doc: &DocumentModel, node_id: NodeId, out: &mut String) {
             collect_para_text(doc, child_id, out);
         }
     }
+}
+
+/// Read text content inside a tag that ends with the given tag name.
+///
+/// Like `read_text_content` but matches on any end tag name (e.g., `t` or `delText`).
+fn read_text_content_tag(reader: &mut Reader<&[u8]>, tag_name: &[u8]) -> Result<String, DocxError> {
+    let mut text = String::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Text(e)) => {
+                text.push_str(&e.unescape().map_err(|e| DocxError::Xml(format!("{e}")))?);
+            }
+            Ok(Event::CData(e)) => {
+                text.push_str(std::str::from_utf8(&e).map_err(|e| DocxError::Xml(format!("{e}")))?);
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == tag_name => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(text)
+}
+
+/// Revision info extracted from tracked change elements (w:ins, w:del).
+#[derive(Debug, Clone)]
+struct RevisionInfo {
+    /// Type of revision: "Insert" or "Delete".
+    revision_type: String,
+    /// Author of the revision, if present.
+    author: Option<String>,
+    /// Date of the revision, if present.
+    date: Option<String>,
+    /// Revision ID from `w:id` attribute.
+    id: Option<i64>,
+}
+
+/// Extract revision attributes from a tracked change start element.
+fn extract_revision_attrs(
+    e: &quick_xml::events::BytesStart<'_>,
+    revision_type: &str,
+) -> RevisionInfo {
+    let author = get_attr(e, b"author");
+    let date = get_attr(e, b"date");
+    let id = get_attr(e, b"id").and_then(|s| s.parse::<i64>().ok());
+    RevisionInfo {
+        revision_type: revision_type.to_string(),
+        author,
+        date,
+        id,
+    }
+}
+
+/// Apply revision attributes to a node.
+fn apply_revision_attrs(node: &mut Node, rev: &RevisionInfo) {
+    node.attributes.set(
+        AttributeKey::RevisionType,
+        AttributeValue::String(rev.revision_type.clone()),
+    );
+    if let Some(ref author) = rev.author {
+        node.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String(author.clone()),
+        );
+    }
+    if let Some(ref date) = rev.date {
+        node.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String(date.clone()),
+        );
+    }
+    if let Some(id) = rev.id {
+        node.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(id));
+    }
+}
+
+/// Tag all Run children of a node with revision attributes.
+fn tag_children_with_revision(doc: &mut DocumentModel, parent_id: NodeId, rev: &RevisionInfo) {
+    let children: Vec<NodeId> = match doc.node(parent_id) {
+        Some(n) => n.children.clone(),
+        None => return,
+    };
+    for child_id in children {
+        let is_run = doc
+            .node(child_id)
+            .map(|n| n.node_type == NodeType::Run)
+            .unwrap_or(false);
+        if is_run {
+            if let Some(node) = doc.node_mut(child_id) {
+                apply_revision_attrs(node, rev);
+            }
+        }
+    }
+}
+
+/// Parse block-level tracked changes (w:ins or w:del containing paragraphs/tables).
+/// Tags each paragraph's run children with revision attributes.
+fn parse_tracked_block(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    parent_id: NodeId,
+    child_index: &mut usize,
+    ctx: &ParseContext,
+    rev: &RevisionInfo,
+    end_tag: &[u8],
+) -> Result<(), DocxError> {
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"p" => {
+                        let start_idx = *child_index;
+                        parse_paragraph(reader, doc, parent_id, *child_index, ctx)?;
+                        // Apply revision attributes to runs within this paragraph
+                        if let Some(para_node_id) = doc
+                            .node(parent_id)
+                            .and_then(|p| p.children.get(start_idx).copied())
+                        {
+                            tag_children_with_revision(doc, para_node_id, rev);
+                        }
+                        *child_index += 1;
+                    }
+                    b"tbl" => {
+                        parse_table(reader, doc, parent_id, *child_index, ctx)?;
+                        *child_index += 1;
+                    }
+                    _ => {
+                        skip_element(reader)?;
+                    }
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == end_tag => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Parse inline-level tracked changes (w:ins or w:del containing runs).
+/// Tags each parsed run with revision attributes.
+#[allow(clippy::too_many_arguments)]
+fn parse_tracked_inline_runs(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    para_id: NodeId,
+    child_index: &mut usize,
+    ctx: &ParseContext,
+    rev: &RevisionInfo,
+    field_state: &mut FieldState,
+    end_tag: &[u8],
+) -> Result<(), DocxError> {
+    let start_index = *child_index;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"r" => {
+                        parse_run(reader, doc, para_id, child_index, ctx, field_state)?;
+                    }
+                    _ => {
+                        skip_element(reader)?;
+                    }
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == end_tag => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    // Tag all runs created inside this tracked change with revision attributes
+    if let Some(para) = doc.node(para_id) {
+        let children: Vec<NodeId> = para.children.clone();
+        for &child_id in children.get(start_index..*child_index).unwrap_or(&[]) {
+            if let Some(node) = doc.node_mut(child_id) {
+                apply_revision_attrs(node, rev);
+            }
+        }
+    }
+
+    Ok(())
 }
 
 /// Skip an element and all its children.
@@ -2582,5 +2979,447 @@ mod tests {
         assert_eq!(image.node_type, NodeType::Image);
         assert!(image.attributes.get(&AttributeKey::ImageMediaId).is_some());
         assert_eq!(doc.media().len(), 1);
+    }
+
+    // ─── Track changes (ins/del/rPrChange) parsing tests ─────────────
+
+    #[test]
+    fn parse_ins_basic() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:ins w:id="1" w:author="John" w:date="2024-01-01T12:00:00Z">
+                    <w:r><w:rPr><w:b/></w:rPr><w:t>inserted text</w:t></w:r>
+                </w:ins>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 1);
+
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(run.node_type, NodeType::Run);
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+        assert_eq!(run.attributes.get_bool(&AttributeKey::Bold), Some(true));
+        assert_eq!(doc.to_plain_text(), "inserted text");
+    }
+
+    #[test]
+    fn parse_ins_with_author_date() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:ins w:id="5" w:author="Alice" w:date="2024-06-15T09:30:00Z">
+                    <w:r><w:t>new content</w:t></w:r>
+                </w:ins>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Alice")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionDate),
+            Some("2024-06-15T09:30:00Z")
+        );
+        assert_eq!(run.attributes.get_i64(&AttributeKey::RevisionId), Some(5));
+    }
+
+    #[test]
+    fn parse_del_basic() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:del w:id="2" w:author="Jane" w:date="2024-01-02T10:00:00Z">
+                    <w:r><w:rPr><w:b/></w:rPr><w:delText>deleted text</w:delText></w:r>
+                </w:del>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 1);
+
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(run.node_type, NodeType::Run);
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Delete")
+        );
+    }
+
+    #[test]
+    fn parse_del_text_content() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:del w:id="3" w:author="Bob" w:date="2024-02-01T08:00:00Z">
+                    <w:r><w:delText>removed words</w:delText></w:r>
+                </w:del>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        assert_eq!(doc.to_plain_text(), "removed words");
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Bob")
+        );
+        assert_eq!(run.attributes.get_i64(&AttributeKey::RevisionId), Some(3));
+    }
+
+    #[test]
+    fn parse_rpr_change() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:r>
+                    <w:rPr>
+                        <w:b/>
+                        <w:rPrChange w:id="3" w:author="Bob" w:date="2024-01-03T09:00:00Z">
+                            <w:rPr><w:i/></w:rPr>
+                        </w:rPrChange>
+                    </w:rPr>
+                    <w:t>reformatted</w:t>
+                </w:r>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("FormatChange")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Bob")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionDate),
+            Some("2024-01-03T09:00:00Z")
+        );
+        assert_eq!(run.attributes.get_i64(&AttributeKey::RevisionId), Some(3));
+        // Current formatting should still be parsed
+        assert_eq!(run.attributes.get_bool(&AttributeKey::Bold), Some(true));
+        assert_eq!(doc.to_plain_text(), "reformatted");
+    }
+
+    #[test]
+    fn parse_mixed_tracked_untracked() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:r><w:t>normal </w:t></w:r>
+                <w:ins w:id="10" w:author="Ed" w:date="2024-03-01T00:00:00Z">
+                    <w:r><w:t>inserted</w:t></w:r>
+                </w:ins>
+                <w:r><w:t> more</w:t></w:r>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 3);
+
+        // First run — no revision
+        let run1 = doc.node(para.children[0]).unwrap();
+        assert!(run1
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+
+        // Second run — Insert revision
+        let run2 = doc.node(para.children[1]).unwrap();
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+
+        // Third run — no revision
+        let run3 = doc.node(para.children[2]).unwrap();
+        assert!(run3
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+
+        assert_eq!(doc.to_plain_text(), "normal inserted more");
+    }
+
+    #[test]
+    fn parse_ins_multiple_runs() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:ins w:id="7" w:author="Sam" w:date="2024-04-01T00:00:00Z">
+                    <w:r><w:rPr><w:b/></w:rPr><w:t>bold </w:t></w:r>
+                    <w:r><w:rPr><w:i/></w:rPr><w:t>italic</w:t></w:r>
+                </w:ins>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 2);
+
+        // Both runs should have Insert revision
+        for &child_id in &para.children {
+            let run = doc.node(child_id).unwrap();
+            assert_eq!(
+                run.attributes.get_string(&AttributeKey::RevisionType),
+                Some("Insert")
+            );
+            assert_eq!(
+                run.attributes.get_string(&AttributeKey::RevisionAuthor),
+                Some("Sam")
+            );
+        }
+
+        // First run bold, second italic
+        let run1 = doc.node(para.children[0]).unwrap();
+        assert_eq!(run1.attributes.get_bool(&AttributeKey::Bold), Some(true));
+        let run2 = doc.node(para.children[1]).unwrap();
+        assert_eq!(run2.attributes.get_bool(&AttributeKey::Italic), Some(true));
+
+        assert_eq!(doc.to_plain_text(), "bold italic");
+    }
+
+    #[test]
+    fn parse_nested_ins_del() {
+        // ins and del in same paragraph
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:ins w:id="1" w:author="A" w:date="2024-01-01T00:00:00Z">
+                    <w:r><w:t>added</w:t></w:r>
+                </w:ins>
+                <w:r><w:t> middle </w:t></w:r>
+                <w:del w:id="2" w:author="B" w:date="2024-01-02T00:00:00Z">
+                    <w:r><w:delText>removed</w:delText></w:r>
+                </w:del>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 3);
+
+        let run1 = doc.node(para.children[0]).unwrap();
+        assert_eq!(
+            run1.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Insert")
+        );
+
+        let run2 = doc.node(para.children[1]).unwrap();
+        assert!(run2
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+
+        let run3 = doc.node(para.children[2]).unwrap();
+        assert_eq!(
+            run3.attributes.get_string(&AttributeKey::RevisionType),
+            Some("Delete")
+        );
+
+        assert_eq!(doc.to_plain_text(), "added middle removed");
+    }
+
+    // ─── Bug fix: non-self-closing fldChar parsing ──────────────────────
+
+    #[test]
+    fn parse_complex_field_non_self_closing_fld_char() {
+        // Some DOCX producers emit <w:fldChar></w:fldChar> instead of <w:fldChar/>
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:r><w:fldChar w:fldCharType="begin"></w:fldChar></w:r>
+                <w:r><w:instrText xml:space="preserve"> PAGE </w:instrText></w:r>
+                <w:r><w:fldChar w:fldCharType="separate"></w:fldChar></w:r>
+                <w:r><w:t>3</w:t></w:r>
+                <w:r><w:fldChar w:fldCharType="end"></w:fldChar></w:r>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have a Field node; the display value "3" should be skipped
+        let field = doc.node(para.children[0]).unwrap();
+        assert_eq!(field.node_type, NodeType::Field);
+        assert_eq!(
+            field.attributes.get(&AttributeKey::FieldType),
+            Some(&AttributeValue::FieldType(FieldType::PageNumber))
+        );
+        // No text "3" should leak through
+        assert_eq!(doc.to_plain_text(), "");
+    }
+
+    #[test]
+    fn parse_complex_field_mixed_self_closing_and_non() {
+        // Mix of self-closing and non-self-closing fldChar within a single run
+        let xml = wrap_doc(
+            r#"<w:p><w:r>
+                <w:fldChar w:fldCharType="begin"></w:fldChar>
+                <w:instrText xml:space="preserve">NUMPAGES</w:instrText>
+                <w:fldChar w:fldCharType="separate" />
+                <w:fldChar w:fldCharType="end"></w:fldChar>
+            </w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        let field = doc.node(para.children[0]).unwrap();
+        assert_eq!(field.node_type, NodeType::Field);
+        assert_eq!(
+            field.attributes.get(&AttributeKey::FieldType),
+            Some(&AttributeValue::FieldType(FieldType::PageCount))
+        );
+    }
+
+    // ─── Bug fix: mc:AlternateContent at paragraph level ────────────────
+
+    #[test]
+    fn parse_alternate_content_at_paragraph_level() {
+        // mc:AlternateContent as a direct child of w:p (not inside w:r)
+        let xml = wrap_doc(
+            r#"<w:p>
+                <mc:AlternateContent>
+                    <mc:Choice Requires="wps">
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="914400" cy="457200"/>
+                            <wp:docPr id="1" name="Picture 1"/>
+                            <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                                <a:blip r:embed="rId5"/>
+                            </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Choice>
+                    <mc:Fallback>
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="914400" cy="457200"/>
+                            <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                                <a:blip r:embed="rId5"/>
+                            </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Fallback>
+                </mc:AlternateContent>
+            </w:p>"#,
+        );
+        let mut rels = HashMap::new();
+        rels.insert("rId5".to_string(), "media/image1.png".to_string());
+
+        let mut media = HashMap::new();
+        media.insert("media/image1.png".to_string(), vec![0x89, 0x50, 0x4E, 0x47]);
+
+        let mut doc = DocumentModel::new();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have exactly one Image node (not duplicated from Fallback)
+        assert_eq!(para.children.len(), 1);
+        let image = doc.node(para.children[0]).unwrap();
+        assert_eq!(image.node_type, NodeType::Image);
+        assert!(image.attributes.get(&AttributeKey::ImageMediaId).is_some());
+    }
+
+    #[test]
+    fn parse_alternate_content_skips_fallback_in_run() {
+        // Verify that mc:Fallback drawing inside a run is not duplicated
+        let xml = wrap_doc(
+            r#"<w:p><w:r>
+                <mc:AlternateContent>
+                    <mc:Choice Requires="wpg">
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="914400" cy="457200"/>
+                            <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                                <a:blip r:embed="rId5"/>
+                            </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Choice>
+                    <mc:Fallback>
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="914400" cy="457200"/>
+                            <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                                <a:blip r:embed="rId5"/>
+                            </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Fallback>
+                </mc:AlternateContent>
+            </w:r></w:p>"#,
+        );
+        let mut rels = HashMap::new();
+        rels.insert("rId5".to_string(), "media/image1.png".to_string());
+
+        let mut media = HashMap::new();
+        media.insert("media/image1.png".to_string(), vec![0x89, 0x50, 0x4E, 0x47]);
+
+        let mut doc = DocumentModel::new();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have exactly one Image node (Fallback's drawing should be skipped)
+        assert_eq!(para.children.len(), 1);
+        let image = doc.node(para.children[0]).unwrap();
+        assert_eq!(image.node_type, NodeType::Image);
     }
 }

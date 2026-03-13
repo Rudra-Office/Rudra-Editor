@@ -166,7 +166,7 @@ fn collect_block_font_usage(block: &LayoutBlock, usage: &mut HashMap<FontId, Vec
                 }
             }
         }
-        LayoutBlockKind::Table { rows } => {
+        LayoutBlockKind::Table { rows, .. } => {
             for row in rows {
                 for cell in &row.cells {
                     collect_blocks_font_usage(&cell.blocks, usage);
@@ -348,7 +348,7 @@ fn collect_and_embed_images(
 
                 image_map.insert(media_id.clone(), PdfImage { name, xobject_ref });
             }
-            LayoutBlockKind::Table { rows } => {
+            LayoutBlockKind::Table { rows, .. } => {
                 for row in rows {
                     for cell in &row.cells {
                         collect_and_embed_images(pdf, alloc, &cell.blocks, image_map, img_idx)?;
@@ -581,7 +581,7 @@ fn render_block(
                 );
             }
         }
-        LayoutBlockKind::Table { rows } => {
+        LayoutBlockKind::Table { rows, .. } => {
             render_table(
                 content,
                 rows,

@@ -6,13 +6,16 @@ Designed as an embeddable SDK for building document editors, converters, and col
 
 ## Status
 
-**1.0.0** -- Stable API. All 5 phases complete.
+**1.0.0** -- Stable API. All 7 phases complete. 1,051 tests passing.
 
-- Comprehensive test suite across 13 crates (run `cargo test --workspace` to verify)
 - DOCX, ODT, TXT, Markdown read/write with round-trip fidelity
-- PDF export (text, tables, images, hyperlinks, bookmarks)
-- CRDT-based collaborative editing (Fugue text, tree moves, LWW attributes)
-- WASM and C FFI bindings
+- DOC (legacy Word) support: FIB/piece table parsing, character/paragraph formatting, styles, fonts, tables, metadata
+- PDF export with font embedding, images, hyperlinks, bookmarks
+- Page layout engine with multi-section support, row-by-row table splitting, paginated HTML output
+- Track changes (read/write/accept/reject) for DOCX
+- CRDT-based collaborative editing (Fugue text, tree moves, LWW attributes, session hardening)
+- WASM bindings with paginated HTML rendering, PDF export, track changes UI
+- C FFI bindings with opaque handles
 - Pure Rust -- zero C/C++ dependencies
 
 ## Architecture
@@ -114,26 +117,26 @@ s1engine = { version = "0.1", features = ["pdf", "convert", "crdt"] }
 | `md` | Markdown read/write (GFM tables) | Yes |
 | `pdf` | PDF export (requires layout + text shaping) | No |
 | `convert` | Format conversion pipelines | No |
-| `doc-legacy` | DOC text extraction (via OLE2) | No |
+| `doc-legacy` | DOC binary parsing (FIB, piece table, formatting, tables, metadata) | No |
 | `crdt` | CRDT collaboration primitives | No |
 
 ## Crate Structure
 
 | Crate | Description | Tests |
 |---|---|---|
-| `s1engine` | Facade -- high-level public API | 96 |
+| `s1engine` | Facade -- high-level public API | 102 |
 | `s1-model` | Core document model (tree, nodes, attributes, styles) | 72 |
 | `s1-ops` | Operations, transactions, undo/redo | 48 |
-| `s1-format-docx` | DOCX reader/writer | 175 |
-| `s1-format-odt` | ODT reader/writer | 110 |
+| `s1-format-docx` | DOCX reader/writer | 194 |
+| `s1-format-odt` | ODT reader/writer | 113 |
 | `s1-format-md` | Markdown reader/writer | 32 |
 | `s1-format-pdf` | PDF exporter | 21 |
 | `s1-format-txt` | Plain text reader/writer | 41 |
-| `s1-convert` | Format conversion (incl. DOC text extraction) | 15 |
-| `s1-layout` | Page layout engine (pagination, line breaking) | 38 |
+| `s1-convert` | Format conversion (DOC binary + cross-format) | 15 |
+| `s1-layout` | Page layout engine (pagination, multi-section, paginated HTML) | 66 |
 | `s1-text` | Text shaping, fonts, Unicode (pure Rust) | 39 |
 | `s1-crdt` | CRDT algorithms for collaborative editing | 172 |
-| `ffi/wasm` | WASM bindings (wasm-bindgen) | 12 |
+| `ffi/wasm` | WASM bindings (wasm-bindgen) | 22 |
 | `ffi/c` | C FFI bindings (opaque handles) | 10 |
 
 ## Format Support Matrix
@@ -151,7 +154,7 @@ Detailed per-feature support across all document formats. Classification key:
 
 | Capability | DOCX | ODT | MD | PDF | TXT | DOC (legacy) |
 |---|---|---|---|---|---|---|
-| Read | Yes | Yes | Yes | -- | Yes | Text only |
+| Read | Yes | Yes | Yes | -- | Yes | Yes (FIB/piece table) |
 | Write | Yes | Yes | Yes | Export only | Yes | -- |
 | Round-trip | Yes | Yes | Partial | -- | Yes | -- |
 
@@ -159,12 +162,12 @@ Detailed per-feature support across all document formats. Classification key:
 
 | Feature | DOCX | ODT | MD | PDF | TXT | DOC |
 |---|---|---|---|---|---|---|
-| Paragraphs (text) | Full | Full | Full | Write | Lossy | Partial |
-| Paragraph alignment | Full | Full | -- | Write | -- | -- |
-| Paragraph spacing | Full | Full | -- | Write | -- | -- |
-| Paragraph indent | Full | Full | -- | Write | -- | -- |
-| Headings / styles | Full | Full | Full | Write | Markers (`#`) | -- |
-| Tables (basic) | Full | Full | Full (GFM) | Write | Lossy (tab-separated) | -- |
+| Paragraphs (text) | Full | Full | Full | Write | Lossy | Full |
+| Paragraph alignment | Full | Full | -- | Write | -- | Partial |
+| Paragraph spacing | Full | Full | -- | Write | -- | Partial |
+| Paragraph indent | Full | Full | -- | Write | -- | Partial |
+| Headings / styles | Full | Full | Full | Write | Markers (`#`) | Partial |
+| Tables (basic) | Full | Full | Full (GFM) | Write | Lossy (tab-separated) | Partial |
 | Tables (merged cells) | Full | Full | -- | Write | -- | -- |
 | Tables (nested) | Full | -- | -- | Write | -- | -- |
 | Lists (bullet) | Full | Full | Full | -- | Markers (`- `) | -- |
@@ -182,11 +185,11 @@ Detailed per-feature support across all document formats. Classification key:
 
 | Feature | DOCX | ODT | MD | PDF | TXT | DOC |
 |---|---|---|---|---|---|---|
-| Bold / italic | Full | Full | Full | Write | -- | -- |
-| Underline | Full | Full | -- | Write | -- | -- |
-| Font family | Full | Full | -- | Write | -- | -- |
-| Font size | Full | Full | -- | Write | -- | -- |
-| Font color | Full | Full | -- | Write | -- | -- |
+| Bold / italic | Full | Full | Full | Write | -- | Partial |
+| Underline | Full | Full | -- | Write | -- | Partial |
+| Font family | Full | Full | -- | Write | -- | Partial |
+| Font size | Full | Full | -- | Write | -- | Partial |
+| Font color | Full | Full | -- | Write | -- | Partial |
 | Strikethrough | Full | Full | Full | -- | -- | -- |
 | Highlight color | Full | Full | -- | -- | -- | -- |
 | Superscript / subscript | Full | Full | -- | -- | -- | -- |
@@ -204,7 +207,7 @@ Detailed per-feature support across all document formats. Classification key:
 
 | Feature | DOCX | ODT | MD | PDF | TXT | DOC |
 |---|---|---|---|---|---|---|
-| Metadata (title, author) | Full | Full | -- | Write | -- | -- |
+| Metadata (title, author) | Full | Full | -- | Write | -- | Partial |
 | Comments | Full | Full | -- | -- | -- | -- |
 | Tab stops (custom positions) | Full | Full | -- | -- | -- | -- |
 | Paragraph borders | Full | Full | -- | -- | -- | -- |
@@ -218,7 +221,7 @@ Detailed per-feature support across all document formats. Classification key:
 - **MD**: Markdown via pulldown-cmark. Supports CommonMark + GFM tables. Round-trip is partial -- Markdown-specific features (headings, bold, italic, strikethrough, links, lists, tables, code) round-trip well, but document-level features (metadata, page layout, images) are not representable in Markdown.
 - **PDF**: Export-only path: DocumentModel passes through the layout engine (`s1-layout`) before PDF generation. Supports font embedding with subsetting, table borders, image embedding, hyperlink annotations, and document outline (bookmarks).
 - **TXT**: Structural markers preserved: headings (`# `), bullet lists (`- `), numbered lists (`1. `), nested lists (indent), thematic breaks (`---`). Tables render as tab-separated columns. Encoding detection supports UTF-8, UTF-16 LE/BE (BOM), and Latin-1 fallback.
-- **DOC**: Legacy binary format read via heuristic text extraction (`s1-convert`). Only paragraph text and tabs are extracted. No formatting, tables, images, or other structures.
+- **DOC**: Legacy binary format read via FIB and piece table parsing (`s1-convert`). Supports character formatting (bold, italic, underline, font, size, color via CHPx/SPRM), paragraph formatting (alignment, spacing, indent via PAPx/SPRM), style sheet resolution (STSH), font table mapping (SttbfFfn), basic table detection (cell marks), and metadata extraction (SummaryInformation OLE2 stream). ANSI/Unicode piece handling.
 
 ## Documentation
 
@@ -227,6 +230,7 @@ Detailed per-feature support across all document formats. Classification key:
 - [Roadmap](docs/ROADMAP.md) -- Development phases and milestones
 - [API Design](docs/API_DESIGN.md) -- Public API surface and examples
 - [Dependencies](docs/DEPENDENCIES.md) -- External libraries and rationale
+- [WASM Design](docs/WASM_DESIGN.md) -- WASM bindings API, rendering modes, font handling
 
 ## Building
 
@@ -296,12 +300,15 @@ make demo-only
 
 Then open `http://localhost:8080` in your browser. The demo supports:
 
-- Opening documents (DOCX, ODT, TXT, Markdown) with drag-and-drop or file picker
-- HTML preview with formatting, tables, images, headers/footers
-- Export to DOCX, ODT, TXT, and Markdown
+- Opening documents (DOCX, ODT, TXT, Markdown, DOC) with drag-and-drop or file picker
+- **HTML tab** -- tree-based HTML rendering with formatting, tables, images, headers/footers
+- **Pages tab** -- paginated layout-engine view with page boundaries, shadows, and page navigation
+- Export to DOCX, ODT, TXT, Markdown, and PDF
+- PDF download via data URL
+- Track changes visualization (green underline / red strikethrough)
 - Format auto-detection from file contents
 
-**Note:** PDF export is not available in the WASM build (it requires the `pdf` feature which pulls in the layout engine and text shaping stack).
+See [WASM Design](docs/WASM_DESIGN.md) for the full WASM API reference, rendering modes, font handling, and limitations.
 
 ## Roadmap
 
@@ -312,6 +319,8 @@ Then open `http://localhost:8080` in your browser. The demo supports:
 | 3. Layout & Export | Complete | Text shaping, page layout, PDF export |
 | 4. Collaboration | Complete | Fugue CRDT, tree CRDT, awareness, serialization |
 | 5. Production | Complete | WASM, C FFI, hardening, docs, release |
+| 6. Fidelity | Complete | ODT improvements, Markdown, TXT markers, comments, headers/footers |
+| 7. Hardening | Complete | DOC binary parsing, paginated HTML, multi-section layout, track changes, CRDT hardening |
 
 See [ROADMAP.md](docs/ROADMAP.md) for detailed milestones.
 

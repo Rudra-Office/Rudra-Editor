@@ -11,9 +11,17 @@
 //! - DOC → DOCX/ODT (basic text extraction only)
 //! - DOCX ↔ ODT (full model round-trip)
 
+pub mod chpx;
 pub mod convert;
 pub mod doc_reader;
 pub mod error;
+pub mod fib;
+pub mod font_table;
+pub mod papx;
+pub mod piece_table;
+pub mod sprm;
+pub mod stylesheet;
+pub mod summary_info;
 
 pub use convert::{convert, convert_to_model, detect_format, SourceFormat, TargetFormat};
 pub use error::ConvertError;

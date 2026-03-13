@@ -21,7 +21,7 @@ pub fn write_styles_xml(doc: &DocumentModel) -> Option<String> {
 
     let mut xml = String::from(
         r#"<?xml version="1.0" encoding="UTF-8"?>
-<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0">"#,
+<office:document-styles xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0" xmlns:style="urn:oasis:names:tc:opendocument:xmlns:style:1.0" xmlns:fo="urn:oasis:names:tc:opendocument:xmlns:xsl-fo-compatible:1.0" xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" office:version="1.2">"#,
     );
 
     // Write named styles
@@ -190,8 +190,12 @@ fn write_hf_content(doc: &DocumentModel, hf_id: s1_model::NodeId, xml: &mut Stri
                         child.attributes.get(&AttributeKey::FieldType)
                     {
                         match ft {
-                            FieldType::PageNumber => xml.push_str("<text:page-number/>"),
-                            FieldType::PageCount => xml.push_str("<text:page-count/>"),
+                            FieldType::PageNumber => xml.push_str(
+                                r#"<text:page-number text:select-page="current"/>"#,
+                            ),
+                            FieldType::PageCount => xml.push_str(
+                                r#"<text:page-count text:select-page="current"/>"#,
+                            ),
                             _ => {}
                         }
                     }
@@ -343,7 +347,7 @@ mod tests {
         assert!(xml.contains("</style:header>"));
         assert!(xml.contains("<style:footer>"));
         assert!(xml.contains("Page "));
-        assert!(xml.contains("<text:page-number/>"));
+        assert!(xml.contains(r#"<text:page-number text:select-page="current"/>"#));
         assert!(xml.contains("</style:footer>"));
     }
 }

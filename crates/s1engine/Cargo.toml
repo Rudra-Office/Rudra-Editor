@@ -30,11 +30,12 @@ s1-text = { workspace = true, optional = true }
 default = ["docx", "odt", "txt", "md"]
 docx = ["dep:s1-format-docx"]
 odt = ["dep:s1-format-odt"]
-pdf = ["dep:s1-format-pdf", "dep:s1-layout", "dep:s1-text"]
+pdf = ["dep:s1-format-pdf", "layout"]
 txt = ["dep:s1-format-txt"]
 md = ["dep:s1-format-md"]
 convert = ["dep:s1-convert"]
 crdt = ["dep:s1-crdt"]
+layout = ["dep:s1-layout", "dep:s1-text"]
 doc-legacy = ["convert"]
 
 [dev-dependencies]

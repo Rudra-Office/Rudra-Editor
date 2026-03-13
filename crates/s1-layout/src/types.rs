@@ -70,6 +70,8 @@ pub enum LayoutBlockKind {
     Table {
         /// Table rows with cells.
         rows: Vec<LayoutTableRow>,
+        /// Whether this table is a continuation from a previous page.
+        is_continuation: bool,
     },
     /// An inline image.
     Image {
@@ -114,6 +116,16 @@ pub struct GlyphRun {
     pub width: f64,
     /// Hyperlink URL if this run is part of a hyperlink.
     pub hyperlink_url: Option<String>,
+    /// The original text content of this run (before shaping).
+    pub text: String,
+    /// Whether this run is bold.
+    pub bold: bool,
+    /// Whether this run is italic.
+    pub italic: bool,
+    /// Whether this run is underlined.
+    pub underline: bool,
+    /// Whether this run has strikethrough.
+    pub strikethrough: bool,
 }
 
 /// A table row in the layout.
@@ -123,6 +135,8 @@ pub struct LayoutTableRow {
     pub bounds: Rect,
     /// Cells in this row.
     pub cells: Vec<LayoutTableCell>,
+    /// Whether this row is a header row that repeats on continuation pages.
+    pub is_header_row: bool,
 }
 
 /// A table cell in the layout.

@@ -302,6 +302,10 @@ pub enum AttributeKey {
     TableBorders,
     CellMargins,
 
+    // Table row attributes
+    /// Marks a table row as a header row that should repeat on continuation pages.
+    TableHeaderRow,
+
     // Cell attributes
     CellWidth,
     VerticalAlign,
@@ -333,6 +337,18 @@ pub enum AttributeKey {
     CommentId,
     CommentAuthor,
     CommentDate,
+
+    // Revision / track changes attributes
+    /// Revision type: "Insert", "Delete", or "FormatChange".
+    RevisionType,
+    /// Revision author name.
+    RevisionAuthor,
+    /// Revision date/time string (ISO 8601).
+    RevisionDate,
+    /// Revision ID (unique within document).
+    RevisionId,
+    /// The original formatting before a format change (stored as string representation).
+    RevisionOriginalFormatting,
 }
 
 /// Typed attribute values.

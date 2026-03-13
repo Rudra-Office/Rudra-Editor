@@ -217,6 +217,63 @@ fn write_paragraph(
                         write_run(doc, run_id, xml);
                     }
                     xml.push_str("</w:hyperlink>");
+                } else if let Some(rev_type) =
+                    child.attributes.get_string(&AttributeKey::RevisionType)
+                {
+                    // Tracked change — group consecutive runs with same revision
+                    let rev_type = rev_type.to_string();
+                    if rev_type == "Insert" || rev_type == "Delete" {
+                        let rev_id = child.attributes.get_i64(&AttributeKey::RevisionId);
+                        let rev_author = child
+                            .attributes
+                            .get_string(&AttributeKey::RevisionAuthor)
+                            .map(|s| s.to_string());
+                        let rev_date = child
+                            .attributes
+                            .get_string(&AttributeKey::RevisionDate)
+                            .map(|s| s.to_string());
+
+                        // Find all consecutive runs with same revision info
+                        let rev_start = i;
+                        while i < children.len() {
+                            if let Some(n) = doc.node(children[i]) {
+                                if n.node_type == NodeType::Run
+                                    && n.attributes.get_string(&AttributeKey::RevisionType)
+                                        == Some(&rev_type)
+                                    && n.attributes.get_i64(&AttributeKey::RevisionId) == rev_id
+                                {
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+
+                        // Write tracked change wrapper
+                        let tag = if rev_type == "Insert" { "ins" } else { "del" };
+                        let mut wrapper = format!("<w:{tag}");
+                        if let Some(id) = rev_id {
+                            wrapper.push_str(&format!(r#" w:id="{id}""#));
+                        }
+                        if let Some(ref author) = rev_author {
+                            wrapper.push_str(&format!(r#" w:author="{}""#, escape_xml(author)));
+                        }
+                        if let Some(ref date) = rev_date {
+                            wrapper.push_str(&format!(r#" w:date="{}""#, escape_xml(date)));
+                        }
+                        wrapper.push('>');
+                        xml.push_str(&wrapper);
+
+                        for &run_id in &children[rev_start..i] {
+                            write_run(doc, run_id, xml);
+                        }
+
+                        xml.push_str(&format!("</w:{tag}>"));
+                    } else {
+                        // FormatChange — write_run handles rPrChange
+                        write_run(doc, child_id, xml);
+                        i += 1;
+                    }
                 } else {
                     write_run(doc, child_id, xml);
                     i += 1;
@@ -874,9 +931,11 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
         None => return,
     };
 
+    let is_delete = run.attributes.get_string(&AttributeKey::RevisionType) == Some("Delete");
+
     xml.push_str("<w:r>");
 
-    // Run properties
+    // Run properties (includes rPrChange for FormatChange revisions)
     let rpr = write_run_properties(run);
     if !rpr.is_empty() {
         xml.push_str("<w:rPr>");
@@ -884,7 +943,8 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
         xml.push_str("</w:rPr>");
     }
 
-    // Text children
+    // Text children — use <w:delText> for delete revisions
+    let text_tag = if is_delete { "delText" } else { "t" };
     let children: Vec<NodeId> = run.children.clone();
     for child_id in children {
         let child = match doc.node(child_id) {
@@ -894,9 +954,9 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
 
         if child.node_type == NodeType::Text {
             if let Some(text) = &child.text_content {
-                xml.push_str(r#"<w:t xml:space="preserve">"#);
+                xml.push_str(&format!(r#"<w:{text_tag} xml:space="preserve">"#));
                 xml.push_str(&escape_xml(text));
-                xml.push_str("</w:t>");
+                xml.push_str(&format!("</w:{text_tag}>"));
             }
         }
     }
@@ -999,6 +1059,22 @@ pub fn write_run_properties_from_attrs(attrs: &s1_model::AttributeMap) -> String
     // Language
     if let Some(lang) = attrs.get_string(&AttributeKey::Language) {
         rpr.push_str(&format!(r#"<w:lang w:val="{}"/>"#, escape_xml(lang)));
+    }
+
+    // Track changes — format change revision (rPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("FormatChange") {
+        let mut rpr_change = String::from("<w:rPrChange");
+        if let Some(id) = attrs.get_i64(&AttributeKey::RevisionId) {
+            rpr_change.push_str(&format!(r#" w:id="{id}""#));
+        }
+        if let Some(author) = attrs.get_string(&AttributeKey::RevisionAuthor) {
+            rpr_change.push_str(&format!(r#" w:author="{}""#, escape_xml(author)));
+        }
+        if let Some(date) = attrs.get_string(&AttributeKey::RevisionDate) {
+            rpr_change.push_str(&format!(r#" w:date="{}""#, escape_xml(date)));
+        }
+        rpr_change.push_str("><w:rPr/></w:rPrChange>");
+        rpr.push_str(&rpr_change);
     }
 
     rpr
@@ -1875,5 +1951,128 @@ mod tests {
         assert!(xml.contains("<w:sdt>"));
         assert!(xml.contains(r#"fldCharType="begin"#));
         assert!(xml.contains(r#"fldCharType="end"#));
+    }
+
+    // ─── Track changes writing tests ────────────────────────────────
+
+    #[test]
+    fn write_ins_basic() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Insert".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(1));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("John".into()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2024-01-01T12:00:00Z".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "inserted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:ins w:id="1""#));
+        assert!(xml.contains(r#"w:author="John""#));
+        assert!(xml.contains(r#"w:date="2024-01-01T12:00:00Z""#));
+        assert!(xml.contains("inserted"));
+        assert!(xml.contains("</w:ins>"));
+        // Should use <w:t>, not <w:delText>
+        assert!(xml.contains("<w:t xml:space=\"preserve\">inserted</w:t>"));
+    }
+
+    #[test]
+    fn write_del_basic() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Delete".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(2));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Jane".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "deleted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:del w:id="2""#));
+        assert!(xml.contains(r#"w:author="Jane""#));
+        assert!(xml.contains("</w:del>"));
+        // Should use <w:delText>, not <w:t>
+        assert!(xml.contains("<w:delText xml:space=\"preserve\">deleted</w:delText>"));
+        assert!(!xml.contains("<w:t xml:space=\"preserve\">deleted</w:t>"));
+    }
+
+    #[test]
+    fn write_rpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes
+            .set(AttributeKey::Bold, AttributeValue::Bool(true));
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("FormatChange".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(3));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".into()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2024-01-03T09:00:00Z".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "reformatted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:b/>"));
+        assert!(xml.contains(r#"<w:rPrChange w:id="3""#));
+        assert!(xml.contains(r#"w:author="Bob""#));
+        assert!(xml.contains(r#"w:date="2024-01-03T09:00:00Z""#));
+        assert!(xml.contains("</w:rPrChange>"));
+        // FormatChange should NOT wrap in <w:ins> or <w:del>
+        assert!(!xml.contains("<w:ins"));
+        assert!(!xml.contains("<w:del"));
     }
 }
