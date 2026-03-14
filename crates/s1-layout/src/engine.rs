@@ -643,7 +643,7 @@ impl<'a> LayoutEngine<'a> {
                 return Ok(LayoutBlock {
                     source_id: para_id,
                     bounds: Rect::new(x_start, y_pos, available_width, 0.0),
-                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None },
+                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: para_style.space_before, space_after: para_style.space_after, indent_left: para_style.indent_left, indent_right: para_style.indent_right, indent_first_line: para_style.indent_first_line, line_height: line_spacing_to_css(&para_style.line_spacing) },
                 });
             }
         };
@@ -782,6 +782,32 @@ impl<'a> LayoutEngine<'a> {
         // Compute total paragraph height
         let total_height: f64 = lines.iter().map(|l| l.height).sum();
 
+        // Check if paragraph has list info
+        let (list_marker, list_level) = if let Some(para_node) = self.doc.node(para_id) {
+            if let Some(s1_model::AttributeValue::ListInfo(li)) = para_node.attributes.get(&s1_model::AttributeKey::ListInfo) {
+                let marker = match li.num_format {
+                    s1_model::ListFormat::Bullet => "\u{2022}".to_string(),
+                    s1_model::ListFormat::Decimal => format!("{}.", li.start.unwrap_or(1)),
+                    s1_model::ListFormat::LowerAlpha => {
+                        let c = (b'a' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25)) as char;
+                        format!("{}.", c)
+                    }
+                    s1_model::ListFormat::UpperAlpha => {
+                        let c = (b'A' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25)) as char;
+                        format!("{}.", c)
+                    }
+                    s1_model::ListFormat::LowerRoman => format!("{}.", li.start.unwrap_or(1)),
+                    s1_model::ListFormat::UpperRoman => format!("{}.", li.start.unwrap_or(1)),
+                    _ => "\u{2022}".to_string(),
+                };
+                (Some(marker), li.level)
+            } else {
+                (None, 0)
+            }
+        } else {
+            (None, 0)
+        };
+
         Ok(LayoutBlock {
             source_id: para_id,
             bounds: Rect::new(x_start, y_pos, available_width, total_height),
@@ -796,6 +822,14 @@ impl<'a> LayoutEngine<'a> {
                 },
                 background_color: None,
                 border: None,
+                list_marker,
+                list_level,
+                space_before: para_style.space_before,
+                space_after: para_style.space_after,
+                indent_left: para_style.indent_left,
+                indent_right: para_style.indent_right,
+                indent_first_line: para_style.indent_first_line,
+                line_height: line_spacing_to_css(&para_style.line_spacing),
             },
         })
     }
@@ -1498,7 +1532,7 @@ impl<'a> LayoutEngine<'a> {
                 return Ok(LayoutBlock {
                     source_id: node_id,
                     bounds: Rect::new(hf_x, hf_y, hf_width, 0.0),
-                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None },
+                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
                 });
             }
         };
@@ -1549,7 +1583,7 @@ impl<'a> LayoutEngine<'a> {
             Ok(LayoutBlock {
                 source_id: node_id,
                 bounds: Rect::new(hf_x, hf_y, hf_width, total_height),
-                kind: LayoutBlockKind::Paragraph { lines, text_align: None, background_color: None, border: None },
+                kind: LayoutBlockKind::Paragraph { lines, text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
             })
         }
     }
@@ -1687,7 +1721,9 @@ impl<'a> LayoutEngine<'a> {
                 // Use the next page's content area for positioning.
                 let current_page = &mut pages[i];
                 if current_page.blocks.len() > 1 {
-                    let block = current_page.blocks.pop().unwrap();
+                    let Some(block) = current_page.blocks.pop() else {
+                        continue;
+                    };
                     let next_page = &mut pages[i + 1];
                     let content_y = next_page.content_area.y;
                     let mut moved_block = block;
@@ -2194,6 +2230,36 @@ fn greedy_breaks(items: &[BreakItem], available_width: f64, first_line_indent: f
 
     breaks.push(items.len());
     breaks
+}
+
+/// Convert a `LineSpacing` value to a CSS-compatible line-height multiplier.
+///
+/// Returns `None` for the default single spacing (browser default is close enough).
+fn line_spacing_to_css(spacing: &LineSpacing) -> Option<f64> {
+    match spacing {
+        LineSpacing::Single => None, // browser default ~1.2 is close; omit for cleaner output
+        LineSpacing::OnePointFive => Some(1.5),
+        LineSpacing::Double => Some(2.0),
+        LineSpacing::Multiple(m) => {
+            if (*m - 1.0).abs() < 0.001 {
+                None // essentially single
+            } else {
+                Some(*m)
+            }
+        }
+        LineSpacing::Exact(pts) => {
+            // For exact spacing, emit pt-based value; we store as negative to
+            // distinguish from multipliers, but CSS line-height in pt is fine.
+            // We'll emit this as a raw points value — html.rs will handle the unit.
+            Some(-(*pts)) // negative signals "pt" to the HTML emitter
+        }
+        LineSpacing::AtLeast(pts) => {
+            // AtLeast is a minimum; CSS doesn't have a direct equivalent, so
+            // we approximate by using the value as a minimum line-height.
+            Some(-(*pts)) // negative signals "pt" to the HTML emitter
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]

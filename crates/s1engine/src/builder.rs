@@ -29,6 +29,14 @@ use s1_model::{
 
 use crate::document::Document;
 
+/// Helper to get body_id and child count from a model.
+/// Returns `(body_id, child_count)` or `None` if body node is missing.
+fn body_info(model: &DocumentModel) -> Option<(NodeId, usize)> {
+    let body_id = model.body_id()?;
+    let child_count = model.node(body_id).map(|n| n.children.len()).unwrap_or(0);
+    Some((body_id, child_count))
+}
+
 /// Fluent builder for constructing documents.
 pub struct DocumentBuilder {
     model: DocumentModel,
@@ -65,8 +73,9 @@ impl DocumentBuilder {
             self.model.set_style(style);
         }
 
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let para_id = self.model.next_id();
         let mut para = Node::new(para_id, NodeType::Paragraph);
@@ -74,7 +83,7 @@ impl DocumentBuilder {
             s1_model::AttributeKey::StyleId,
             s1_model::AttributeValue::String(style_id.clone()),
         );
-        self.model.insert_node(body_id, child_count, para).unwrap();
+        let _ = self.model.insert_node(body_id, child_count, para);
 
         let run_id = self.model.next_id();
         let mut run = Node::new(run_id, NodeType::Run);
@@ -85,29 +94,28 @@ impl DocumentBuilder {
             _ => 12.0,
         };
         run.attributes = AttributeMap::new().bold(true).font_size(font_size);
-        self.model.insert_node(para_id, 0, run).unwrap();
+        let _ = self.model.insert_node(para_id, 0, run);
 
         let text_id = self.model.next_id();
-        self.model
-            .insert_node(run_id, 0, Node::text(text_id, text))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
 
     /// Add a paragraph built with a [`ParagraphBuilder`].
     pub fn paragraph(mut self, f: impl FnOnce(ParagraphBuilder) -> ParagraphBuilder) -> Self {
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let para_id = self.model.next_id();
-        self.model
-            .insert_node(
-                body_id,
-                child_count,
-                Node::new(para_id, NodeType::Paragraph),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            body_id,
+            child_count,
+            Node::new(para_id, NodeType::Paragraph),
+        );
 
         let pb = ParagraphBuilder {
             model: &mut self.model,
@@ -155,8 +163,9 @@ impl DocumentBuilder {
         format: ListFormat,
         num_id: u32,
     ) -> Self {
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let para_id = self.model.next_id();
         let mut para = Node::new(para_id, NodeType::Paragraph);
@@ -169,17 +178,17 @@ impl DocumentBuilder {
                 start: None,
             }),
         );
-        self.model.insert_node(body_id, child_count, para).unwrap();
+        let _ = self.model.insert_node(body_id, child_count, para);
 
         let run_id = self.model.next_id();
-        self.model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        self.model
-            .insert_node(run_id, 0, Node::text(text_id, text))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
@@ -270,8 +279,9 @@ impl DocumentBuilder {
     /// or export to have entries generated from document headings.
     pub fn table_of_contents(mut self, max_level: u8) -> Self {
         let max_level = max_level.clamp(1, 9);
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let toc_id = self.model.next_id();
         let mut toc = Node::new(toc_id, NodeType::TableOfContents);
@@ -279,15 +289,16 @@ impl DocumentBuilder {
             AttributeKey::TocMaxLevel,
             AttributeValue::Int(max_level as i64),
         );
-        self.model.insert_node(body_id, child_count, toc).unwrap();
+        let _ = self.model.insert_node(body_id, child_count, toc);
         self
     }
 
     /// Add a Table of Contents block with a custom title.
     pub fn table_of_contents_with_title(mut self, max_level: u8, title: &str) -> Self {
         let max_level = max_level.clamp(1, 9);
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let toc_id = self.model.next_id();
         let mut toc = Node::new(toc_id, NodeType::TableOfContents);
@@ -299,7 +310,7 @@ impl DocumentBuilder {
             AttributeKey::TocTitle,
             AttributeValue::String(title.to_string()),
         );
-        self.model.insert_node(body_id, child_count, toc).unwrap();
+        let _ = self.model.insert_node(body_id, child_count, toc);
         self
     }
 
@@ -318,13 +329,14 @@ impl DocumentBuilder {
     ///     .build();
     /// ```
     pub fn table(mut self, f: impl FnOnce(TableBuilder) -> TableBuilder) -> Self {
-        let body_id = self.model.body_id().unwrap();
-        let child_count = self.model.node(body_id).unwrap().children.len();
+        let Some((body_id, child_count)) = body_info(&self.model) else {
+            return self;
+        };
 
         let table_id = self.model.next_id();
-        self.model
-            .insert_node(body_id, child_count, Node::new(table_id, NodeType::Table))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(body_id, child_count, Node::new(table_id, NodeType::Table));
 
         let tb = TableBuilder {
             model: &mut self.model,
@@ -404,27 +416,31 @@ impl DocumentBuilder {
     /// Create a header or footer node with a text paragraph as a child of the document root.
     fn create_hf_node(&mut self, node_type: NodeType, text: &str) -> NodeId {
         let root_id = self.model.root_id();
-        let child_count = self.model.node(root_id).unwrap().children.len();
+        let child_count = self
+            .model
+            .node(root_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
 
         let hf_id = self.model.next_id();
-        self.model
-            .insert_node(root_id, child_count, Node::new(hf_id, node_type))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(root_id, child_count, Node::new(hf_id, node_type));
 
         let para_id = self.model.next_id();
-        self.model
-            .insert_node(hf_id, 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(hf_id, 0, Node::new(para_id, NodeType::Paragraph));
 
         let run_id = self.model.next_id();
-        self.model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        self.model
-            .insert_node(run_id, 0, Node::text(text_id, text))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(run_id, 0, Node::text(text_id, text));
 
         hf_id
     }
@@ -490,15 +506,17 @@ impl<'a> ParagraphBuilder<'a> {
 
     /// Add a line break within the paragraph.
     pub fn line_break(self) -> Self {
-        let child_count = self.model.node(self.para_id).unwrap().children.len();
+        let child_count = self
+            .model
+            .node(self.para_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let br_id = self.model.next_id();
-        self.model
-            .insert_node(
-                self.para_id,
-                child_count,
-                Node::new(br_id, NodeType::LineBreak),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            self.para_id,
+            child_count,
+            Node::new(br_id, NodeType::LineBreak),
+        );
         self
     }
 
@@ -528,48 +546,54 @@ impl<'a> ParagraphBuilder<'a> {
 
     /// Add a bookmark start marker.
     pub fn bookmark_start(self, name: &str) -> Self {
-        let child_count = self.model.node(self.para_id).unwrap().children.len();
+        let child_count = self
+            .model
+            .node(self.para_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let bk_id = self.model.next_id();
         let mut bk = Node::new(bk_id, NodeType::BookmarkStart);
         bk.attributes.set(
             AttributeKey::BookmarkName,
             AttributeValue::String(name.to_string()),
         );
-        self.model
-            .insert_node(self.para_id, child_count, bk)
-            .unwrap();
+        let _ = self.model.insert_node(self.para_id, child_count, bk);
         self
     }
 
     /// Add a bookmark end marker.
     pub fn bookmark_end(self) -> Self {
-        let child_count = self.model.node(self.para_id).unwrap().children.len();
+        let child_count = self
+            .model
+            .node(self.para_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let bk_id = self.model.next_id();
-        self.model
-            .insert_node(
-                self.para_id,
-                child_count,
-                Node::new(bk_id, NodeType::BookmarkEnd),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            self.para_id,
+            child_count,
+            Node::new(bk_id, NodeType::BookmarkEnd),
+        );
         self
     }
 
     /// Add a run with custom attributes.
     fn run_with_attrs(self, text: &str, attrs: AttributeMap) -> Self {
-        let child_count = self.model.node(self.para_id).unwrap().children.len();
+        let child_count = self
+            .model
+            .node(self.para_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
 
         let run_id = self.model.next_id();
         let mut run = Node::new(run_id, NodeType::Run);
         run.attributes = attrs;
-        self.model
-            .insert_node(self.para_id, child_count, run)
-            .unwrap();
+        let _ = self.model.insert_node(self.para_id, child_count, run);
 
         let text_id = self.model.next_id();
-        self.model
-            .insert_node(run_id, 0, Node::text(text_id, text))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
@@ -584,15 +608,17 @@ pub struct TableBuilder<'a> {
 impl<'a> TableBuilder<'a> {
     /// Add a row built with a [`RowBuilder`].
     pub fn row(self, f: impl FnOnce(RowBuilder) -> RowBuilder) -> Self {
-        let row_count = self.model.node(self.table_id).unwrap().children.len();
+        let row_count = self
+            .model
+            .node(self.table_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let row_id = self.model.next_id();
-        self.model
-            .insert_node(
-                self.table_id,
-                row_count,
-                Node::new(row_id, NodeType::TableRow),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            self.table_id,
+            row_count,
+            Node::new(row_id, NodeType::TableRow),
+        );
 
         let rb = RowBuilder {
             model: self.model,
@@ -625,31 +651,33 @@ pub struct RowBuilder<'a> {
 impl<'a> RowBuilder<'a> {
     /// Add a cell with plain text content.
     pub fn cell(self, text: &str) -> Self {
-        let cell_count = self.model.node(self.row_id).unwrap().children.len();
+        let cell_count = self
+            .model
+            .node(self.row_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let cell_id = self.model.next_id();
-        self.model
-            .insert_node(
-                self.row_id,
-                cell_count,
-                Node::new(cell_id, NodeType::TableCell),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            self.row_id,
+            cell_count,
+            Node::new(cell_id, NodeType::TableCell),
+        );
 
         // Add a paragraph with a text run inside the cell
         let para_id = self.model.next_id();
-        self.model
-            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph));
 
         let run_id = self.model.next_id();
-        self.model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        self.model
-            .insert_node(run_id, 0, Node::text(text_id, text))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(run_id, 0, Node::text(text_id, text));
 
         Self {
             model: self.model,
@@ -659,20 +687,22 @@ impl<'a> RowBuilder<'a> {
 
     /// Add a cell with rich content built via a closure.
     pub fn rich_cell(self, f: impl FnOnce(ParagraphBuilder) -> ParagraphBuilder) -> Self {
-        let cell_count = self.model.node(self.row_id).unwrap().children.len();
+        let cell_count = self
+            .model
+            .node(self.row_id)
+            .map(|n| n.children.len())
+            .unwrap_or(0);
         let cell_id = self.model.next_id();
-        self.model
-            .insert_node(
-                self.row_id,
-                cell_count,
-                Node::new(cell_id, NodeType::TableCell),
-            )
-            .unwrap();
+        let _ = self.model.insert_node(
+            self.row_id,
+            cell_count,
+            Node::new(cell_id, NodeType::TableCell),
+        );
 
         let para_id = self.model.next_id();
-        self.model
-            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        let _ = self
+            .model
+            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph));
 
         let pb = ParagraphBuilder {
             model: self.model,

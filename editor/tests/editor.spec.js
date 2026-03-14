@@ -157,7 +157,8 @@ test.describe('Text Formatting', () => {
     await newDoc(page);
     await page.locator('#docPage').focus();
     await page.keyboard.type('My Heading');
-    await page.locator('#blockType').selectOption('1');
+    await page.locator('#styleGalleryBtn').click();
+    await page.locator('.style-gallery-item[data-style="heading1"]').click();
     await page.waitForTimeout(300);
     const h1 = await page.locator('#docPage h1').count();
     expect(h1).toBeGreaterThanOrEqual(1);

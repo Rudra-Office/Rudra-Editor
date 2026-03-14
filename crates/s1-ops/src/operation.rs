@@ -364,7 +364,9 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
 
             // If this is an undo (previous is set), restore old values and remove added keys
             if let Some(prev) = previous {
-                let node = model.node_mut(*target_id).unwrap();
+                let node = model
+                    .node_mut(*target_id)
+                    .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
                 // First, remove all keys that were set in the original operation
                 for (key, _) in attributes.iter() {
                     node.attributes.remove(key);
@@ -388,7 +390,9 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
                 }
             }
 
-            let node = model.node_mut(*target_id).unwrap();
+            let node = model
+                .node_mut(*target_id)
+                .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
             node.attributes.merge(attributes);
 
             // Inverse: a SetAttributes with `previous` set for complete undo
@@ -414,7 +418,9 @@ pub fn apply(model: &mut DocumentModel, op: &Operation) -> Result<Operation, Ope
                 }
             }
 
-            let node = model.node_mut(*target_id).unwrap();
+            let node = model
+                .node_mut(*target_id)
+                .ok_or(OperationError::Model(ModelError::NodeNotFound(*target_id)))?;
             for key in keys {
                 node.attributes.remove(key);
             }

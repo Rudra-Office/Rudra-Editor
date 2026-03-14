@@ -112,7 +112,9 @@ fn decode(input: &[u8]) -> Result<(String, DetectedEncoding), TxtError> {
 /// - `---` (exactly) → page break node
 fn text_to_document(text: &str) -> DocumentModel {
     let mut doc = DocumentModel::new();
-    let body_id = doc.body_id().unwrap();
+    let Some(body_id) = doc.body_id() else {
+        return doc;
+    };
 
     // Normalize line endings: \r\n → \n, then \r → \n
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
@@ -127,7 +129,7 @@ fn text_to_document(text: &str) -> DocumentModel {
             let mut para = Node::new(para_id, NodeType::Paragraph);
             para.attributes
                 .set(AttributeKey::PageBreakBefore, AttributeValue::Bool(true));
-            doc.insert_node(body_id, child_index, para).unwrap();
+            let _ = doc.insert_node(body_id, child_index, para);
             child_index += 1;
             continue;
         }
@@ -159,17 +161,15 @@ fn text_to_document(text: &str) -> DocumentModel {
             line
         };
 
-        doc.insert_node(body_id, child_index, para).unwrap();
+        let _ = doc.insert_node(body_id, child_index, para);
 
         // Only add Run + Text for non-empty content
         if !content.is_empty() {
             let run_id = doc.next_id();
-            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
-                .unwrap();
+            let _ = doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
             let text_id = doc.next_id();
-            doc.insert_node(run_id, 0, Node::text(text_id, content))
-                .unwrap();
+            let _ = doc.insert_node(run_id, 0, Node::text(text_id, content));
         }
 
         child_index += 1;

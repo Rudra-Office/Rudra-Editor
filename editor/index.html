@@ -48,6 +48,12 @@
         </button>
       </div>
     </div>
+    <button class="menu-btn" id="btnHistory" title="Version History">History</button>
+    <button class="menu-btn" id="btnShare" title="Start a collaboration session">Share</button>
+    <div class="collab-status" id="collabStatus" style="display:none">
+      <div class="collab-indicator" id="collabIndicator" title="Connection status"></div>
+      <span class="collab-peer-count" id="collabPeerCount"></span>
+    </div>
     <div class="sep"></div>
     <div class="wasm-status">
       <div class="wasm-dot" id="wasmDot"></div>
@@ -72,14 +78,44 @@
     </button>
     <div class="tb-sep" role="separator"></div>
 
-    <!-- Block type -->
-    <select class="tb-select" id="blockType" title="Paragraph style" aria-label="Paragraph style" style="min-width:90px">
-      <option value="0">Normal</option>
-      <option value="1">Heading 1</option>
-      <option value="2">Heading 2</option>
-      <option value="3">Heading 3</option>
-      <option value="4">Heading 4</option>
-    </select>
+    <!-- Style Gallery -->
+    <div class="style-gallery" id="styleGallery">
+      <button class="style-gallery-btn" id="styleGalleryBtn" title="Paragraph style" aria-label="Paragraph style" aria-haspopup="true" aria-expanded="false">
+        <span class="style-gallery-label" id="styleGalleryLabel">Normal</span>
+        <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M7 10l5 5 5-5z"/></svg>
+      </button>
+      <div class="style-gallery-panel" id="styleGalleryPanel" role="listbox" aria-label="Paragraph styles">
+        <div class="style-gallery-item active" role="option" data-style="normal" aria-selected="true">
+          <span class="style-preview style-preview-normal">Normal</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="title" aria-selected="false">
+          <span class="style-preview style-preview-title">Title</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="subtitle" aria-selected="false">
+          <span class="style-preview style-preview-subtitle">Subtitle</span>
+        </div>
+        <div class="style-gallery-sep"></div>
+        <div class="style-gallery-item" role="option" data-style="heading1" aria-selected="false">
+          <span class="style-preview style-preview-h1">Heading 1</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="heading2" aria-selected="false">
+          <span class="style-preview style-preview-h2">Heading 2</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="heading3" aria-selected="false">
+          <span class="style-preview style-preview-h3">Heading 3</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="heading4" aria-selected="false">
+          <span class="style-preview style-preview-h4">Heading 4</span>
+        </div>
+        <div class="style-gallery-sep"></div>
+        <div class="style-gallery-item" role="option" data-style="quote" aria-selected="false">
+          <span class="style-preview style-preview-quote">Quote</span>
+        </div>
+        <div class="style-gallery-item" role="option" data-style="code" aria-selected="false">
+          <span class="style-preview style-preview-code">Code</span>
+        </div>
+      </div>
+    </div>
     <div class="tb-sep" role="separator"></div>
 
     <!-- Font -->
@@ -232,6 +268,11 @@
     <button class="tb-btn" id="btnFind" title="Find & Replace (Ctrl+F)" aria-label="Find and replace">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
     </button>
+
+    <!-- Spell Check -->
+    <button class="tb-btn active" id="btnSpellCheck" title="Spell check" aria-label="Toggle spell check" aria-pressed="true">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.45 16h2.09L9.43 3H7.57L2.46 16h2.09l1.12-3h5.64l1.14 3zm-6.02-5L8.5 5.48 10.57 11H6.43zm15.16.59l-8.09 8.09L9.83 16l-1.41 1.41 5.09 5.09L23 13l-1.41-1.41z"/></svg>
+    </button>
   </div>
 
   <!-- Tab Bar -->
@@ -263,7 +304,8 @@
 
   <!-- Editor -->
   <div class="canvas" id="editorCanvas">
-    <div class="doc-page" id="docPage" contenteditable="true" spellcheck="true" role="textbox" aria-multiline="true" aria-label="Document content"></div>
+    <div class="ruler" id="ruler" aria-hidden="true"></div>
+    <div class="doc-page" id="docPage" contenteditable="true" spellcheck="true" lang="en" role="textbox" aria-multiline="true" aria-label="Document content"></div>
     <div class="find-bar" id="findBar">
       <div class="find-row">
         <input class="find-input" id="findInput" placeholder="Find in document..." autocomplete="off">
@@ -294,6 +336,15 @@
     <div class="comments-list" id="commentsList"></div>
   </div>
 
+  <!-- Version History Sidebar -->
+  <div class="history-panel" id="historyPanel" role="complementary" aria-label="Version History">
+    <div class="history-header">
+      <h3>Version History</h3>
+      <button class="history-close" id="historyClose" aria-label="Close history panel">&times;</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+  </div>
+
   <!-- Status Bar -->
   <div class="statusbar" id="statusbar" role="status" aria-live="polite">
     <span id="statusInfo">Ready</span>
@@ -320,6 +371,43 @@
   </div>
 </div>
 
+<!-- Comment Insert Modal -->
+<div class="modal-overlay" id="commentModal">
+  <div class="modal">
+    <h3>Add Comment</h3>
+    <label>Comment: <textarea id="commentText" rows="3" placeholder="Write your comment..." style="width:100%;resize:vertical;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></textarea></label>
+    <label>Author: <input type="text" id="commentAuthor" value="User" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
+    <div class="modal-actions">
+      <button id="commentCancelBtn">Cancel</button>
+      <button class="primary" id="commentInsertBtn">Add Comment</button>
+    </div>
+  </div>
+</div>
+
+<!-- Hyperlink Insert Modal -->
+<div class="modal-overlay" id="linkModal">
+  <div class="modal">
+    <h3>Insert Hyperlink</h3>
+    <label>URL: <input type="url" id="linkUrl" placeholder="https://example.com" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
+    <div class="modal-actions">
+      <button id="linkCancelBtn">Cancel</button>
+      <button class="primary" id="linkInsertBtn">Insert Link</button>
+    </div>
+  </div>
+</div>
+
+<!-- Image Alt Text Modal -->
+<div class="modal-overlay" id="altTextModal">
+  <div class="modal">
+    <h3>Image Alt Text</h3>
+    <label>Description: <input type="text" id="altTextInput" placeholder="Describe this image..." style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
+    <div class="modal-actions">
+      <button id="altTextCancelBtn">Cancel</button>
+      <button class="primary" id="altTextSaveBtn">Save</button>
+    </div>
+  </div>
+</div>
+
 <!-- Table Context Menu -->
 <div class="ctx-menu" id="tableContextMenu">
   <button class="ctx-item" id="cmInsertRowAbove">Insert Row Above</button>
@@ -330,8 +418,24 @@
   <button class="ctx-item" id="cmInsertColRight">Insert Column Right</button>
   <button class="ctx-item" id="cmDeleteCol">Delete Column</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="cmCellBg">Cell Background...</button>
+  <button class="ctx-item" id="cmCellBg">Cell Background...
+    <input type="color" id="cmCellBgPicker" value="#ffffff" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
+  </button>
 </div>
+
+<!-- Image Context Menu -->
+<div class="ctx-menu" id="imageContextMenu">
+  <button class="ctx-item" id="imAlignLeft">Align Left</button>
+  <button class="ctx-item" id="imAlignCenter">Align Center</button>
+  <button class="ctx-item" id="imAlignRight">Align Right</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="imAltText">Alt Text...</button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="imDelete" style="color:var(--danger)">Delete Image</button>
+</div>
+
+<!-- Slash Command Menu -->
+<div class="slash-menu" id="slashMenu" style="display:none" role="listbox" aria-label="Slash commands"></div>
 
 <script type="module" src="/src/main.js"></script>
 </body>

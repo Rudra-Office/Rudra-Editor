@@ -133,7 +133,9 @@ fn write_body(
                         && list_item_open.last().copied().unwrap_or(false)
                     {
                         xml.push_str("</text:list-item>");
-                        *list_item_open.last_mut().unwrap() = false;
+                        if let Some(last) = list_item_open.last_mut() {
+                            *last = false;
+                        }
                     }
 
                     // If we need to go deeper, open nested lists
@@ -148,7 +150,9 @@ fn write_body(
 
                     // Open a new list-item at the target depth
                     xml.push_str("<text:list-item>");
-                    *list_item_open.last_mut().unwrap() = true;
+                    if let Some(last) = list_item_open.last_mut() {
+                        *last = true;
+                    }
 
                     write_paragraph(doc, child_id, &mut xml, auto_styles, counter, images);
                     // Don't close list-item yet — next item might nest inside it

@@ -7,6 +7,9 @@ import { initInput } from './input.js';
 import { initFileHandlers, newDocument, openFile, setDetectFormat, checkAutoRecover } from './file.js';
 import { initToolbar } from './toolbar-handlers.js';
 import { initFind } from './find.js';
+import { renderRuler } from './ruler.js';
+import { checkAutoJoin } from './collab.js';
+import { initImageContextMenu } from './images.js';
 
 async function boot() {
   const dot = $('wasmDot');
@@ -28,9 +31,14 @@ async function boot() {
     initFileHandlers();
     initToolbar();
     initFind();
+    initImageContextMenu();
+    renderRuler();
 
     // Expose state for testing
     window.__folio_state = state;
+
+    // Check for collaboration auto-join (?room=... URL param)
+    checkAutoJoin();
 
     // Check for auto-recovered document
     try {

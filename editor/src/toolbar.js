@@ -3,6 +3,23 @@ import { state, $ } from './state.js';
 import { getSelectionInfo, saveSelection, setCursorAtOffset, setSelectionRange } from './selection.js';
 import { renderNodeById, syncParagraphText } from './render.js';
 import { updatePageBreaks } from './pagination.js';
+import { broadcastOp } from './collab.js';
+
+// Detect which style best matches the current paragraph formatting
+function detectCurrentStyle(fmt) {
+  const level = parseInt(fmt.headingLevel || '0') || 0;
+  if (level === 1) return 'heading1';
+  if (level === 2) return 'heading2';
+  if (level === 3) return 'heading3';
+  if (level === 4) return 'heading4';
+  const fam = fmt.fontFamily || '';
+  if (fam.toLowerCase().includes('courier') || fam.toLowerCase().includes('mono')) return 'code';
+  const size = parseFloat(fmt.fontSize || '0');
+  if (size >= 24) return 'title';
+  if (size >= 14 && size <= 16 && fmt.color === '666666') return 'subtitle';
+  if ((fmt.italic === true || fmt.italic === 'true') && fmt.color === '666666') return 'quote';
+  return 'normal';
+}
 
 let _toolbarRAF = 0;
 export function updateToolbarState() {
@@ -43,7 +60,22 @@ function _updateToolbarStateImpl() {
     else if (!fmt.fontFamily) $('fontFamily').value = '';
     if (fmt.color && fmt.color !== 'mixed') $('colorSwatch').style.background = '#' + fmt.color;
     const paraFmt = info.collapsed ? fmt : JSON.parse(doc.get_formatting_json(info.startNodeId));
-    $('blockType').value = paraFmt.headingLevel || 0;
+    // Update style gallery
+    const styleName = detectCurrentStyle(paraFmt);
+    const STYLE_LABELS = {
+      normal: 'Normal', title: 'Title', subtitle: 'Subtitle',
+      heading1: 'Heading 1', heading2: 'Heading 2', heading3: 'Heading 3', heading4: 'Heading 4',
+      quote: 'Quote', code: 'Code',
+    };
+    $('styleGalleryLabel').textContent = STYLE_LABELS[styleName] || 'Normal';
+    const panel = $('styleGalleryPanel');
+    if (panel) {
+      panel.querySelectorAll('.style-gallery-item').forEach(item => {
+        const isActive = item.dataset.style === styleName;
+        item.classList.toggle('active', isActive);
+        item.setAttribute('aria-selected', String(isActive));
+      });
+    }
     setToggle('btnAlignL', !paraFmt.alignment || paraFmt.alignment === 'left');
     setToggle('btnAlignC', paraFmt.alignment === 'center');
     setToggle('btnAlignR', paraFmt.alignment === 'right');
@@ -75,11 +107,16 @@ export function applyFormat(key, value) {
   if (endEl !== startEl) syncParagraphText(endEl);
 
   try {
+    let sn, so, en, eo;
     if (info.collapsed) {
       const textLen = Array.from(startEl.textContent || '').length;
-      if (textLen > 0) doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, key, value);
+      if (textLen > 0) {
+        doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, key, value);
+        sn = info.startNodeId; so = 0; en = info.startNodeId; eo = textLen;
+      }
     } else {
       doc.format_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset, key, value);
+      sn = info.startNodeId; so = info.startOffset; en = info.endNodeId; eo = info.endOffset;
     }
 
     const newStartEl = renderNodeById(info.startNodeId);
@@ -95,6 +132,7 @@ export function applyFormat(key, value) {
     updatePageBreaks();
     updateToolbarState();
     updateUndoRedo();
+    if (sn) broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key, value });
   } catch (e) { console.error('format error:', e); }
 }
 

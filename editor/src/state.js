@@ -26,6 +26,21 @@ export const state = {
   // Autosave
   autosaveTimer: null,
   dirty: false,
+  // Version history
+  versionTimer: null,
+  // Virtual scrolling
+  virtualScroll: null,
+  // Slash command menu
+  slashMenuOpen: false,
+  slashMenuIndex: 0,
+  slashQuery: '',
+  // Comment threading replies (in-memory)
+  commentReplies: [],
+  // Collaboration
+  collabDoc: null,
+  // Header/footer HTML extracted from WASM to_html()
+  docHeaderHtml: '',
+  docFooterHtml: '',
 };
 
 export const $ = (id) => document.getElementById(id);

@@ -362,7 +362,9 @@ fn parse_format(s: &str) -> Option<s1engine::Format> {
 /// Set error_out if it's non-null.
 unsafe fn set_error(error_out: *mut *mut S1Error, msg: &str) {
     if !error_out.is_null() {
-        let cstr = CString::new(msg).unwrap_or_else(|_| CString::new("unknown error").unwrap());
+        let cstr = CString::new(msg)
+            .or_else(|_| CString::new("unknown error"))
+            .unwrap_or_default();
         unsafe {
             *error_out = Box::into_raw(Box::new(S1Error { message: cstr }));
         }

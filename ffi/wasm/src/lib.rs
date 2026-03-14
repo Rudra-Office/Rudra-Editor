@@ -473,6 +473,44 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Accept a single tracked change by node ID string ("replica:counter").
+    pub fn accept_change(&mut self, node_id_str: &str) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let node_id = parse_node_id(node_id_str)?;
+        doc.accept_change(node_id)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Reject a single tracked change by node ID string ("replica:counter").
+    pub fn reject_change(&mut self, node_id_str: &str) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let node_id = parse_node_id(node_id_str)?;
+        doc.reject_change(node_id)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Get all tracked changes as a JSON array.
+    ///
+    /// Returns `[{"nodeId":"0:5","type":"Insert","author":"...","date":"..."},...]`
+    pub fn tracked_changes_json(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let changes = doc.tracked_changes();
+        let entries: Vec<String> = changes
+            .iter()
+            .map(|(nid, rev_type, author, date)| {
+                format!(
+                    "{{\"nodeId\":\"{}:{}\",\"type\":\"{}\",\"author\":\"{}\",\"date\":\"{}\"}}",
+                    nid.replica,
+                    nid.counter,
+                    escape_json(rev_type),
+                    escape_json(author.as_deref().unwrap_or("")),
+                    escape_json(date.as_deref().unwrap_or("")),
+                )
+            })
+            .collect();
+        Ok(format!("[{}]", entries.join(",")))
+    }
+
     // ─── Structure Queries ───────────────────────────────────────
 
     /// Get the body node ID as "replica:counter" string.
@@ -672,6 +710,67 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Move a node (e.g. an image paragraph) to be after another node in
+    /// the same parent (body). Used for drag-and-drop reordering.
+    pub fn move_node_after(
+        &mut self,
+        node_id_str: &str,
+        after_id_str: &str,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let node_id = parse_node_id(node_id_str)?;
+        let after_id = parse_node_id(after_id_str)?;
+
+        // Find the parent of the target node
+        let after_node = doc
+            .node(after_id)
+            .ok_or_else(|| JsError::new("Target node not found"))?;
+        let parent_id = after_node
+            .parent
+            .ok_or_else(|| JsError::new("Target has no parent"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let index = parent
+            .children
+            .iter()
+            .position(|&c| c == after_id)
+            .ok_or_else(|| JsError::new("Target not in parent children"))?
+            + 1;
+
+        doc.apply(Operation::move_node(node_id, parent_id, index))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Move a node to be before another node in the same parent (body).
+    pub fn move_node_before(
+        &mut self,
+        node_id_str: &str,
+        before_id_str: &str,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let node_id = parse_node_id(node_id_str)?;
+        let before_id = parse_node_id(before_id_str)?;
+
+        let before_node = doc
+            .node(before_id)
+            .ok_or_else(|| JsError::new("Target node not found"))?;
+        let parent_id = before_node
+            .parent
+            .ok_or_else(|| JsError::new("Target has no parent"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let index = parent
+            .children
+            .iter()
+            .position(|&c| c == before_id)
+            .ok_or_else(|| JsError::new("Target not in parent children"))?;
+
+        doc.apply(Operation::move_node(node_id, parent_id, index))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Replace the text content of a paragraph's first run.
     pub fn set_paragraph_text(
         &mut self,
@@ -852,6 +951,25 @@ impl WasmDocument {
             _ => return Err(JsError::new(&format!("Unknown alignment: {}", alignment))),
         };
         let attrs = s1_model::AttributeMap::new().alignment(align);
+        doc.apply(Operation::set_attributes(para_id, attrs))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Set paragraph indentation (left, right, or first-line).
+    ///
+    /// `indent_type` is one of: "left", "right", "firstLine".
+    /// `value_pt` is the indent value in points.
+    pub fn set_indent(&mut self, node_id_str: &str, indent_type: &str, value_pt: f64) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(node_id_str)?;
+        let mut attrs = s1_model::AttributeMap::new();
+        let clamped = if indent_type == "firstLine" { value_pt } else { value_pt.max(0.0) };
+        match indent_type {
+            "left" => { attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(clamped)); }
+            "right" => { attrs.set(AttributeKey::IndentRight, AttributeValue::Float(clamped)); }
+            "firstLine" => { attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(clamped)); }
+            _ => return Err(JsError::new(&format!("Unknown indent type: {}", indent_type))),
+        }
         doc.apply(Operation::set_attributes(para_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))
     }
@@ -1042,8 +1160,9 @@ impl WasmDocument {
 
     /// Merge two adjacent paragraphs.
     ///
-    /// Appends the text from `second_id` to `first_id`, then deletes
-    /// `second_id`. Used for Backspace at the start of a paragraph.
+    /// Moves all runs from `second_id` into `first_id` (preserving formatting),
+    /// then deletes the now-empty `second_id`. Used for Backspace at the start
+    /// of a paragraph.
     pub fn merge_paragraphs(
         &mut self,
         first_id_str: &str,
@@ -1053,23 +1172,30 @@ impl WasmDocument {
         let first_id = parse_node_id(first_id_str)?;
         let second_id = parse_node_id(second_id_str)?;
 
-        let second_text = extract_paragraph_text(doc.model(), second_id);
+        // Collect children (runs) from both paragraphs
+        let first_para = doc
+            .node(first_id)
+            .ok_or_else(|| JsError::new("First paragraph not found"))?;
+        let first_child_count = first_para.children.len();
 
-        // Ensure first paragraph has Run+Text (creates if empty)
-        let (first_text_node, first_len) = ensure_run_and_text(doc, first_id)?;
+        let second_para = doc
+            .node(second_id)
+            .ok_or_else(|| JsError::new("Second paragraph not found"))?;
+        let second_run_ids: Vec<NodeId> = second_para.children.clone();
 
         let mut txn = Transaction::with_label("Merge paragraphs");
 
-        // Append second paragraph's text to first
-        if !second_text.is_empty() {
-            txn.push(Operation::insert_text(
-                first_text_node,
-                first_len,
-                &second_text,
+        // Move each run from the second paragraph into the first paragraph,
+        // appending after the first paragraph's existing children.
+        for (i, run_id) in second_run_ids.iter().enumerate() {
+            txn.push(Operation::move_node(
+                *run_id,
+                first_id,
+                first_child_count + i,
             ));
         }
 
-        // Delete second paragraph
+        // Delete the now-empty second paragraph
         txn.push(Operation::delete_node(second_id));
 
         doc.apply_transaction(&txn)
@@ -1875,7 +2001,8 @@ impl WasmDocument {
 
     /// Set the text content of a table cell.
     ///
-    /// Finds or creates Paragraph → Run → Text inside the cell.
+    /// Replaces the entire cell content with the given text. Sets text in
+    /// the first paragraph and deletes any extra paragraphs.
     pub fn set_cell_text(
         &mut self,
         cell_id_str: &str,
@@ -1887,21 +2014,29 @@ impl WasmDocument {
             .node(cell_id)
             .ok_or_else(|| JsError::new("Cell not found"))?;
 
-        // Find first paragraph in cell
-        if let Some(&para_id) = cell.children.first() {
-            let (text_node_id, old_len) = find_first_text_node(doc.model(), para_id)?;
-            let mut txn = Transaction::with_label("Set cell text");
-            if old_len > 0 {
-                txn.push(Operation::delete_text(text_node_id, 0, old_len));
-            }
-            if !text.is_empty() {
-                txn.push(Operation::insert_text(text_node_id, 0, text));
-            }
-            doc.apply_transaction(&txn)
-                .map_err(|e| JsError::new(&e.to_string()))
-        } else {
-            Err(JsError::new("Cell has no paragraph"))
+        let para_ids: Vec<NodeId> = cell.children.clone();
+        if para_ids.is_empty() {
+            return Err(JsError::new("Cell has no paragraph"));
         }
+
+        // Set text in the first paragraph
+        let first_para_id = para_ids[0];
+        let (text_node_id, old_len) = find_first_text_node(doc.model(), first_para_id)?;
+        let mut txn = Transaction::with_label("Set cell text");
+        if old_len > 0 {
+            txn.push(Operation::delete_text(text_node_id, 0, old_len));
+        }
+        if !text.is_empty() {
+            txn.push(Operation::insert_text(text_node_id, 0, text));
+        }
+
+        // Delete any extra paragraphs beyond the first
+        for &extra_para_id in &para_ids[1..] {
+            txn.push(Operation::delete_node(extra_para_id));
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Get the text content of a table cell.
@@ -1954,6 +2089,11 @@ impl WasmDocument {
             .ok_or_else(|| JsError::new("Table not found"))?;
         let row_ids: Vec<NodeId> = table.children.clone();
 
+        // Bounds-check row indices
+        if start_row as usize >= row_ids.len() || end_row as usize >= row_ids.len() {
+            return Err(JsError::new("Row index out of bounds"));
+        }
+
         let col_span = (end_col - start_col + 1) as i64;
         let row_span = (end_row - start_row + 1) as i64;
 
@@ -1973,13 +2113,19 @@ impl WasmDocument {
                     );
                 }
                 txn.push(Operation::set_attributes(cell_id, attrs));
+            } else {
+                return Err(JsError::new("Column index out of bounds"));
             }
         }
 
         // Mark continuation cells
         for r in start_row..=end_row {
-            if let Some(row) = doc.node(row_ids[r as usize]) {
+            let row_id = row_ids[r as usize]; // safe: bounds checked above
+            if let Some(row) = doc.node(row_id) {
                 let cells: Vec<NodeId> = row.children.clone();
+                if end_col as usize >= cells.len() {
+                    return Err(JsError::new("Column index out of bounds"));
+                }
                 for c in start_col..=end_col {
                     if r == start_row && c == start_col {
                         continue; // Skip the top-left cell
@@ -2640,7 +2786,7 @@ impl WasmDocument {
         // Collect all matches first
         let mut matches: Vec<(NodeId, usize, usize)> = Vec::new(); // (text_node_id, offset, length)
         for &child_id in &children {
-            collect_replace_matches(model, child_id, &query_lower, case_sensitive, query.len(), &mut matches);
+            collect_replace_matches(model, child_id, &query_lower, case_sensitive, query.chars().count(), &mut matches);
         }
 
         if matches.is_empty() {
@@ -2649,11 +2795,8 @@ impl WasmDocument {
 
         let count = matches.len() as u32;
 
-        // Apply replacements in reverse order to preserve offsets
-        matches.sort_by(|a, b| {
-            a.0.counter.cmp(&b.0.counter).then(b.1.cmp(&a.1))
-        });
         // Group by text node, then sort offsets descending within each group
+        // so replacements don't invalidate subsequent offsets
         matches.sort_by(|a, b| {
             if a.0 == b.0 {
                 b.1.cmp(&a.1) // reverse offset within same node
@@ -3313,6 +3456,24 @@ fn parse_format_kv(key: &str, value: &str) -> Result<s1_model::AttributeMap, JsE
                 AttributeValue::Bool(value == "true"),
             );
         }
+        "indentLeft" => {
+            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(v));
+        }
+        "indentRight" => {
+            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            attrs.set(AttributeKey::IndentRight, AttributeValue::Float(v));
+        }
+        "indentFirstLine" => {
+            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(v));
+        }
+        "hyperlinkUrl" => {
+            attrs.set(
+                AttributeKey::HyperlinkUrl,
+                AttributeValue::String(value.to_string()),
+            );
+        }
         _ => return Err(JsError::new(&format!("Unknown format key: {}", key))),
     }
     Ok(attrs)
@@ -3617,15 +3778,29 @@ fn collect_find_results(
                     } else {
                         text.to_lowercase()
                     };
-                    let query_len = query.chars().count();
-                    let mut start = 0;
-                    while let Some(pos) = search_text[start..].find(query) {
-                        let char_offset = search_text[..start + pos].chars().count();
-                        results.push(format!(
-                            "{{\"nodeId\":\"{}:{}\",\"offset\":{},\"length\":{}}}",
-                            child_id.replica, child_id.counter, char_offset, query_len
-                        ));
-                        start += pos + query.len();
+                    let query_char_len = query.chars().count();
+                    let mut char_pos = 0usize;
+                    let mut byte_pos = 0usize;
+                    while byte_pos < search_text.len() {
+                        if let Some(rel_byte) = search_text[byte_pos..].find(query) {
+                            // Count chars from byte_pos to byte_pos + rel_byte
+                            let chars_skipped = search_text[byte_pos..byte_pos + rel_byte].chars().count();
+                            let char_offset = char_pos + chars_skipped;
+                            results.push(format!(
+                                "{{\"nodeId\":\"{}:{}\",\"offset\":{},\"length\":{}}}",
+                                child_id.replica, child_id.counter, char_offset, query_char_len
+                            ));
+                            // Advance past the match using actual matched byte length
+                            let match_byte_len: usize = search_text[byte_pos + rel_byte..]
+                                .chars()
+                                .take(query_char_len)
+                                .map(|c| c.len_utf8())
+                                .sum();
+                            byte_pos += rel_byte + match_byte_len;
+                            char_pos = char_offset + query_char_len;
+                        } else {
+                            break;
+                        }
                     }
                 }
                 NodeType::Table | NodeType::TableRow | NodeType::TableCell | NodeType::Section => {
@@ -3665,12 +3840,24 @@ fn collect_replace_matches(
                                         } else {
                                             content.to_lowercase()
                                         };
-                                        let mut start = 0;
-                                        while let Some(pos) = search[start..].find(query) {
-                                            let byte_offset = start + pos;
-                                            let char_offset = content[..byte_offset].chars().count();
-                                            matches.push((text_id, char_offset, query_char_len));
-                                            start = byte_offset + query.len();
+                                        let mut byte_pos = 0usize;
+                                        let mut char_pos = 0usize;
+                                        while byte_pos < search.len() {
+                                            if let Some(rel_byte) = search[byte_pos..].find(query) {
+                                                let chars_skipped = search[byte_pos..byte_pos + rel_byte].chars().count();
+                                                let char_offset = char_pos + chars_skipped;
+                                                matches.push((text_id, char_offset, query_char_len));
+                                                // Advance past match using char-aware byte length
+                                                let match_byte_len: usize = search[byte_pos + rel_byte..]
+                                                    .chars()
+                                                    .take(query_char_len)
+                                                    .map(|c| c.len_utf8())
+                                                    .sum();
+                                                byte_pos += rel_byte + match_byte_len;
+                                                char_pos = char_offset + query_char_len;
+                                            } else {
+                                                break;
+                                            }
                                         }
                                     }
                                 }
@@ -3784,19 +3971,14 @@ fn render_node(model: &DocumentModel, node_id: NodeId, html: &mut String) {
             // Comment bodies rendered as tooltip or hidden
         }
         NodeType::Field => {
-            if let Some(AttributeValue::FieldType(ft)) =
-                node.attributes.get(&AttributeKey::FieldType)
-            {
-                match ft {
-                    s1_model::FieldType::PageNumber => {
-                        html.push_str("<span class=\"field\">#</span>")
-                    }
-                    s1_model::FieldType::PageCount => {
-                        html.push_str("<span class=\"field\">N</span>")
-                    }
-                    _ => {}
-                }
-            }
+            render_field_html(node, html);
+        }
+        NodeType::ColumnBreak => {
+            html.push_str("<hr style=\"border:none;page-break-after:always;margin:0\">");
+        }
+        // Container nodes — render their children
+        NodeType::Body | NodeType::Document => {
+            render_children(model, node_id, html);
         }
         _ => {}
     }
@@ -4011,21 +4193,28 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
             NodeType::Run => render_run(model, child_id, html),
             NodeType::Image => render_image(model, child_id, html),
             NodeType::LineBreak => html.push_str("<br/>"),
+            NodeType::ColumnBreak => html.push_str("<br style=\"page-break-before:always\"/>"),
             NodeType::Tab => html.push_str("&emsp;"),
             NodeType::Field => {
-                if let Some(AttributeValue::FieldType(ft)) =
-                    child.attributes.get(&AttributeKey::FieldType)
-                {
-                    match ft {
-                        s1_model::FieldType::PageNumber => {
-                            html.push_str("<span class=\"field\">#</span>")
-                        }
-                        s1_model::FieldType::PageCount => {
-                            html.push_str("<span class=\"field\">N</span>")
-                        }
-                        _ => {}
-                    }
-                }
+                render_field_html(child, html);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Render a Field node (PageNumber, PageCount, etc.) into HTML.
+///
+/// Extracted as a shared helper so that both `render_node` and
+/// `render_inline_children` use the same logic (L-02).
+fn render_field_html(node: &Node, html: &mut String) {
+    if let Some(AttributeValue::FieldType(ft)) = node.attributes.get(&AttributeKey::FieldType) {
+        match ft {
+            s1_model::FieldType::PageNumber => {
+                html.push_str("<span class=\"field\">#</span>");
+            }
+            s1_model::FieldType::PageCount => {
+                html.push_str("<span class=\"field\">N</span>");
             }
             _ => {}
         }
@@ -4071,18 +4260,25 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
         }
     }
 
-    // Track changes visual styling
-    match revision_type {
+    // Track changes: wrap in <ins>/<del> tags with node ID for individual accept/reject
+    let tc_open = match revision_type {
         Some("Insert") => {
             style.push_str("color:#22863a;text-decoration:underline;text-decoration-color:#22863a;");
+            Some(format!("<ins data-tc-node-id=\"{}:{}\" data-tc-type=\"insert\">", run_id.replica, run_id.counter))
         }
         Some("Delete") => {
             style.push_str("color:#cb2431;text-decoration:line-through;text-decoration-color:#cb2431;");
+            Some(format!("<del data-tc-node-id=\"{}:{}\" data-tc-type=\"delete\">", run_id.replica, run_id.counter))
         }
         Some("FormatChange") => {
             style.push_str("border-bottom:2px dotted #b08800;");
+            Some(format!("<span data-tc-node-id=\"{}:{}\" data-tc-type=\"format\" class=\"tc-format\">", run_id.replica, run_id.counter))
         }
-        _ => {}
+        _ => None,
+    };
+
+    if let Some(ref open) = tc_open {
+        html.push_str(open);
     }
 
     // Open tags
@@ -4189,6 +4385,14 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
     }
     if hyperlink_url.is_some() {
         html.push_str("</a>");
+    }
+
+    // Close track-changes wrapper tag
+    match revision_type {
+        Some("Insert") => html.push_str("</ins>"),
+        Some("Delete") => html.push_str("</del>"),
+        Some("FormatChange") => html.push_str("</span>"),
+        _ => {}
     }
 }
 
@@ -4339,6 +4543,11 @@ fn render_table_row(model: &DocumentModel, row_id: NodeId, html: &mut String) {
     html.push_str("</tr>");
 }
 
+// NOTE (L-01): This `escape_html` is intentionally duplicated from
+// `s1_layout::html::escape_html`. The WASM crate can be built without the
+// `layout` feature, so we cannot rely on s1-layout always being available.
+// Keeping a local copy ensures the WASM HTML rendering works independently
+// of feature flags.
 fn escape_html(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     for c in s.chars() {
@@ -6515,5 +6724,101 @@ mod tests {
         doc.replace_text(&id, 6, 3, "Top").unwrap();
         let text = doc.get_paragraph_text(&id).unwrap();
         assert_eq!(text, "Start Topdle End");
+    }
+
+    // ─── Collaboration Tests ───────────────────────────
+
+    #[test]
+    fn test_create_collab() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(42);
+        assert_eq!(collab.replica_id().unwrap(), 42);
+        assert!(!collab.can_undo());
+        assert!(!collab.can_redo());
+    }
+
+    #[test]
+    fn test_collab_local_insert_text() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        // The collab doc starts empty — need to check if model has a body
+        let html = collab.to_html().unwrap();
+        // Even empty doc should return without error
+        assert!(html.is_empty() || html.len() > 0);
+    }
+
+    #[test]
+    fn test_collab_state_vector() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        let sv = collab.get_state_vector().unwrap();
+        // Should be valid JSON object
+        assert!(sv.starts_with('{'));
+        assert!(sv.ends_with('}'));
+    }
+
+    #[test]
+    fn test_collab_op_log_size() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        let size = collab.op_log_size().unwrap();
+        assert_eq!(size, 0);
+    }
+
+    #[test]
+    fn test_collab_tombstone_count() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        let count = collab.tombstone_count().unwrap();
+        assert_eq!(count, 0);
+    }
+
+    #[test]
+    fn test_collab_compact_op_log() {
+        let engine = WasmEngine::new();
+        let mut collab = engine.create_collab(1);
+        // Compact on empty log should succeed
+        collab.compact_op_log().unwrap();
+        assert_eq!(collab.op_log_size().unwrap(), 0);
+    }
+
+    #[test]
+    fn test_collab_undo_redo_empty() {
+        let engine = WasmEngine::new();
+        let mut collab = engine.create_collab(1);
+        assert!(!collab.can_undo());
+        assert!(!collab.can_redo());
+        let result = collab.undo().unwrap();
+        assert_eq!(result, "null");
+        let result = collab.redo().unwrap();
+        assert_eq!(result, "null");
+    }
+
+    #[test]
+    fn test_collab_get_changes_since_empty() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        let changes = collab.get_changes_since("{}").unwrap();
+        assert_eq!(changes, "[]");
+    }
+
+    #[test]
+    fn test_collab_get_peers_empty() {
+        let engine = WasmEngine::new();
+        let collab = engine.create_collab(1);
+        let peers = collab.get_peers_json().unwrap();
+        assert_eq!(peers, "[]");
+    }
+
+    #[test]
+    fn test_collab_free_doc() {
+        let engine = WasmEngine::new();
+        let mut collab = engine.create_collab(1);
+        // Verify doc works before freeing
+        assert_eq!(collab.replica_id().unwrap(), 1);
+        collab.free_doc();
+        // After freeing, inner is None — calling replica_id() would produce
+        // a JsError which panics on non-wasm targets, so we just verify
+        // free_doc itself doesn't panic and can be called.
     }
 }

@@ -187,8 +187,11 @@ impl TreeCrdt {
             children.remove(node_id);
         }
 
-        // Update state
-        let state = self.node_state.get_mut(&node_id).unwrap();
+        // Update state (node verified above, must still exist)
+        let state = self
+            .node_state
+            .get_mut(&node_id)
+            .ok_or(CrdtError::NodeNotFound(node_id))?;
         state.parent = new_parent_id;
         state.parent_op = op_id;
 

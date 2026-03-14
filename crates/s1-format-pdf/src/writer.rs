@@ -1552,7 +1552,7 @@ mod tests {
         // Verify hyperlink_url was propagated
         let has_url = layout.pages.iter().any(|p| {
             p.blocks.iter().any(|b| {
-                if let LayoutBlockKind::Paragraph { lines } = &b.kind {
+                if let LayoutBlockKind::Paragraph { lines, .. } = &b.kind {
                     lines
                         .iter()
                         .any(|l| l.runs.iter().any(|r| r.hyperlink_url.is_some()))

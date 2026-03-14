@@ -1,0 +1,676 @@
+// Real-time collaboration — WebSocket transport layer.
+//
+// Architecture: state.doc (WasmDocument) remains the source of truth.
+// This module broadcasts local edits to peers via the relay server and
+// replays remote edits into state.doc. No separate WasmCollabDocument.
+//
+// Hook points:
+//   - syncParagraphText → broadcastTextSync (full paragraph text set)
+//   - split_paragraph   → broadcastOp
+//   - merge_paragraphs  → broadcastOp
+//   - format_selection  → broadcastOp
+//   - delete_selection  → broadcastOp
+import { state, $ } from './state.js';
+import { renderDocument, renderNodeById } from './render.js';
+
+// ─── Configuration ────────────────────────────────────
+
+const DEFAULT_RELAY_URL = 'ws://localhost:8787';
+const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
+const MAX_RECONNECT_ATTEMPTS = 5;
+const CURSOR_BROADCAST_INTERVAL = 2000;
+const PEER_COLORS = [
+  '#4285f4', '#ea4335', '#34a853', '#fbbc04', '#9c27b0',
+  '#00bcd4', '#ff5722', '#607d8b', '#e91e63', '#3f51b5',
+];
+
+// ─── State ────────────────────────────────────────────
+
+let ws = null;
+let roomId = null;
+let peerId = null;
+let userName = 'Anonymous';
+let userColor = '#4285f4';
+let reconnectAttempt = 0;
+let reconnectTimer = null;
+let cursorTimer = null;
+let offlineBuffer = [];
+let connected = false;
+let applyingRemote = false; // flag to prevent echo
+
+// ─── Public API ───────────────────────────────────────
+
+/**
+ * Start a collaboration session.
+ */
+export function startCollab(room, name, relayUrl) {
+  if (!state.doc) return;
+
+  roomId = room;
+  userName = name || 'Anonymous';
+  userColor = PEER_COLORS[Math.floor(Math.random() * PEER_COLORS.length)];
+
+  connect(relayUrl || DEFAULT_RELAY_URL);
+  startCursorBroadcast();
+  updateCollabUI();
+}
+
+/**
+ * Stop the collaboration session.
+ */
+export function stopCollab() {
+  if (ws) {
+    try {
+      ws.send(JSON.stringify({ type: 'leave', room: roomId }));
+      ws.close();
+    } catch (_) {}
+  }
+  ws = null;
+  connected = false;
+  roomId = null;
+  peerId = null;
+  offlineBuffer = [];
+  clearInterval(cursorTimer);
+  clearTimeout(reconnectTimer);
+  clearPeerCursors();
+  updateCollabUI();
+}
+
+/**
+ * Broadcast a paragraph text change to peers.
+ * Called from syncParagraphText in render.js.
+ */
+export function broadcastTextSync(nodeId, text) {
+  if (!roomId || applyingRemote) return;
+  sendOp({ action: 'setText', nodeId, text });
+}
+
+/**
+ * Broadcast a structural operation (split, merge, format, delete).
+ * Called from input.js / toolbar.js after applying the operation locally.
+ */
+export function broadcastOp(opData) {
+  if (!roomId || applyingRemote) return;
+  sendOp(opData);
+}
+
+/**
+ * Check if collaboration is active.
+ */
+export function isCollabActive() {
+  return roomId !== null && connected;
+}
+
+/**
+ * Get current room ID.
+ */
+export function getCollabRoom() {
+  return roomId;
+}
+
+// ─── WebSocket Connection ─────────────────────────────
+
+function connect(url) {
+  if (ws) { try { ws.close(); } catch (_) {} }
+
+  try {
+    ws = new WebSocket(url);
+  } catch (_) {
+    scheduleReconnect(url);
+    return;
+  }
+
+  ws.onopen = () => {
+    connected = true;
+    reconnectAttempt = 0;
+    updateConnectionStatus('connected');
+
+    ws.send(JSON.stringify({
+      type: 'join',
+      room: roomId,
+      userName,
+      userColor,
+    }));
+
+    // Flush offline buffer
+    for (const op of offlineBuffer) {
+      ws.send(JSON.stringify({ type: 'op', room: roomId, data: JSON.stringify(op) }));
+    }
+    offlineBuffer = [];
+  };
+
+  ws.onmessage = (event) => {
+    try {
+      const msg = JSON.parse(event.data);
+      handleMessage(msg);
+    } catch (_) {}
+  };
+
+  ws.onclose = () => {
+    connected = false;
+    updateConnectionStatus('disconnected');
+    if (roomId) scheduleReconnect(url);
+  };
+
+  ws.onerror = () => {};
+}
+
+function scheduleReconnect(url) {
+  if (!roomId) return;
+  if (reconnectAttempt >= MAX_RECONNECT_ATTEMPTS) {
+    updateConnectionStatus('disconnected');
+    return; // Silently give up
+  }
+  const delay = RECONNECT_DELAYS[Math.min(reconnectAttempt, RECONNECT_DELAYS.length - 1)];
+  reconnectAttempt++;
+  updateConnectionStatus('reconnecting');
+  reconnectTimer = setTimeout(() => connect(url), delay);
+}
+
+function sendOp(opData) {
+  const payload = JSON.stringify(opData);
+  if (connected && ws && ws.readyState === 1) {
+    ws.send(JSON.stringify({ type: 'op', room: roomId, data: payload }));
+  } else {
+    offlineBuffer.push(opData);
+  }
+}
+
+// ─── Message Handlers ─────────────────────────────────
+
+function handleMessage(msg) {
+  switch (msg.type) {
+    case 'joined':
+      peerId = msg.peerId;
+      updatePeerList(msg.peers || []);
+      // Send full document state for sync
+      sendFullSync();
+      break;
+
+    case 'peer-join':
+      addPeer(msg.peerId, msg.userName, msg.userColor);
+      break;
+
+    case 'peer-leave':
+      removePeer(msg.peerId);
+      break;
+
+    case 'op':
+      applyRemoteOp(msg.data, msg.peerId);
+      break;
+
+    case 'awareness':
+      applyRemoteAwareness(msg.data, msg.peerId);
+      break;
+
+    case 'sync-resp':
+      applySyncResponse(msg.ops || []);
+      break;
+
+    case 'error':
+      console.error('Relay error:', msg.message);
+      break;
+  }
+}
+
+function sendFullSync() {
+  if (!state.doc) return;
+  try {
+    // Send current document as full sync for new peers
+    const bytes = state.doc.export('docx');
+    // Convert to base64 for transport
+    const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+    sendOp({ action: 'fullSync', docBase64: base64 });
+  } catch (_) {}
+}
+
+function applyRemoteOp(dataStr, fromPeerId) {
+  if (!state.doc || !dataStr) return;
+  try {
+    const op = JSON.parse(dataStr);
+    applyingRemote = true;
+
+    switch (op.action) {
+      case 'setText': {
+        // Set paragraph text from remote
+        try {
+          state.doc.set_paragraph_text(op.nodeId, op.text);
+          const el = $('docPage').querySelector(`[data-node-id="${op.nodeId}"]`);
+          if (el) {
+            const updated = renderNodeById(op.nodeId);
+            // Don't move local cursor
+          }
+        } catch (e) { console.error('remote setText:', e); }
+        break;
+      }
+
+      case 'splitParagraph': {
+        try {
+          const newId = state.doc.split_paragraph(op.nodeId, op.offset);
+          renderDocument();
+        } catch (e) { console.error('remote split:', e); }
+        break;
+      }
+
+      case 'mergeParagraphs': {
+        try {
+          state.doc.merge_paragraphs(op.nodeId1, op.nodeId2);
+          renderDocument();
+        } catch (e) { console.error('remote merge:', e); }
+        break;
+      }
+
+      case 'formatSelection': {
+        try {
+          state.doc.format_selection(
+            op.startNode, op.startOffset,
+            op.endNode, op.endOffset,
+            op.key, op.value
+          );
+          renderNodeById(op.startNode);
+          if (op.endNode !== op.startNode) renderNodeById(op.endNode);
+        } catch (e) { console.error('remote format:', e); }
+        break;
+      }
+
+      case 'deleteSelection': {
+        try {
+          state.doc.delete_selection(op.startNode, op.startOffset, op.endNode, op.endOffset);
+          renderDocument();
+        } catch (e) { console.error('remote delete:', e); }
+        break;
+      }
+
+      case 'setHeading': {
+        try {
+          state.doc.set_heading_level(op.nodeId, op.level);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote heading:', e); }
+        break;
+      }
+
+      case 'setAlignment': {
+        try {
+          state.doc.set_alignment(op.nodeId, op.alignment);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote align:', e); }
+        break;
+      }
+
+      case 'insertParagraph': {
+        try {
+          state.doc.insert_paragraph_after(op.afterNodeId, op.text || '');
+          renderDocument();
+        } catch (e) { console.error('remote insertPara:', e); }
+        break;
+      }
+
+      case 'deleteNode': {
+        try {
+          state.doc.delete_node(op.nodeId);
+          renderDocument();
+        } catch (e) { console.error('remote deleteNode:', e); }
+        break;
+      }
+
+      case 'setListFormat': {
+        try {
+          state.doc.set_list_format(op.nodeId, op.format, op.level || 0);
+          renderDocument();
+        } catch (e) { console.error('remote list:', e); }
+        break;
+      }
+
+      case 'setIndent': {
+        try {
+          state.doc.set_indent(op.nodeId, op.side, op.value);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote indent:', e); }
+        break;
+      }
+
+      case 'setLineSpacing': {
+        try {
+          state.doc.set_line_spacing(op.nodeId, op.value);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote lineSpacing:', e); }
+        break;
+      }
+
+      case 'insertTable': {
+        try {
+          state.doc.insert_table(op.afterNodeId, op.rows, op.cols);
+          renderDocument();
+        } catch (e) { console.error('remote insertTable:', e); }
+        break;
+      }
+
+      case 'insertTableRow': {
+        try {
+          state.doc.insert_table_row(op.tableId, op.index);
+          renderDocument();
+        } catch (e) { console.error('remote insertRow:', e); }
+        break;
+      }
+
+      case 'deleteTableRow': {
+        try {
+          state.doc.delete_table_row(op.tableId, op.index);
+          renderDocument();
+        } catch (e) { console.error('remote deleteRow:', e); }
+        break;
+      }
+
+      case 'insertTableColumn': {
+        try {
+          state.doc.insert_table_column(op.tableId, op.index);
+          renderDocument();
+        } catch (e) { console.error('remote insertCol:', e); }
+        break;
+      }
+
+      case 'deleteTableColumn': {
+        try {
+          state.doc.delete_table_column(op.tableId, op.index);
+          renderDocument();
+        } catch (e) { console.error('remote deleteCol:', e); }
+        break;
+      }
+
+      case 'insertHR': {
+        try {
+          state.doc.insert_horizontal_rule(op.afterNodeId);
+          renderDocument();
+        } catch (e) { console.error('remote insertHR:', e); }
+        break;
+      }
+
+      case 'insertPageBreak': {
+        try {
+          state.doc.insert_page_break(op.afterNodeId);
+          renderDocument();
+        } catch (e) { console.error('remote insertPageBreak:', e); }
+        break;
+      }
+
+      case 'insertImage': {
+        // Image binary data can't be easily synced via WebSocket;
+        // full sync handles this instead
+        renderDocument();
+        break;
+      }
+
+      case 'moveNodeBefore': {
+        try {
+          state.doc.move_node_before(op.nodeId, op.beforeId);
+          renderDocument();
+        } catch (e) { console.error('remote moveBefore:', e); }
+        break;
+      }
+
+      case 'moveNodeAfter': {
+        try {
+          state.doc.move_node_after(op.nodeId, op.afterId);
+          renderDocument();
+        } catch (e) { console.error('remote moveAfter:', e); }
+        break;
+      }
+
+      case 'resizeImage': {
+        try {
+          state.doc.resize_image(op.nodeId, op.width, op.height);
+          renderDocument();
+        } catch (e) { console.error('remote resizeImage:', e); }
+        break;
+      }
+
+      case 'setCellBackground': {
+        try {
+          state.doc.set_cell_background(op.cellId, op.color);
+          renderDocument();
+        } catch (e) { console.error('remote setCellBg:', e); }
+        break;
+      }
+
+      case 'setImageAltText': {
+        try {
+          state.doc.set_image_alt_text(op.nodeId, op.alt);
+          renderDocument();
+        } catch (e) { console.error('remote altText:', e); }
+        break;
+      }
+
+      case 'fullSync': {
+        // Full document sync — only apply if we have no content yet
+        // (first joiner gets the doc from the host)
+        try {
+          if (op.docBase64) {
+            const binary = atob(op.docBase64);
+            const bytes = new Uint8Array(binary.length);
+            for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+            state.doc = state.engine.open(bytes);
+            renderDocument();
+          }
+        } catch (e) { console.error('remote fullSync:', e); }
+        break;
+      }
+
+      default:
+        console.warn('Unknown remote op:', op.action);
+    }
+
+    applyingRemote = false;
+  } catch (e) {
+    applyingRemote = false;
+    console.error('apply remote op:', e);
+  }
+}
+
+function applySyncResponse(ops) {
+  for (const opStr of ops) {
+    applyRemoteOp(opStr, null);
+  }
+}
+
+// ─── Cursor Awareness ─────────────────────────────────
+
+function startCursorBroadcast() {
+  clearInterval(cursorTimer);
+  cursorTimer = setInterval(broadcastCursor, CURSOR_BROADCAST_INTERVAL);
+}
+
+function broadcastCursor() {
+  if (!connected || !ws || !roomId) return;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return;
+
+  let node = sel.anchorNode;
+  while (node && node !== document && !node.dataset?.nodeId) {
+    node = node.parentElement;
+  }
+  if (!node || !node.dataset?.nodeId) return;
+
+  try {
+    ws.send(JSON.stringify({
+      type: 'awareness',
+      room: roomId,
+      data: JSON.stringify({
+        peerId,
+        nodeId: node.dataset.nodeId,
+        offset: sel.anchorOffset,
+        userName,
+        userColor,
+      }),
+    }));
+  } catch (_) {}
+}
+
+function applyRemoteAwareness(dataStr, fromPeerId) {
+  if (!dataStr) return;
+  try {
+    const cursor = JSON.parse(dataStr);
+    renderPeerCursor(cursor);
+  } catch (_) {}
+}
+
+// ─── Peer Cursor Rendering ────────────────────────────
+
+const peers = new Map();
+
+function updatePeerList(peerList) {
+  peers.clear();
+  for (const p of peerList) {
+    peers.set(p.peerId, { userName: p.userName, userColor: p.userColor });
+  }
+  updatePeerCount();
+}
+
+function addPeer(pid, name, color) {
+  peers.set(pid, { userName: name, userColor: color });
+  updatePeerCount();
+}
+
+function removePeer(pid) {
+  peers.delete(pid);
+  const el = document.getElementById(`peer-cursor-${pid}`);
+  if (el) el.remove();
+  updatePeerCount();
+}
+
+function renderPeerCursor(cursor) {
+  if (!cursor || !cursor.nodeId) return;
+
+  // Remove old cursor for this peer
+  const oldEl = document.getElementById(`peer-cursor-${cursor.peerId}`);
+  if (oldEl) oldEl.remove();
+
+  const page = $('docPage');
+  if (!page) return;
+
+  const paraEl = page.querySelector(`[data-node-id="${cursor.nodeId}"]`);
+  if (!paraEl) return;
+
+  // Create cursor line
+  const cursorEl = document.createElement('div');
+  cursorEl.className = 'peer-cursor';
+  cursorEl.id = `peer-cursor-${cursor.peerId}`;
+  cursorEl.style.borderLeftColor = cursor.userColor || '#999';
+
+  // Name label
+  const label = document.createElement('span');
+  label.className = 'peer-cursor-label';
+  label.textContent = cursor.userName || 'Peer';
+  label.style.backgroundColor = cursor.userColor || '#999';
+  cursorEl.appendChild(label);
+
+  // Try to position at the correct character offset
+  try {
+    const range = document.createRange();
+    const textNode = paraEl.firstChild;
+    if (textNode && textNode.nodeType === 3) {
+      const off = Math.min(cursor.offset || 0, textNode.length);
+      range.setStart(textNode, off);
+      range.collapse(true);
+      const rect = range.getBoundingClientRect();
+      const paraRect = paraEl.getBoundingClientRect();
+      cursorEl.style.left = (rect.left - paraRect.left) + 'px';
+    }
+  } catch (_) {
+    cursorEl.style.left = '0px';
+  }
+
+  paraEl.style.position = 'relative';
+  paraEl.appendChild(cursorEl);
+
+  // Auto-remove after 5s if no update
+  setTimeout(() => {
+    const el = document.getElementById(`peer-cursor-${cursor.peerId}`);
+    if (el) el.remove();
+  }, 5000);
+}
+
+function clearPeerCursors() {
+  document.querySelectorAll('.peer-cursor').forEach(el => el.remove());
+  peers.clear();
+  updatePeerCount();
+}
+
+// ─── UI Updates ───────────────────────────────────────
+
+function updateCollabUI() {
+  const shareBtn = $('btnShare');
+  const collabStatus = $('collabStatus');
+
+  if (shareBtn) {
+    shareBtn.textContent = roomId ? 'Disconnect' : 'Share';
+    shareBtn.title = roomId ? 'Leave collaboration session' : 'Start a collaboration session';
+  }
+
+  if (collabStatus) {
+    collabStatus.style.display = roomId ? 'inline-flex' : 'none';
+  }
+}
+
+function updateConnectionStatus(status) {
+  const indicator = $('collabIndicator');
+  if (!indicator) return;
+
+  indicator.className = 'collab-indicator collab-' + status;
+  indicator.title =
+    status === 'connected' ? 'Connected to relay server' :
+    status === 'reconnecting' ? 'Reconnecting...' :
+    'Disconnected';
+}
+
+function updatePeerCount() {
+  const el = $('collabPeerCount');
+  if (el) {
+    const count = peers.size;
+    el.textContent = count > 0 ? `${count + 1} users` : '';
+  }
+}
+
+// ─── Share Dialog ─────────────────────────────────────
+
+export function showShareDialog() {
+  if (roomId) {
+    stopCollab();
+    return;
+  }
+
+  if (!state.doc) {
+    alert('Open or create a document first.');
+    return;
+  }
+
+  const room = Math.random().toString(36).substring(2, 10);
+  const name = prompt('Your display name:', 'User ' + Math.floor(Math.random() * 100));
+  if (name === null) return;
+
+  const relayUrl = prompt('Relay server URL:', DEFAULT_RELAY_URL);
+  if (relayUrl === null) return;
+
+  startCollab(room, name, relayUrl);
+
+  const shareUrl = `${window.location.origin}${window.location.pathname}?room=${room}&relay=${encodeURIComponent(relayUrl)}`;
+  prompt('Share this link with collaborators:', shareUrl);
+}
+
+/**
+ * Auto-join if URL has ?room= parameter.
+ */
+export function checkAutoJoin() {
+  const params = new URLSearchParams(window.location.search);
+  const room = params.get('room');
+  if (!room) return;
+
+  const relay = params.get('relay') || DEFAULT_RELAY_URL;
+  const name = 'User ' + Math.floor(Math.random() * 100);
+
+  // Wait for document to be ready
+  setTimeout(() => {
+    if (state.engine && state.doc) {
+      startCollab(room, name, relay);
+    }
+  }, 1000);
+}

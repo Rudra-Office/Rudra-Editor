@@ -71,6 +71,22 @@ pub enum LayoutBlockKind {
         background_color: Option<Color>,
         /// Paragraph border (CSS border shorthand).
         border: Option<String>,
+        /// List marker text (e.g., "•", "1.", "a.") if this paragraph is a list item.
+        list_marker: Option<String>,
+        /// List indent level (0-based).
+        list_level: u8,
+        /// Space before paragraph in points.
+        space_before: f64,
+        /// Space after paragraph in points.
+        space_after: f64,
+        /// Left indent in points.
+        indent_left: f64,
+        /// Right indent in points.
+        indent_right: f64,
+        /// First-line indent in points.
+        indent_first_line: f64,
+        /// Line height as a CSS-compatible value (e.g., 1.15 for 115%).
+        line_height: Option<f64>,
     },
     /// A table with rows.
     Table {

@@ -126,8 +126,8 @@ fn render_page(html: &mut String, page: &LayoutPage, options: &HtmlOptions, book
 /// Render a layout block (paragraph, table, or image).
 fn render_block(html: &mut String, block: &LayoutBlock) {
     match &block.kind {
-        LayoutBlockKind::Paragraph { lines, text_align, background_color, border } => {
-            render_paragraph(html, block, lines, text_align.as_deref(), background_color.as_ref(), border.as_deref());
+        LayoutBlockKind::Paragraph { lines, text_align, background_color, border, list_marker, list_level, space_before, space_after, indent_left, indent_right, indent_first_line, line_height } => {
+            render_paragraph(html, block, lines, text_align.as_deref(), background_color.as_ref(), border.as_deref(), list_marker.as_deref(), *list_level, *space_before, *space_after, *indent_left, *indent_right, *indent_first_line, *line_height);
         }
         LayoutBlockKind::Table { rows, .. } => {
             render_table(html, block, rows);
@@ -145,7 +145,8 @@ fn render_block(html: &mut String, block: &LayoutBlock) {
 }
 
 /// Render a paragraph block with lines and glyph runs.
-fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine], text_align: Option<&str>, background_color: Option<&Color>, border: Option<&str>) {
+#[allow(clippy::too_many_arguments)]
+fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine], text_align: Option<&str>, background_color: Option<&Color>, border: Option<&str>, list_marker: Option<&str>, list_level: u8, space_before: f64, space_after: f64, indent_left: f64, indent_right: f64, indent_first_line: f64, line_height: Option<f64>) {
     let b = &block.bounds;
     let mut extra_style = String::new();
     if let Some(align) = text_align {
@@ -157,6 +158,34 @@ fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine]
     if let Some(bdr) = border {
         extra_style.push_str(&format!(";border:{bdr}"));
     }
+    // Paragraph spacing (margins)
+    if space_before > 0.0 {
+        extra_style.push_str(&format!(";margin-top:{}pt", fmt_pt(space_before)));
+    }
+    if space_after > 0.0 {
+        extra_style.push_str(&format!(";margin-bottom:{}pt", fmt_pt(space_after)));
+    }
+    // Paragraph indents (padding)
+    if indent_left > 0.0 {
+        extra_style.push_str(&format!(";padding-left:{}pt", fmt_pt(indent_left)));
+    }
+    if indent_right > 0.0 {
+        extra_style.push_str(&format!(";padding-right:{}pt", fmt_pt(indent_right)));
+    }
+    // First-line indent via text-indent
+    if indent_first_line.abs() > 0.001 {
+        extra_style.push_str(&format!(";text-indent:{}pt", fmt_pt(indent_first_line)));
+    }
+    // Line height / line spacing
+    if let Some(lh) = line_height {
+        if lh < 0.0 {
+            // Negative value signals absolute pt-based line-height (from Exact/AtLeast)
+            extra_style.push_str(&format!(";line-height:{}pt", fmt_pt(-lh)));
+        } else {
+            // Positive value is a multiplier (e.g., 1.5 for 150%)
+            extra_style.push_str(&format!(";line-height:{}", fmt_pt(lh)));
+        }
+    }
     html.push_str(&format!(
         "<div class=\"s1-block\" style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt{extra}\">",
         x = fmt_pt(b.x),
@@ -164,6 +193,15 @@ fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine]
         w = fmt_pt(b.width),
         extra = extra_style,
     ));
+
+    // Add list marker if present
+    if let Some(marker) = list_marker {
+        let indent = (list_level as f64) * 18.0; // 18pt per indent level
+        html.push_str(&format!(
+            "<span style=\"position:absolute;left:{}pt\">{}</span>",
+            -(24.0 - indent), escape_html(marker)
+        ));
+    }
 
     for line in lines {
         render_line(html, line);
@@ -187,6 +225,10 @@ fn render_line(html: &mut String, line: &LayoutLine) {
 }
 
 /// Render a single glyph run as a styled span, optionally wrapped in a hyperlink.
+///
+/// Each span gets both inline styles (for exact rendering) and semantic CSS
+/// classes (L-03) so consumers can override styling via external CSS without
+/// parsing inline styles. Classes use the `s1-` prefix to avoid collisions.
 fn render_glyph_run(html: &mut String, run: &GlyphRun) {
     // Build inline style
     let mut style = String::new();
@@ -195,6 +237,9 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
         sz = fmt_pt(run.font_size),
         x = fmt_pt(run.x_offset),
     ));
+
+    // Build CSS class list for semantic styling hooks
+    let mut classes: Vec<&str> = Vec::new();
 
     // Color (skip if black to keep output smaller)
     if run.color.r != 0 || run.color.g != 0 || run.color.b != 0 {
@@ -207,26 +252,40 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
     // Bold
     if run.bold {
         style.push_str(";font-weight:bold");
+        classes.push("s1-bold");
     }
 
     // Italic
     if run.italic {
         style.push_str(";font-style:italic");
+        classes.push("s1-italic");
     }
 
     // Underline and strikethrough
     match (run.underline, run.strikethrough) {
-        (true, true) => style.push_str(";text-decoration:underline line-through"),
-        (true, false) => style.push_str(";text-decoration:underline"),
-        (false, true) => style.push_str(";text-decoration:line-through"),
+        (true, true) => {
+            style.push_str(";text-decoration:underline line-through");
+            classes.push("s1-underline");
+            classes.push("s1-strikethrough");
+        }
+        (true, false) => {
+            style.push_str(";text-decoration:underline");
+            classes.push("s1-underline");
+        }
+        (false, true) => {
+            style.push_str(";text-decoration:line-through");
+            classes.push("s1-strikethrough");
+        }
         (false, false) => {}
     }
 
     // Superscript / subscript
     if run.superscript {
         style.push_str(";vertical-align:super;font-size:0.65em");
+        classes.push("s1-sup");
     } else if run.subscript {
         style.push_str(";vertical-align:sub;font-size:0.65em");
+        classes.push("s1-sub");
     }
 
     // Highlight / background color
@@ -235,6 +294,7 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
             ";background-color:#{:02x}{:02x}{:02x}",
             hl.r, hl.g, hl.b
         ));
+        classes.push("s1-highlight");
     }
 
     // Character spacing
@@ -250,7 +310,7 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
             let title = run.revision_author.as_deref().unwrap_or("");
             (
                 format!(
-                    "<ins style=\"text-decoration:underline;color:green\" title=\"{}\">",
+                    "<ins class=\"s1-ins\" style=\"text-decoration:underline;color:green\" title=\"{}\">",
                     escape_attr(title)
                 ),
                 "</ins>".to_string(),
@@ -260,7 +320,7 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
             let title = run.revision_author.as_deref().unwrap_or("");
             (
                 format!(
-                    "<del style=\"text-decoration:line-through;color:red\" title=\"{}\">",
+                    "<del class=\"s1-del\" style=\"text-decoration:line-through;color:red\" title=\"{}\">",
                     escape_attr(title)
                 ),
                 "</del>".to_string(),
@@ -269,13 +329,21 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
         _ => (String::new(), String::new()),
     };
 
+    // Build class attribute string (empty if no semantic classes)
+    let class_attr = if classes.is_empty() {
+        String::new()
+    } else {
+        format!(" class=\"{}\"", classes.join(" "))
+    };
+
     // Wrap in hyperlink if URL is present
     if let Some(url) = &run.hyperlink_url {
         html.push_str(&tc_open);
         html.push_str(&format!(
-            "<a href=\"{}\" style=\"{}\"><span style=\"{}\">{}</span></a>",
+            "<a href=\"{}\" style=\"{}\"><span{} style=\"{}\">{}</span></a>",
             escape_attr(url),
             "color:inherit;text-decoration:inherit",
+            class_attr,
             style,
             escaped_text,
         ));
@@ -283,8 +351,8 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun) {
     } else {
         html.push_str(&tc_open);
         html.push_str(&format!(
-            "<span style=\"{}\">{}</span>",
-            style, escaped_text,
+            "<span{} style=\"{}\">{}</span>",
+            class_attr, style, escaped_text,
         ));
         html.push_str(&tc_close);
     }
@@ -382,6 +450,10 @@ fn render_image(
 }
 
 /// Escape HTML special characters in text content.
+///
+/// NOTE (L-01): This function is intentionally duplicated in `ffi/wasm/src/lib.rs`.
+/// The WASM crate can be built without the `layout` feature flag, so it cannot
+/// depend on this crate. Both copies must be kept in sync manually.
 fn escape_html(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for ch in text.chars() {
@@ -487,7 +559,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
 
         let page = LayoutPage {
@@ -599,7 +671,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 16.8),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
 
         let page = LayoutPage {
@@ -633,6 +705,14 @@ mod tests {
                 text_align: None,
                 background_color: None,
                 border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
                 lines: vec![LayoutLine {
                     baseline_y: 10.0,
                     height: 14.4,
@@ -799,6 +879,14 @@ mod tests {
                 text_align: None,
                 background_color: None,
                 border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
             },
         };
 
@@ -814,6 +902,14 @@ mod tests {
                 text_align: None,
                 background_color: None,
                 border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
             },
         };
 
@@ -874,7 +970,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
 
         let page = LayoutPage {
@@ -970,7 +1066,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
@@ -1010,7 +1106,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
@@ -1050,7 +1146,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
@@ -1090,7 +1186,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
@@ -1133,7 +1229,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
@@ -1176,7 +1272,7 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None },
+            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
         };
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
