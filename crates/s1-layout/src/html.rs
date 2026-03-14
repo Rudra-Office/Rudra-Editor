@@ -88,7 +88,8 @@ fn render_page(html: &mut String, page: &LayoutPage, options: &HtmlOptions, book
     let gap = options.page_gap;
 
     html.push_str(&format!(
-        "<div class=\"s1-page\" style=\"width:{w}pt;height:{h}pt;position:relative;background:{bg};margin:{gap}px auto;{shadow}overflow:hidden\">",
+        "<div class=\"s1-page\" data-section-index=\"{si}\" style=\"width:{w}pt;height:{h}pt;position:relative;background:{bg};margin:{gap}px auto;{shadow}overflow:hidden\">",
+        si = page.section_index,
         w = fmt_pt(page.width),
         h = fmt_pt(page.height),
         bg = escape_attr(&options.page_background),
@@ -125,9 +126,19 @@ fn render_page(html: &mut String, page: &LayoutPage, options: &HtmlOptions, book
 
 /// Render a layout block (paragraph, table, or image).
 fn render_block(html: &mut String, block: &LayoutBlock) {
+    render_block_with_offset(html, block, 0.0, 0.0);
+}
+
+/// Render a layout block with coordinate offsets.
+///
+/// When rendering blocks inside table cells, the block coordinates are in the
+/// table's coordinate space but need to be positioned relative to the cell.
+/// The offsets are subtracted from the block's position to convert from
+/// table-relative to cell-relative coordinates.
+fn render_block_with_offset(html: &mut String, block: &LayoutBlock, x_offset: f64, y_offset: f64) {
     match &block.kind {
         LayoutBlockKind::Paragraph { lines, text_align, background_color, border, list_marker, list_level, space_before, space_after, indent_left, indent_right, indent_first_line, line_height } => {
-            render_paragraph(html, block, lines, text_align.as_deref(), background_color.as_ref(), border.as_deref(), list_marker.as_deref(), *list_level, *space_before, *space_after, *indent_left, *indent_right, *indent_first_line, *line_height);
+            render_paragraph(html, block, lines, text_align.as_deref(), background_color.as_ref(), border.as_deref(), list_marker.as_deref(), *list_level, *space_before, *space_after, *indent_left, *indent_right, *indent_first_line, *line_height, x_offset, y_offset);
         }
         LayoutBlockKind::Table { rows, .. } => {
             render_table(html, block, rows);
@@ -137,7 +148,7 @@ fn render_block(html: &mut String, block: &LayoutBlock) {
             content_type,
             ..
         } => {
-            render_image(html, block, image_data, content_type);
+            render_image(html, block, image_data, content_type, x_offset, y_offset);
         }
         // Note: all current LayoutBlockKind variants are handled above.
         // If new variants are added, they will produce a compile error here.
@@ -146,7 +157,7 @@ fn render_block(html: &mut String, block: &LayoutBlock) {
 
 /// Render a paragraph block with lines and glyph runs.
 #[allow(clippy::too_many_arguments)]
-fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine], text_align: Option<&str>, background_color: Option<&Color>, border: Option<&str>, list_marker: Option<&str>, list_level: u8, space_before: f64, space_after: f64, indent_left: f64, indent_right: f64, indent_first_line: f64, line_height: Option<f64>) {
+fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine], text_align: Option<&str>, background_color: Option<&Color>, border: Option<&str>, list_marker: Option<&str>, list_level: u8, space_before: f64, space_after: f64, indent_left: f64, indent_right: f64, indent_first_line: f64, line_height: Option<f64>, x_offset: f64, y_offset: f64) {
     let b = &block.bounds;
     let mut extra_style = String::new();
     if let Some(align) = text_align {
@@ -188,18 +199,20 @@ fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine]
     }
     html.push_str(&format!(
         "<div class=\"s1-block\" style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt{extra}\">",
-        x = fmt_pt(b.x),
-        y = fmt_pt(b.y),
+        x = fmt_pt(b.x - x_offset),
+        y = fmt_pt(b.y - y_offset),
         w = fmt_pt(b.width),
         extra = extra_style,
     ));
 
     // Add list marker if present
     if let Some(marker) = list_marker {
-        let indent = (list_level as f64) * 18.0; // 18pt per indent level
+        // Use document's indent or fall back to 18pt per level
+        let effective_indent = if indent_left > 0.1 { indent_left } else { (list_level as f64) * 18.0 };
+        let marker_offset = effective_indent.max(12.0); // At least 12pt for marker
         html.push_str(&format!(
-            "<span style=\"position:absolute;left:{}pt\">{}</span>",
-            -(24.0 - indent), escape_html(marker)
+            "<span class=\"s1-list-marker\" style=\"position:absolute;left:-{}pt\">{}</span>",
+            fmt_pt(marker_offset), escape_html(marker)
         ));
     }
 
@@ -218,7 +231,7 @@ fn render_line(html: &mut String, line: &LayoutLine) {
     ));
 
     for run in &line.runs {
-        render_glyph_run(html, run);
+        render_glyph_run(html, run, line.height);
     }
 
     html.push_str("</div>");
@@ -229,13 +242,41 @@ fn render_line(html: &mut String, line: &LayoutLine) {
 /// Each span gets both inline styles (for exact rendering) and semantic CSS
 /// classes (L-03) so consumers can override styling via external CSS without
 /// parsing inline styles. Classes use the `s1-` prefix to avoid collisions.
-fn render_glyph_run(html: &mut String, run: &GlyphRun) {
+///
+/// The `line_height` parameter is the height of the containing line in points.
+/// It is used to compute a baseline-aligned `top` offset so that runs with
+/// different font sizes align on a common baseline (at 80% of line height).
+fn render_glyph_run(html: &mut String, run: &GlyphRun, line_height: f64) {
+    // If this run is an inline image, render as <img> instead of text
+    if let Some(ref img) = run.inline_image {
+        if let Some(ref data) = img.image_data {
+            let mime = img.content_type.as_deref().unwrap_or("image/png");
+            let b64 = base64_encode(data);
+            let top = (line_height - img.height).max(0.0);
+            html.push_str(&format!(
+                "<img class=\"s1-inline-image\" src=\"data:{mime};base64,{b64}\" style=\"position:absolute;left:{x}pt;top:{t}pt;width:{w}pt;height:{h}pt\" alt=\"\"/>",
+                x = fmt_pt(run.x_offset),
+                t = fmt_pt(top),
+                w = fmt_pt(img.width),
+                h = fmt_pt(img.height),
+            ));
+        }
+        return;
+    }
+
+    // Compute baseline-aligned top offset.
+    // The line baseline sits at 80% of the line height (matching engine.rs).
+    // Each run's ascent is approximately 80% of its font size.
+    // top = baseline_in_line - ascent = 0.8 * (line_height - font_size)
+    let baseline_top = 0.8 * (line_height - run.font_size);
+
     // Build inline style
     let mut style = String::new();
     style.push_str(&format!(
-        "font-size:{sz}pt;position:absolute;left:{x}pt",
+        "font-size:{sz}pt;position:absolute;left:{x}pt;top:{t}pt",
         sz = fmt_pt(run.font_size),
         x = fmt_pt(run.x_offset),
+        t = fmt_pt(baseline_top),
     ));
 
     // Build CSS class list for semantic styling hooks
@@ -403,10 +444,13 @@ fn render_table(html: &mut String, block: &LayoutBlock, rows: &[LayoutTableRow])
                 "<div class=\"s1-table-cell\" style=\"{cell_style}\">",
             ));
 
-            // Render cell content blocks (recursively)
+            // Render cell content blocks with coordinate adjustment.
+            // Cell content blocks have table-relative coordinates, but the
+            // cell div is already positioned at (cell.bounds.x, cell.bounds.y)
+            // within the row. Subtract the cell origin so blocks are positioned
+            // relative to the cell rather than the table.
             for cell_block in &cell.blocks {
-                // Adjust child block positioning relative to cell
-                render_block(html, cell_block);
+                render_block_with_offset(html, cell_block, cell.bounds.x, cell.bounds.y);
             }
 
             html.push_str("</div>");
@@ -418,12 +462,14 @@ fn render_table(html: &mut String, block: &LayoutBlock, rows: &[LayoutTableRow])
     html.push_str("</div>");
 }
 
-/// Render an image block.
+/// Render an image block with optional coordinate offsets.
 fn render_image(
     html: &mut String,
     block: &LayoutBlock,
     image_data: &Option<Vec<u8>>,
     content_type: &Option<String>,
+    x_offset: f64,
+    y_offset: f64,
 ) {
     let b = &block.bounds;
 
@@ -432,8 +478,8 @@ fn render_image(
         let b64 = base64_encode(data);
         html.push_str(&format!(
             "<img class=\"s1-image\" src=\"data:{mime};base64,{b64}\" style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt;height:{h}pt\" alt=\"\"/>",
-            x = fmt_pt(b.x),
-            y = fmt_pt(b.y),
+            x = fmt_pt(b.x - x_offset),
+            y = fmt_pt(b.y - y_offset),
             w = fmt_pt(b.width),
             h = fmt_pt(b.height),
         ));
@@ -441,8 +487,8 @@ fn render_image(
         // No image data available — render a placeholder
         html.push_str(&format!(
             "<div class=\"s1-image-placeholder\" style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt;height:{h}pt;background:#eee;border:1px dashed #aaa\"></div>",
-            x = fmt_pt(b.x),
-            y = fmt_pt(b.y),
+            x = fmt_pt(b.x - x_offset),
+            y = fmt_pt(b.y - y_offset),
             w = fmt_pt(b.width),
             h = fmt_pt(b.height),
         ));
@@ -548,6 +594,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine {
@@ -570,6 +617,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         LayoutDocument {
@@ -589,6 +637,7 @@ mod tests {
                 blocks: Vec::new(),
                 header: None,
                 footer: None,
+                section_index: 0,
             }],
             bookmarks: Vec::new(),
         };
@@ -619,6 +668,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            section_index: 0,
         };
         let page2 = LayoutPage {
             index: 1,
@@ -628,6 +678,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            section_index: 0,
         };
         let doc = LayoutDocument {
             pages: vec![page1, page2],
@@ -660,6 +711,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine {
@@ -682,6 +734,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -736,6 +789,7 @@ mod tests {
                         character_spacing: 0.0,
                         revision_type: None,
                         revision_author: None,
+                        inline_image: None,
                     }],
                 }],
             },
@@ -771,6 +825,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -807,6 +862,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -843,6 +899,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let footer_run = GlyphRun {
@@ -865,6 +922,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let header_block = LayoutBlock {
@@ -921,6 +979,7 @@ mod tests {
             blocks: Vec::new(),
             header: Some(header_block),
             footer: Some(footer_block),
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -959,6 +1018,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine {
@@ -981,6 +1041,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -1007,6 +1068,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            section_index: 0,
         };
 
         let doc = LayoutDocument {
@@ -1060,6 +1122,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1071,7 +1134,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);
@@ -1100,6 +1163,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1111,7 +1175,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);
@@ -1140,6 +1204,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1151,7 +1216,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);
@@ -1180,6 +1245,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: Some("insertion".to_string()),
             revision_author: Some("Author A".to_string()),
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1191,7 +1257,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);
@@ -1223,6 +1289,7 @@ mod tests {
             character_spacing: 0.0,
             revision_type: Some("deletion".to_string()),
             revision_author: Some("Author B".to_string()),
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1234,7 +1301,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);
@@ -1266,6 +1333,7 @@ mod tests {
             character_spacing: 2.5,
             revision_type: None,
             revision_author: None,
+            inline_image: None,
         };
 
         let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
@@ -1277,7 +1345,7 @@ mod tests {
         let page = LayoutPage {
             index: 0, width: 612.0, height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None,
+            blocks: vec![block], header: None, footer: None, section_index: 0,
         };
         let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
         let html = layout_to_html(&doc);

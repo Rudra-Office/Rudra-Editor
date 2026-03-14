@@ -14,18 +14,70 @@ import { broadcastOp } from './collab.js';
 export function initInput() {
   const page = $('docPage');
 
+  // ─── E-01 fix: Capture cursor offset before text insertion for pending formats ───
+  page.addEventListener('beforeinput', (e) => {
+    if (state.ignoreInput) return;
+    if (e.inputType === 'insertText' && e.data) {
+      const pending = state.pendingFormats;
+      if (pending && Object.keys(pending).length > 0) {
+        const el = getActiveElement();
+        if (el) {
+          state._pendingFormatInsert = {
+            nodeId: el.dataset.nodeId,
+            offset: getCursorOffset(el),
+            charCount: Array.from(e.data).length,
+          };
+        }
+      }
+    }
+  });
+
   // ─── Regular input (typing) ─────────────────────
   page.addEventListener('input', (e) => {
     if (state.ignoreInput) return;
     const el = getActiveElement();
     if (el) debouncedSync(el);
 
+    // ── E-01 fix: Apply pending formats to newly inserted character(s) ──
+    if (state._pendingFormatInsert && e.inputType === 'insertText') {
+      const pfi = state._pendingFormatInsert;
+      state._pendingFormatInsert = null;
+      const pending = state.pendingFormats;
+      if (pending && Object.keys(pending).length > 0 && state.doc) {
+        // Sync the paragraph text immediately so the WASM model has the new character
+        if (el) {
+          clearTimeout(state.syncTimer);
+          syncParagraphText(el);
+        }
+        try {
+          const startOff = pfi.offset;
+          const endOff = startOff + pfi.charCount;
+          const nodeId = pfi.nodeId;
+          for (const [key, value] of Object.entries(pending)) {
+            state.doc.format_selection(nodeId, startOff, nodeId, endOff, key, value);
+            broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: startOff, endNode: nodeId, endOffset: endOff, key, value });
+          }
+          // Re-render the node to show the formatting, then restore cursor
+          const updated = renderNodeById(nodeId);
+          if (updated) setCursorAtOffset(updated, endOff);
+          // Update the tracked cursor position so selectionchange doesn't
+          // clear pending formats due to the cursor advancing by one character
+          state._pendingFormatCursorPos = { nodeId, offset: endOff };
+          updateUndoRedo();
+        } catch (err) { console.error('pending format apply:', err); }
+        // Keep pending formats active so subsequent characters also get formatted
+        // They will be cleared when the user clicks somewhere else or changes selection
+      }
+    }
+
     // ── Slash menu: detect "/" or update filter ──
     if (state.slashMenuOpen) {
       const text = el?.textContent || '';
       const offset = getCursorOffset(el);
       // Find the "/" that triggered the menu
-      const before = text.substring(0, offset);
+      // offset is in codepoints, so convert text to codepoint array for slicing
+      const codepoints = [...text];
+      const before = codepoints.slice(0, offset).join('');
       const slashPos = before.lastIndexOf('/');
       if (slashPos >= 0) {
         const query = before.substring(slashPos + 1);
@@ -38,7 +90,9 @@ export function initInput() {
       if (el) {
         const offset = getCursorOffset(el);
         const text = el.textContent || '';
-        const charBefore = offset >= 2 ? text[offset - 2] : null;
+        // offset is in codepoints, so index into codepoint array
+        const codepoints = [...text];
+        const charBefore = offset >= 2 ? codepoints[offset - 2] : null;
         if (offset === 1 || (charBefore && /\s/.test(charBefore))) {
           openSlashMenu();
         }
@@ -98,13 +152,27 @@ export function initInput() {
         closeSlashMenu();
         return;
       }
-      if (e.key === 'Backspace') {
+      if (e.key === 'Backspace' || e.key === 'Delete') {
         // If query is empty, the "/" itself will be deleted, so close menu
         if (state.slashQuery.length === 0) {
           closeSlashMenu();
-          // Let backspace proceed to delete the "/"
+          // Let backspace/delete proceed to remove the "/"
+        } else {
+          // Let it proceed normally; after the DOM updates, verify the slash
+          // trigger character is still present. Use setTimeout(0) so the check
+          // runs after the browser applies the deletion to the DOM.
+          setTimeout(() => {
+            if (!state.slashMenuOpen) return;
+            const activeEl = getActiveElement();
+            const text = activeEl?.textContent || '';
+            const cursorOff = activeEl ? getCursorOffset(activeEl) : 0;
+            // cursorOff is in codepoints, so slice codepoint array
+            const before = [...text].slice(0, cursorOff).join('');
+            if (before.lastIndexOf('/') < 0) {
+              closeSlashMenu();
+            }
+          }, 0);
         }
-        // Otherwise let it proceed normally; the input handler will update the filter
       }
     }
 
@@ -131,6 +199,10 @@ export function initInput() {
         case 'f': e.preventDefault(); $('findBar').classList.add('show'); $('findInput').focus(); return;
         case 'h': e.preventDefault(); $('findBar').classList.add('show'); $('replaceInput')?.focus(); return;
         case 'p': e.preventDefault(); window.print(); return;
+        case '=':
+        case '+': e.preventDefault(); adjustEditorZoom(10); return;
+        case '-': e.preventDefault(); adjustEditorZoom(-10); return;
+        case '0': e.preventDefault(); adjustEditorZoom(0); return;
       }
     }
 
@@ -196,12 +268,12 @@ export function initInput() {
       clearTimeout(state.syncTimer); syncParagraphText(el);
       try {
         doc.insert_line_break(nodeId, offset);
+        broadcastOp({ action: 'insertLineBreak', nodeId, offset });
         const updated = renderNodeById(nodeId);
         if (updated) setCursorAtOffset(updated, offset + 1);
         state.pagesRendered = false; updatePageBreaks(); updateUndoRedo();
-      } catch (_) {
-        // Fallback: insert newline character directly
-        document.execCommand('insertLineBreak');
+      } catch (err) {
+        console.error('insert line break:', err);
       }
       return;
     }
@@ -209,6 +281,7 @@ export function initInput() {
     // ── Enter — split paragraph ──
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
+      state._typingBatch = null; // E3.1: End typing session on Enter
       if (!el) return;
       const nodeId = el.dataset.nodeId;
       const offset = getCursorOffset(el);
@@ -230,6 +303,20 @@ export function initInput() {
         broadcastOp({ action: 'splitParagraph', nodeId, offset });
       } catch (err) { console.error('split:', err); }
       return;
+    }
+
+    // ── E1.6: Prevent deletion of page-break / HR divs ──
+    if ((e.key === 'Delete' || e.key === 'Backspace') && !el) {
+      // Cursor might be on a non-editable element (page-break, HR)
+      const sel = window.getSelection();
+      if (sel && sel.anchorNode) {
+        const anchor = sel.anchorNode.nodeType === 1 ? sel.anchorNode : sel.anchorNode.parentElement;
+        if (anchor && (anchor.classList?.contains('page-break') || anchor.tagName === 'HR' ||
+            anchor.closest?.('.page-break') || anchor.closest?.('.editor-header') || anchor.closest?.('.editor-footer'))) {
+          e.preventDefault();
+          return;
+        }
+      }
     }
 
     // ── Backspace at start — merge prev ──
@@ -333,44 +420,75 @@ export function initInput() {
     if (text.includes('\n')) {
       try {
         doc.paste_plain_text(info.startNodeId, info.startOffset, text);
+        broadcastOp({ action: 'pasteText', nodeId: info.startNodeId, offset: info.startOffset, text });
         renderDocument();
-        // Place cursor at end of pasted content
+        // E-11: Place cursor at end of pasted content — find the paragraph
+        // whose text ends with the last pasted line, searching from the bottom
         const lines = text.split('\n');
         const lastLine = lines[lines.length - 1];
-        // Find the last paragraph — it should have the last line's text
-        const allEls = Array.from(page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id]'));
-        if (allEls.length > 0) {
-          const lastEl = allEls[allEls.length - 1];
-          setCursorAtOffset(lastEl, Array.from(lastLine).length);
+        const allEls = Array.from(page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]'));
+        let targetEl = null;
+        for (let i = allEls.length - 1; i >= 0; i--) {
+          if ((allEls[i].textContent || '').endsWith(lastLine)) {
+            targetEl = allEls[i];
+            break;
+          }
         }
+        if (!targetEl && allEls.length > 0) targetEl = allEls[allEls.length - 1];
+        if (targetEl) setCursorAtOffset(targetEl, [...(targetEl.textContent || '')].length);
         updateUndoRedo();
         markDirty();
       } catch (err) {
         console.error('paste multi-line:', err);
-        // Fallback: insert as single line
+        // Fallback: insert as single line via WASM
         try {
-          doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, text.replace(/\n/g, ' '));
+          const flatText = text.replace(/\n/g, ' ');
+          doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, flatText);
+          broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text: flatText });
           renderDocument();
           updateUndoRedo();
-        } catch (_) {
-          insertTextAtCursor(text.replace(/\n/g, ' '));
-        }
+        } catch (e2) { console.error('paste fallback:', e2); }
       }
     } else {
       try {
         doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, text);
+        broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text });
         const updated = renderNodeById(info.startNodeId);
         if (updated) setCursorAtOffset(updated, info.startOffset + Array.from(text).length);
         updateUndoRedo();
         markDirty();
-      } catch (_) {
-        insertTextAtCursor(text);
+      } catch (err) {
+        console.error('paste single-line:', err);
       }
     }
   });
 
   // ─── Selection change ──────────────────────────
-  document.addEventListener('selectionchange', updateToolbarState);
+  // E-01 fix: Clear pending formats when cursor moves or selection changes
+  document.addEventListener('selectionchange', () => {
+    if (state.pendingFormats && Object.keys(state.pendingFormats).length > 0) {
+      // Only clear if the selection actually moved to a different position
+      // (toolbar mousedown prevention means formatting buttons won't trigger this)
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const info = getSelectionInfo();
+        const prev = state._pendingFormatCursorPos;
+        if (info && prev) {
+          const moved = info.startNodeId !== prev.nodeId || info.startOffset !== prev.offset;
+          // If the cursor moved and we're not in the middle of a pending format insert,
+          // clear the pending formats
+          if (moved && !state._pendingFormatInsert) {
+            state.pendingFormats = {};
+          }
+        }
+        // Track current cursor position for comparison
+        if (info) {
+          state._pendingFormatCursorPos = { nodeId: info.startNodeId, offset: info.startOffset };
+        }
+      }
+    }
+    updateToolbarState();
+  });
 
   // ─── Prevent toolbar from stealing focus ───────
   $('toolbar').addEventListener('mousedown', e => {
@@ -454,30 +572,42 @@ function getSelectionHtml() {
   return div.innerHTML;
 }
 
-function insertTextAtCursor(text) {
-  const sel = window.getSelection();
-  if (!sel?.rangeCount) return;
-  const range = sel.getRangeAt(0);
-  range.deleteContents();
-  range.insertNode(document.createTextNode(text));
-  range.collapse(false);
-  sel.removeAllRanges(); sel.addRange(range);
-  const el = getActiveElement();
-  if (el) debouncedSync(el);
-}
+// insertTextAtCursor removed — all text insertion must go through WASM to maintain model consistency
 
 function doUndo() {
   if (!state.doc) return;
   clearTimeout(state.syncTimer);
   syncAllText();
-  try { state.doc.undo(); renderDocument(); updateToolbarState(); }
-  catch (e) { console.error('undo:', e); }
+  try {
+    // E3.1: Batch undo — if we're in a typing session, undo all typing steps at once
+    const batch = state._typingBatch;
+    if (batch && batch.count > 1) {
+      const steps = batch.count;
+      state._typingBatch = null;
+      for (let i = 0; i < steps; i++) {
+        if (!state.doc.can_undo()) break;
+        state.doc.undo();
+      }
+    } else {
+      state._typingBatch = null;
+      state.doc.undo();
+    }
+    renderDocument();
+    updateToolbarState();
+    // Broadcast full document sync so peers see the undo result
+    broadcastOp({ action: 'fullDocSync' });
+  } catch (e) { console.error('undo:', e); }
 }
 
 function doRedo() {
   if (!state.doc) return;
-  try { state.doc.redo(); renderDocument(); updateToolbarState(); }
-  catch (e) { console.error('redo:', e); }
+  try {
+    state.doc.redo();
+    renderDocument();
+    updateToolbarState();
+    // Broadcast full document sync so peers see the redo result
+    broadcastOp({ action: 'fullDocSync' });
+  } catch (e) { console.error('redo:', e); }
 }
 
 function doCut() {
@@ -738,3 +868,19 @@ export { closeSlashMenu };
 
 // Expose for toolbar buttons
 export { doUndo, doRedo };
+
+// E10.2: Zoom via keyboard (Ctrl+=/Ctrl+-/Ctrl+0)
+function adjustEditorZoom(delta) {
+  if (delta === 0) {
+    state.zoomLevel = 100;
+  } else {
+    state.zoomLevel = Math.max(50, Math.min(200, (state.zoomLevel || 100) + delta));
+  }
+  const zoomEl = $('zoomValue');
+  if (zoomEl) zoomEl.textContent = state.zoomLevel + '%';
+  const page = $('docPage');
+  if (page) {
+    page.style.transform = `scale(${state.zoomLevel / 100})`;
+    page.style.transformOrigin = 'top center';
+  }
+}

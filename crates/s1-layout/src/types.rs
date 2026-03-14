@@ -44,6 +44,8 @@ pub struct LayoutPage {
     pub header: Option<LayoutBlock>,
     /// Footer content (if any).
     pub footer: Option<LayoutBlock>,
+    /// 0-based section index this page belongs to.
+    pub section_index: usize,
 }
 
 /// A positioned block element (paragraph, table, or image).
@@ -119,6 +121,21 @@ pub struct LayoutLine {
     pub runs: Vec<GlyphRun>,
 }
 
+/// An inline image within a glyph run.
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    /// Media ID reference.
+    pub media_id: String,
+    /// Image width in points.
+    pub width: f64,
+    /// Image height in points.
+    pub height: f64,
+    /// Raw image bytes.
+    pub image_data: Option<Vec<u8>>,
+    /// MIME content type (e.g., "image/png", "image/jpeg").
+    pub content_type: Option<String>,
+}
+
 /// A contiguous run of glyphs with uniform formatting.
 #[derive(Debug, Clone)]
 pub struct GlyphRun {
@@ -160,6 +177,8 @@ pub struct GlyphRun {
     pub revision_type: Option<String>,
     /// Revision author for track changes.
     pub revision_author: Option<String>,
+    /// Inline image data, if this run represents an inline image.
+    pub inline_image: Option<InlineImage>,
 }
 
 /// A table row in the layout.

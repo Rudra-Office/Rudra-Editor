@@ -1153,6 +1153,7 @@ dependencies = [
 name = "s1-layout"
 version = "1.0.0"
 dependencies = [
+ "base64",
  "fontdb",
  "pretty_assertions",
  "s1-model",

@@ -24,17 +24,17 @@ export function initToolbar() {
     if (!state.doc) return;
     const info = getSelectionInfo();
     if (!info) return;
+    // E-01 fix: When cursor is collapsed, just clear pending formats
+    if (info.collapsed) {
+      state.pendingFormats = {};
+      updateToolbarState();
+      return;
+    }
     syncAllText();
     try {
       const keys = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript', 'color', 'highlight', 'fontFamily', 'fontSize'];
-      let sn, so, en, eo;
-      if (info.collapsed) {
-        const el = $('docPage').querySelector(`[data-node-id="${info.startNodeId}"]`);
-        const textLen = el ? Array.from(el.textContent || '').length : 0;
-        sn = info.startNodeId; so = 0; en = info.startNodeId; eo = textLen;
-      } else {
-        sn = info.startNodeId; so = info.startOffset; en = info.endNodeId; eo = info.endOffset;
-      }
+      const sn = info.startNodeId, so = info.startOffset;
+      const en = info.endNodeId, eo = info.endOffset;
       keys.forEach(k => {
         try {
           if (eo > 0 || sn !== en) state.doc.format_selection(sn, so, en, eo, k, 'false');
@@ -262,6 +262,7 @@ export function initToolbar() {
     if (!info || !state.doc) return;
     try {
       state.doc.insert_comment(info.startNodeId, info.endNodeId, author, text);
+      broadcastOp({ action: 'insertComment', startNodeId: info.startNodeId, endNodeId: info.endNodeId, author, text });
       renderDocument();
       updateUndoRedo();
       refreshComments();
@@ -451,6 +452,7 @@ function refreshComments() {
         if (!id || !state.doc) return;
         try {
           state.doc.delete_comment(id);
+          broadcastOp({ action: 'deleteComment', commentId: id });
           // Also remove any replies to this comment
           state.commentReplies = (state.commentReplies || []).filter(r => r.parentId !== id);
           renderDocument();
@@ -661,21 +663,20 @@ function initStyleGallery() {
 
         // Apply font size (whole paragraph)
         const textLen = el ? Array.from(el.textContent || '').length : 0;
+        const sn = info.startNodeId;
         if (textLen > 0) {
-          if (def.fontSize) {
-            state.doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, 'fontSize', def.fontSize);
-          }
-          if (def.fontFamily) {
-            state.doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, 'fontFamily', def.fontFamily);
-          }
-          if (def.color) {
-            state.doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, 'color', def.color);
-          }
+          const bcast = (key, value) => {
+            state.doc.format_selection(sn, 0, sn, textLen, key, value);
+            broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: 0, endNode: sn, endOffset: textLen, key, value });
+          };
+          if (def.fontSize) bcast('fontSize', def.fontSize);
+          if (def.fontFamily) bcast('fontFamily', def.fontFamily);
+          if (def.color) bcast('color', def.color);
           if (def.italic) {
-            state.doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, 'italic', 'true');
+            bcast('italic', 'true');
           } else {
             // Clear italic if switching away from quote
-            try { state.doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, 'italic', 'false'); } catch(_) {}
+            try { bcast('italic', 'false'); } catch(_) {}
           }
         }
 
@@ -724,7 +725,29 @@ function initTableContextMenu() {
       $('tableContextMenu').style.display = 'none';
       if (!state.doc || !state.ctxTable) return;
       syncAllText();
-      try { fn(); renderDocument(); updateUndoRedo(); }
+      try {
+        fn();
+        // E-04: Try to re-render only the table instead of the full document.
+        // Save scroll position in case we must fall back to full re-render.
+        const canvas = $('editorCanvas');
+        const scrollTop = canvas ? canvas.scrollTop : 0;
+        const tableNodeId = state.ctxTable;
+        const tableEl = $('docPage').querySelector(`[data-node-id="${tableNodeId}"]`);
+        if (tableEl) {
+          // Re-render just the table node
+          const updated = renderNodeById(tableNodeId);
+          if (!updated) {
+            // Fallback: full re-render with scroll restore
+            renderDocument();
+            if (canvas) canvas.scrollTop = scrollTop;
+          }
+        } else {
+          // Table element not found — full re-render with scroll restore
+          renderDocument();
+          if (canvas) canvas.scrollTop = scrollTop;
+        }
+        updateUndoRedo();
+      }
       catch (e) { console.error('table op:', e); }
     });
   };
@@ -752,7 +775,18 @@ function initTableContextMenu() {
     try {
       state.doc.set_cell_background(state.ctxCell, hex);
       broadcastOp({ action: 'setCellBackground', cellId: state.ctxCell, color: hex });
-      renderDocument();
+      // E-04: Re-render only the table, not the entire document
+      const canvas = $('editorCanvas');
+      const scrollTop = canvas ? canvas.scrollTop : 0;
+      const tableNodeId = state.ctxTable;
+      const tableEl = tableNodeId ? $('docPage').querySelector(`[data-node-id="${tableNodeId}"]`) : null;
+      if (tableEl) {
+        const updated = renderNodeById(tableNodeId);
+        if (!updated) { renderDocument(); if (canvas) canvas.scrollTop = scrollTop; }
+      } else {
+        renderDocument();
+        if (canvas) canvas.scrollTop = scrollTop;
+      }
       updateUndoRedo();
     } catch (err) { console.error('cell bg:', err); }
   });

@@ -17,6 +17,23 @@ export function updatePageBreaks() {
   const headerHtml = state.docHeaderHtml || '';
   const footerHtml = state.docFooterHtml || '';
 
+  // E-10: Sync all text to WASM before querying page map so it reflects latest edits.
+  // Inline sync to avoid circular import with render.js.
+  $('docPage').querySelectorAll('[data-node-id]').forEach(el => {
+    if (el.classList.contains('vs-placeholder')) return;
+    const tag = el.tagName.toLowerCase();
+    if ((tag === 'p' || /^h[1-6]$/.test(tag)) && el.dataset.nodeId) {
+      const nodeId = el.dataset.nodeId;
+      const newText = el.textContent || '';
+      if (state.syncedTextCache.get(nodeId) !== newText) {
+        try {
+          doc.set_paragraph_text(nodeId, newText);
+          state.syncedTextCache.set(nodeId, newText);
+        } catch (_) {}
+      }
+    }
+  });
+
   // Get page map from WASM layout engine
   let pageMap = null;
   try { pageMap = JSON.parse(doc.get_page_map_json()); } catch (_) {}
@@ -34,16 +51,47 @@ export function updatePageBreaks() {
   // Always prepend header area (even if empty, for page margin visualization)
   page.prepend(topHdr);
 
+  // Remove previous page-bottom spacers
+  page.querySelectorAll('.page-bottom-spacer').forEach(el => el.remove());
+
   if (pageMap && pageMap.pages && numPages > 1) {
     const pages = pageMap.pages;
+    // CSS page padding (top + bottom) — must match .doc-page padding
+    const pagePaddingPx = 96 * 2;
+    // DPI ratio: layout uses 72pt/inch, screen is 96px/inch
+    const ptToPx = 96 / 72;
 
     for (let i = 0; i < numPages - 1; i++) {
+      const currentPage = pages[i];
       const nextPage = pages[i + 1];
       if (!nextPage.nodeIds?.length) continue;
 
       // Find first DOM element of next page
       const firstNextEl = page.querySelector(`[data-node-id="${nextPage.nodeIds[0]}"]`);
       if (!firstNextEl) continue;
+
+      // E1.7: Calculate remaining space to fill the page height.
+      // Measure content height between the previous page break (or top) and this break point.
+      const pageHeightPx = (currentPage.height || 792) * ptToPx;
+      const contentHeightPx = pageHeightPx - pagePaddingPx;
+
+      // Measure actual content height for this page section
+      let sectionContentHeight = 0;
+      const currentNodeIds = currentPage.nodeIds || [];
+      for (const nid of currentNodeIds) {
+        const el = page.querySelector(`[data-node-id="${nid}"]`);
+        if (el) sectionContentHeight += el.getBoundingClientRect().height;
+      }
+
+      // Add spacer to fill remaining page height
+      const remaining = contentHeightPx - sectionContentHeight;
+      if (remaining > 20) {
+        const spacer = document.createElement('div');
+        spacer.className = 'page-bottom-spacer';
+        spacer.style.height = remaining + 'px';
+        spacer.contentEditable = 'false';
+        firstNextEl.before(spacer);
+      }
 
       // Build page break with footer of current page and header of next page
       const brk = document.createElement('div');

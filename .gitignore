@@ -14,3 +14,5 @@ Thumbs.db
 # Misc
 *.orig
 *.bak
+
+editor/node_modules

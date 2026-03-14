@@ -1,7 +1,7 @@
 // Toolbar state & formatting handlers
 import { state, $ } from './state.js';
 import { getSelectionInfo, saveSelection, setCursorAtOffset, setSelectionRange } from './selection.js';
-import { renderNodeById, syncParagraphText } from './render.js';
+import { renderNodeById, renderNodesById, syncParagraphText } from './render.js';
 import { updatePageBreaks } from './pagination.js';
 import { broadcastOp } from './collab.js';
 
@@ -43,7 +43,12 @@ function _updateToolbarStateImpl() {
           info.startNodeId, info.startOffset, info.endNodeId, info.endOffset));
       } catch (_) { fmt = JSON.parse(doc.get_formatting_json(info.startNodeId)); }
     }
-    const on = (k) => fmt[k] === true || fmt[k] === 'true';
+    // E-01 fix: Merge pending formats into the resolved formatting for toolbar display
+    const pending = (info.collapsed && state.pendingFormats) ? state.pendingFormats : {};
+    const on = (k) => {
+      if (k in pending) return pending[k] === 'true';
+      return fmt[k] === true || fmt[k] === 'true';
+    };
     const setToggle = (id, active) => {
       const el = $(id);
       el.classList.toggle('active', active);
@@ -94,6 +99,7 @@ export function updateUndoRedo() {
 export function applyFormat(key, value) {
   const { doc } = state;
   if (!doc) return;
+  state._typingBatch = null; // E3.1: End typing session on format change
   const info = getSelectionInfo();
   if (!info) return;
 
@@ -103,29 +109,37 @@ export function applyFormat(key, value) {
     ? (page.querySelector(`[data-node-id="${info.endNodeId}"]`) || info.endEl)
     : startEl;
 
+  // E-01 fix: When cursor is collapsed, store as pending format instead
+  // of formatting the entire paragraph.
+  if (info.collapsed) {
+    if (!state.pendingFormats) state.pendingFormats = {};
+    state.pendingFormats[key] = value;
+    // Record cursor position so selectionchange can detect real movement
+    state._pendingFormatCursorPos = { nodeId: info.startNodeId, offset: info.startOffset };
+    // Update toolbar button state to reflect pending formats
+    updateToolbarState();
+    return;
+  }
+
+  // E-14: Flush pending sync timer before formatting to prevent lost edits
+  clearTimeout(state.syncTimer);
   syncParagraphText(startEl);
   if (endEl !== startEl) syncParagraphText(endEl);
 
   try {
     let sn, so, en, eo;
-    if (info.collapsed) {
-      const textLen = Array.from(startEl.textContent || '').length;
-      if (textLen > 0) {
-        doc.format_selection(info.startNodeId, 0, info.startNodeId, textLen, key, value);
-        sn = info.startNodeId; so = 0; en = info.startNodeId; eo = textLen;
-      }
-    } else {
-      doc.format_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset, key, value);
-      sn = info.startNodeId; so = info.startOffset; en = info.endNodeId; eo = info.endOffset;
-    }
+    doc.format_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset, key, value);
+    sn = info.startNodeId; so = info.startOffset; en = info.endNodeId; eo = info.endOffset;
 
-    const newStartEl = renderNodeById(info.startNodeId);
-    let newEndEl = null;
-    if (info.endNodeId !== info.startNodeId) newEndEl = renderNodeById(info.endNodeId);
+    // E-05: Batch render all affected nodes to avoid race conditions
+    const nodeIds = [info.startNodeId];
+    if (info.endNodeId !== info.startNodeId) nodeIds.push(info.endNodeId);
+    const rendered = renderNodesById(nodeIds);
+    const newStartEl = rendered.get(info.startNodeId);
+    const newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
 
     page.focus();
-    if (info.collapsed && newStartEl) setCursorAtOffset(newStartEl, info.startOffset);
-    else if (newStartEl) setSelectionRange(newStartEl, info.startOffset, newEndEl || newStartEl, info.endOffset);
+    if (newStartEl) setSelectionRange(newStartEl, info.startOffset, newEndEl || newStartEl, info.endOffset);
 
     if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
     state.pagesRendered = false;
@@ -151,8 +165,16 @@ export function toggleFormat(key) {
   let isActive = false;
   try {
     if (info.collapsed) {
-      isActive = !!JSON.parse(doc.get_formatting_json(info.startNodeId))[key];
+      // E-01 fix: Check pending formats first, then fall back to document formatting
+      const pending = state.pendingFormats || {};
+      if (key in pending) {
+        isActive = pending[key] === 'true';
+      } else {
+        isActive = !!JSON.parse(doc.get_formatting_json(info.startNodeId))[key];
+      }
     } else {
+      // E-14: Flush pending sync timer before querying formatting
+      clearTimeout(state.syncTimer);
       syncParagraphText(startEl);
       if (endEl !== startEl) syncParagraphText(endEl);
       try {
@@ -163,7 +185,69 @@ export function toggleFormat(key) {
   } catch (_) {}
 
   const newVal = isActive ? 'false' : 'true';
-  if (key === 'superscript' && newVal === 'true') applyFormat('subscript', 'false');
-  if (key === 'subscript' && newVal === 'true') applyFormat('superscript', 'false');
+
+  // Superscript/subscript mutual exclusion: apply both operations in a single
+  // sync/render cycle to avoid the opposite format persisting due to intermediate
+  // re-renders between separate applyFormat calls.
+  if (key === 'superscript' && newVal === 'true') {
+    applyFormatPair('subscript', 'false', key, newVal, info, startEl, endEl);
+    return;
+  }
+  if (key === 'subscript' && newVal === 'true') {
+    applyFormatPair('superscript', 'false', key, newVal, info, startEl, endEl);
+    return;
+  }
   applyFormat(key, newVal);
+}
+
+// Apply two format operations in a single sync/render cycle.
+// Used for superscript/subscript mutual exclusion so the clearing and
+// setting happen atomically without intermediate DOM re-renders.
+function applyFormatPair(clearKey, clearVal, setKey, setVal, info, startEl, endEl) {
+  const { doc } = state;
+  if (!doc) return;
+  const page = $('docPage');
+
+  // For collapsed cursors, just update pending formats for both keys
+  if (info.collapsed) {
+    if (!state.pendingFormats) state.pendingFormats = {};
+    state.pendingFormats[clearKey] = clearVal;
+    state.pendingFormats[setKey] = setVal;
+    // Record cursor position so selectionchange can detect real movement
+    state._pendingFormatCursorPos = { nodeId: info.startNodeId, offset: info.startOffset };
+    updateToolbarState();
+    return;
+  }
+
+  // E-14: Flush pending sync timer before formatting
+  clearTimeout(state.syncTimer);
+  syncParagraphText(startEl);
+  if (endEl !== startEl) syncParagraphText(endEl);
+
+  try {
+    const sn = info.startNodeId, so = info.startOffset;
+    const en = info.endNodeId, eo = info.endOffset;
+
+    // Apply both format operations before re-rendering
+    doc.format_selection(sn, so, en, eo, clearKey, clearVal);
+    doc.format_selection(sn, so, en, eo, setKey, setVal);
+
+    // E-05: Single batch re-render after both operations
+    const nodeIds = [info.startNodeId];
+    if (info.endNodeId !== info.startNodeId) nodeIds.push(info.endNodeId);
+    const rendered = renderNodesById(nodeIds);
+    const newStartEl = rendered.get(info.startNodeId);
+    let newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
+
+    page.focus();
+    if (newStartEl) setSelectionRange(newStartEl, so, newEndEl || newStartEl, eo);
+    if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+
+    state.pagesRendered = false;
+    updatePageBreaks();
+    updateToolbarState();
+    updateUndoRedo();
+    broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key: clearKey, value: clearVal });
+    broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key: setKey, value: setVal });
+  } catch (e) { console.error('format pair error:', e); }
 }

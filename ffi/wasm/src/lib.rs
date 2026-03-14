@@ -404,10 +404,12 @@ impl WasmDocument {
         let sections = doc.sections();
         use s1_model::section::HeaderFooterType;
 
-        // Find the best header across all sections
-        // Prefer Default; fall back to First if title_page is set; else any.
-        let header_ref = sections.iter().find_map(|sec| {
-            sec.headers.iter()
+        // Render headers from ALL sections, tagged with data-section-index
+        // so the editor can show the correct header per page.
+        // For single-section documents this behaves identically to before.
+        for (sec_idx, sec) in sections.iter().enumerate() {
+            // Prefer Default; fall back to First if title_page is set; else any.
+            let header_ref = sec.headers.iter()
                 .find(|h| h.hf_type == HeaderFooterType::Default)
                 .or_else(|| {
                     if sec.title_page {
@@ -415,20 +417,43 @@ impl WasmDocument {
                     } else {
                         sec.headers.first()
                     }
-                })
-        });
-        if let Some(hf) = header_ref {
-            html.push_str("<header style=\"border-bottom:1px solid #dadce0;padding:8px 0;margin-bottom:16px;color:#5f6368;font-size:9pt\">");
-            render_children(model, hf.node_id, &mut html);
-            html.push_str("</header>");
+                });
+            if let Some(hf) = header_ref {
+                // First-page header (if title_page is set and a First header exists)
+                let first_hf = if sec.title_page {
+                    sec.headers.iter().find(|h| h.hf_type == HeaderFooterType::First)
+                } else {
+                    None
+                };
+                if let Some(fhf) = first_hf {
+                    if fhf.node_id != hf.node_id {
+                        html.push_str(&format!(
+                            "<header data-section-index=\"{}\" data-header-type=\"first\" style=\"border-bottom:1px solid #dadce0;padding:8px 0;margin-bottom:16px;color:#5f6368;font-size:9pt;display:none\">",
+                            sec_idx
+                        ));
+                        render_children(model, fhf.node_id, &mut html);
+                        html.push_str("</header>");
+                    }
+                }
+                // Default header for this section — only the first section's
+                // default header is visible by default; others are hidden until
+                // the editor assigns them to pages.
+                let display = if sec_idx == 0 { "" } else { "display:none;" };
+                html.push_str(&format!(
+                    "<header data-section-index=\"{}\" data-header-type=\"default\" style=\"border-bottom:1px solid #dadce0;padding:8px 0;margin-bottom:16px;color:#5f6368;font-size:9pt;{}\">",
+                    sec_idx, display
+                ));
+                render_children(model, hf.node_id, &mut html);
+                html.push_str("</header>");
+            }
         }
 
         // Render body content
         render_children(model, body_id, &mut html);
 
-        // Find the best footer across all sections
-        let footer_ref = sections.iter().find_map(|sec| {
-            sec.footers.iter()
+        // Render footers from ALL sections, tagged with data-section-index
+        for (sec_idx, sec) in sections.iter().enumerate() {
+            let footer_ref = sec.footers.iter()
                 .find(|f| f.hf_type == HeaderFooterType::Default)
                 .or_else(|| {
                     if sec.title_page {
@@ -436,12 +461,32 @@ impl WasmDocument {
                     } else {
                         sec.footers.first()
                     }
-                })
-        });
-        if let Some(hf) = footer_ref {
-            html.push_str("<footer style=\"border-top:1px solid #dadce0;padding:8px 0;margin-top:16px;color:#5f6368;font-size:9pt\">");
-            render_children(model, hf.node_id, &mut html);
-            html.push_str("</footer>");
+                });
+            if let Some(hf) = footer_ref {
+                // First-page footer
+                let first_hf = if sec.title_page {
+                    sec.footers.iter().find(|h| h.hf_type == HeaderFooterType::First)
+                } else {
+                    None
+                };
+                if let Some(fhf) = first_hf {
+                    if fhf.node_id != hf.node_id {
+                        html.push_str(&format!(
+                            "<footer data-section-index=\"{}\" data-footer-type=\"first\" style=\"border-top:1px solid #dadce0;padding:8px 0;margin-top:16px;color:#5f6368;font-size:9pt;display:none\">",
+                            sec_idx
+                        ));
+                        render_children(model, fhf.node_id, &mut html);
+                        html.push_str("</footer>");
+                    }
+                }
+                let display = if sec_idx == 0 { "" } else { "display:none;" };
+                html.push_str(&format!(
+                    "<footer data-section-index=\"{}\" data-footer-type=\"default\" style=\"border-top:1px solid #dadce0;padding:8px 0;margin-top:16px;color:#5f6368;font-size:9pt;{}\">",
+                    sec_idx, display
+                ));
+                render_children(model, hf.node_id, &mut html);
+                html.push_str("</footer>");
+            }
         }
 
         Ok(html)
@@ -3543,6 +3588,11 @@ fn run_char_len(model: &DocumentModel, run_id: NodeId) -> usize {
 ///
 /// Splits runs at start and end offsets as needed, then applies attrs to all runs
 /// in the range.
+///
+/// Known limitation (W-11): Each `split_run_internal` call creates its own
+/// transaction, so a selection spanning many runs produces multiple undo entries.
+/// Batching all splits and formatting into a single transaction would require
+/// transaction-batching API changes in `s1engine::Document`.
 fn format_range_in_paragraph(
     doc: &mut s1engine::Document,
     para_id: NodeId,
@@ -3571,7 +3621,16 @@ fn format_range_in_paragraph(
         }
     }
 
-    // Find runs that overlap with [start_offset, end_offset)
+    // Find runs that overlap with [start_offset, end_offset) and split at
+    // selection boundaries.
+    //
+    // Safety note on stale `runs_info`: After a `split_run_internal()` call,
+    // subsequent entries in `runs_info` remain valid because:
+    //   - Each run's NodeId is unchanged (the split only creates a NEW sibling).
+    //   - Each run's text content is unchanged (the split only modifies the
+    //     run being split).
+    //   - Character offsets in `runs_info` are used relative to each run's own
+    //     start position, so they remain correct even after earlier runs are split.
     let mut runs_to_format: Vec<NodeId> = Vec::new();
 
     for &(run_id, run_start, run_end) in &runs_info {
@@ -3585,17 +3644,19 @@ fn format_range_in_paragraph(
             let split_offset = start_offset - run_start;
             let new_run_id = split_run_internal(doc, run_id, split_offset)?;
             // After split: run_id has [run_start, start_offset), new_run_id has [start_offset, run_end)
-            // The new run is what we want to format (partially)
-            // But we also need to check if end_offset falls within this new run
+            // The new run is what we want to format (partially or fully).
+            // Check if end_offset also falls within this same original run.
             let new_run_len = run_char_len(doc.model(), new_run_id);
             let remaining_end = end_offset - start_offset;
 
             if remaining_end < new_run_len {
-                // Need to split the new run at remaining_end
+                // end_offset is inside the new run — split again at remaining_end
                 let tail_run_id = split_run_internal(doc, new_run_id, remaining_end)?;
                 let _ = tail_run_id; // tail is not formatted
                 runs_to_format.push(new_run_id);
             } else {
+                // Selection extends beyond this run; format the whole tail.
+                // Subsequent runs will be picked up by later iterations.
                 runs_to_format.push(new_run_id);
             }
             continue;
@@ -3714,7 +3775,10 @@ fn collect_runs_in_range(
     }
 }
 
-/// Get the column count of a table (from the first row).
+/// Get the column count of a table (maximum across all rows).
+///
+/// Checks every row and returns the maximum cell count, which handles
+/// tables with inconsistent column counts (e.g., due to merged cells).
 fn get_table_col_count(
     model: &DocumentModel,
     table_id: NodeId,
@@ -3722,14 +3786,18 @@ fn get_table_col_count(
     let table = model
         .node(table_id)
         .ok_or_else(|| JsError::new("Table not found"))?;
-    if let Some(&first_row_id) = table.children.first() {
-        Ok(model
-            .node(first_row_id)
-            .map(|r| r.children.len())
-            .unwrap_or(0))
-    } else {
-        Ok(0)
+    let mut max_cols = 0;
+    for &row_id in &table.children {
+        if let Some(row_node) = model.node(row_id) {
+            if row_node.node_type == NodeType::TableRow {
+                let cols = row_node.children.len();
+                if cols > max_cols {
+                    max_cols = cols;
+                }
+            }
+        }
     }
+    Ok(max_cols)
 }
 
 /// Get formatting of a run as JSON.
@@ -3933,7 +4001,7 @@ fn render_node(model: &DocumentModel, node_id: NodeId, html: &mut String) {
         NodeType::TableCell => render_table_cell(model, node_id, html),
         NodeType::Image => render_image(model, node_id, html),
         NodeType::PageBreak => {
-            html.push_str("<hr style=\"border:none;page-break-after:always;margin:0\">");
+            html.push_str("<hr class=\"page-break\" style=\"border:none;page-break-after:always;margin:0\" />");
         }
         NodeType::TableOfContents => {
             html.push_str("<div class=\"toc\" style=\"margin:1em 0;padding:1em;border:1px solid #dadce0;border-radius:4px\">");
@@ -3974,7 +4042,10 @@ fn render_node(model: &DocumentModel, node_id: NodeId, html: &mut String) {
             render_field_html(node, html);
         }
         NodeType::ColumnBreak => {
-            html.push_str("<hr style=\"border:none;page-break-after:always;margin:0\">");
+            html.push_str("<hr class=\"column-break\" style=\"border-style:dashed\" />");
+        }
+        NodeType::Drawing => {
+            render_drawing(model, node_id, html);
         }
         // Container nodes — render their children
         NodeType::Body | NodeType::Document => {
@@ -4193,7 +4264,7 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
             NodeType::Run => render_run(model, child_id, html),
             NodeType::Image => render_image(model, child_id, html),
             NodeType::LineBreak => html.push_str("<br/>"),
-            NodeType::ColumnBreak => html.push_str("<br style=\"page-break-before:always\"/>"),
+            NodeType::ColumnBreak => html.push_str("<hr class=\"column-break\" style=\"border-style:dashed\" />"),
             NodeType::Tab => html.push_str("&emsp;"),
             NodeType::Field => {
                 render_field_html(child, html);
@@ -4209,14 +4280,37 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
 /// `render_inline_children` use the same logic (L-02).
 fn render_field_html(node: &Node, html: &mut String) {
     if let Some(AttributeValue::FieldType(ft)) = node.attributes.get(&AttributeKey::FieldType) {
+        // Emit data-field attribute so the editor's pagination system
+        // (e.g. substitutePageNumbers in pagination.js) can find and
+        // substitute the correct values at render time.
         match ft {
             s1_model::FieldType::PageNumber => {
-                html.push_str("<span class=\"field\">#</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageNumber\">#</span>");
             }
             s1_model::FieldType::PageCount => {
-                html.push_str("<span class=\"field\">N</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageCount\">N</span>");
             }
-            _ => {}
+            s1_model::FieldType::Date => {
+                html.push_str("<span class=\"field\" data-field=\"Date\">DATE</span>");
+            }
+            s1_model::FieldType::Time => {
+                html.push_str("<span class=\"field\" data-field=\"Time\">TIME</span>");
+            }
+            s1_model::FieldType::FileName => {
+                html.push_str("<span class=\"field\" data-field=\"FileName\">FILENAME</span>");
+            }
+            s1_model::FieldType::Author => {
+                html.push_str("<span class=\"field\" data-field=\"Author\">AUTHOR</span>");
+            }
+            s1_model::FieldType::TableOfContents => {
+                html.push_str("<span class=\"field\" data-field=\"TableOfContents\">TOC</span>");
+            }
+            s1_model::FieldType::Custom => {
+                html.push_str("<span class=\"field\" data-field=\"Custom\">FIELD</span>");
+            }
+            _ => {
+                html.push_str("<span class=\"field\" data-field=\"Unknown\">FIELD</span>");
+            }
         }
     }
 }
@@ -4423,8 +4517,40 @@ fn render_image(model: &DocumentModel, img_id: NodeId, html: &mut String) {
                 "<img data-node-id=\"{}:{}\" src=\"data:{mime};base64,{b64}\" style=\"{style}\" alt=\"{}\"/>",
                 img_id.replica, img_id.counter, escape_html(alt)
             ));
+            return;
         }
     }
+    // Image media not found — render a placeholder so missing images are visible
+    html.push_str(&format!(
+        "<img data-node-id=\"{}:{}\" src=\"\" alt=\"[Image not found]\" style=\"width:100pt;height:100pt;border:1px dashed #ccc;display:flex;align-items:center;justify-content:center\" />",
+        img_id.replica, img_id.counter
+    ));
+}
+
+/// Render a Drawing/VML node as a placeholder div showing the shape dimensions.
+fn render_drawing(model: &DocumentModel, drawing_id: NodeId, html: &mut String) {
+    let node = match model.node(drawing_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let width = node.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap_or(100.0);
+    let height = node.attributes.get_f64(&AttributeKey::ShapeHeight).unwrap_or(100.0);
+    let shape_type = node
+        .attributes
+        .get_string(&AttributeKey::ShapeType)
+        .unwrap_or("shape");
+    let title = format!("VML Shape: {}", shape_type);
+
+    let escaped_title = escape_html(&title);
+    html.push_str(&format!(
+        "<div class=\"vml-shape\" data-node-id=\"{r}:{c}\" style=\"width:{w}pt;height:{h}pt;border:1px solid #999;background:#f0f0f0\" title=\"{t}\"></div>",
+        r = drawing_id.replica,
+        c = drawing_id.counter,
+        w = width,
+        h = height,
+        t = escaped_title
+    ));
 }
 
 /// Check if a paragraph has no visible text content (empty or only whitespace).
@@ -5142,14 +5268,21 @@ fn parse_state_vector_json(json: &str) -> Result<s1_crdt::StateVector, JsError> 
     Ok(sv)
 }
 
-// Helper to render HTML from a DocumentModel (shared between WasmDocument and WasmCollabDocument)
+// Helper to render HTML from a DocumentModel (shared between WasmDocument and WasmCollabDocument).
+//
+// Known limitation (W-14): The full HTML is accumulated in a single String.
+// For very large documents a streaming/callback-based API would be more
+// memory-efficient, but that would require an API redesign. We mitigate the
+// allocation cost by pre-sizing the buffer based on node count.
 fn to_html_from_model(model: &DocumentModel) -> String {
     let body_id = match model.body_id() {
         Some(id) => id,
         None => return String::new(),
     };
     let children = model.children(body_id);
-    let mut html = String::new();
+    // Estimate ~120 bytes of HTML per node (tags + attributes + text).
+    let estimated_size = (model.node_count() * 120).max(1024);
+    let mut html = String::with_capacity(estimated_size);
     for child in &children {
         html.push_str(&render_node_to_html(model, child));
     }

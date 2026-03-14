@@ -2,8 +2,14 @@
 import { state, $ } from './state.js';
 import { renderDocument, syncAllText } from './render.js';
 import { updateUndoRedo } from './toolbar.js';
+import { broadcastOp } from './collab.js';
+
+let _findRefreshTimer = null;
 
 export function initFind() {
+  // E1.5: Register callback so render.js can trigger find refresh without circular import
+  state._onTextChanged = refreshFindIfOpen;
+
   $('btnFind').addEventListener('click', () => {
     $('findBar').classList.add('show');
     $('findInput').focus();
@@ -127,6 +133,7 @@ function doReplace() {
   syncAllText();
   try {
     state.doc.replace_text(match.nodeId, match.offset, match.length, replacement);
+    broadcastOp({ action: 'replaceText', nodeId: match.nodeId, offset: match.offset, length: match.length, replacement });
     renderDocument();
     updateUndoRedo();
     doFind(); // re-search
@@ -141,10 +148,43 @@ function doReplaceAll() {
   syncAllText();
   try {
     const count = state.doc.replace_all(query, replacement, true);
+    broadcastOp({ action: 'replaceAll', query, replacement, caseInsensitive: true });
     renderDocument();
     updateUndoRedo();
     $('findCount').textContent = count + ' replaced';
     state.findMatches = [];
     state.findIndex = -1;
   } catch (e) { console.error('replace all:', e); }
+}
+
+/**
+ * E1.5: Re-run find if the find bar is open.
+ * Debounced to 300ms so rapid typing doesn't cause perf issues.
+ */
+export function refreshFindIfOpen() {
+  if (!$('findBar').classList.contains('show')) return;
+  if (!$('findInput').value) return;
+  clearTimeout(_findRefreshTimer);
+  _findRefreshTimer = setTimeout(() => {
+    // Remember the previous match position to stay near it
+    const prevMatch = state.findIndex >= 0 && state.findMatches[state.findIndex]
+      ? state.findMatches[state.findIndex] : null;
+    doFind();
+    // Try to restore closest match index
+    if (prevMatch && state.findMatches.length > 0) {
+      let best = 0, bestDist = Infinity;
+      state.findMatches.forEach((m, i) => {
+        const dist = m.nodeId === prevMatch.nodeId
+          ? Math.abs(m.offset - prevMatch.offset)
+          : Infinity;
+        if (dist < bestDist) { bestDist = dist; best = i; }
+      });
+      if (best !== state.findIndex) {
+        clearHighlights();
+        state.findIndex = best;
+        state.findMatches.forEach((m, i) => highlightMatch(m, i === state.findIndex));
+        $('findCount').textContent = (state.findIndex + 1) + '/' + state.findMatches.length;
+      }
+    }
+  }, 300);
 }

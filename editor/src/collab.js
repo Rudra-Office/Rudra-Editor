@@ -440,6 +440,87 @@ function applyRemoteOp(dataStr, fromPeerId) {
         break;
       }
 
+      case 'insertLineBreak': {
+        try {
+          state.doc.insert_line_break(op.nodeId, op.offset);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote insertLineBreak:', e); }
+        break;
+      }
+
+      case 'pasteText': {
+        try {
+          state.doc.paste_plain_text(op.nodeId, op.offset, op.text);
+          renderDocument();
+        } catch (e) { console.error('remote pasteText:', e); }
+        break;
+      }
+
+      case 'insertText': {
+        try {
+          state.doc.insert_text_in_paragraph(op.nodeId, op.offset, op.text);
+          renderNodeById(op.nodeId);
+        } catch (e) { console.error('remote insertText:', e); }
+        break;
+      }
+
+      case 'replaceText': {
+        try {
+          state.doc.replace_text(op.nodeId, op.offset, op.length, op.replacement);
+          renderDocument();
+        } catch (e) { console.error('remote replaceText:', e); }
+        break;
+      }
+
+      case 'replaceAll': {
+        try {
+          state.doc.replace_all(op.query, op.replacement, op.caseInsensitive);
+          renderDocument();
+        } catch (e) { console.error('remote replaceAll:', e); }
+        break;
+      }
+
+      case 'insertComment': {
+        try {
+          state.doc.insert_comment(op.startNodeId, op.endNodeId, op.author, op.text);
+          renderDocument();
+        } catch (e) { console.error('remote insertComment:', e); }
+        break;
+      }
+
+      case 'deleteComment': {
+        try {
+          state.doc.delete_comment(op.commentId);
+          renderDocument();
+        } catch (e) { console.error('remote deleteComment:', e); }
+        break;
+      }
+
+      case 'acceptChange': {
+        try {
+          state.doc.accept_change(op.nodeId);
+          renderDocument();
+        } catch (e) { console.error('remote acceptChange:', e); }
+        break;
+      }
+
+      case 'rejectChange': {
+        try {
+          state.doc.reject_change(op.nodeId);
+          renderDocument();
+        } catch (e) { console.error('remote rejectChange:', e); }
+        break;
+      }
+
+      case 'fullDocSync': {
+        // Peer performed undo/redo — request full sync
+        // For now, trigger a full document re-render from current state
+        // (The actual undo happened on the sender's side, and the text changes
+        // are broadcast separately via setText operations)
+        renderDocument();
+        break;
+      }
+
       case 'fullSync': {
         // Full document sync — only apply if we have no content yet
         // (first joiner gets the doc from the host)
@@ -564,12 +645,19 @@ function renderPeerCursor(cursor) {
   cursorEl.appendChild(label);
 
   // Try to position at the correct character offset
+  // cursor.offset is in codepoints; DOM TextNode offsets are UTF-16 code units.
+  // Convert codepoint offset to UTF-16 offset for range positioning.
   try {
     const range = document.createRange();
     const textNode = paraEl.firstChild;
     if (textNode && textNode.nodeType === 3) {
-      const off = Math.min(cursor.offset || 0, textNode.length);
-      range.setStart(textNode, off);
+      const cpOffset = cursor.offset || 0;
+      const chars = [...textNode.textContent];
+      const clampedCp = Math.min(cpOffset, chars.length);
+      // Convert codepoint offset to UTF-16 string offset
+      let utf16Off = 0;
+      for (let i = 0; i < clampedCp; i++) utf16Off += chars[i].length;
+      range.setStart(textNode, Math.min(utf16Off, textNode.length));
       range.collapse(true);
       const rect = range.getBoundingClientRect();
       const paraRect = paraEl.getBoundingClientRect();

@@ -475,35 +475,42 @@ html,body{height:100%;overflow:hidden;font-family:var(--font-ui);background:var(
 .page-break{
   pointer-events:none;user-select:none;
   position:relative;
+  /* Extend full width beyond page padding to create paper-edge effect */
   margin:0 -96px;
-  background:#f1f3f4;
-  border-top:1px solid #dadce0;
-  border-bottom:1px solid #dadce0;
+  background:var(--bg-app);
   display:flex;flex-direction:column;
 }
 .page-break .pb-footer{
-  width:100%;padding:6px 96px;
+  width:100%;padding:8px 96px 16px;
   font-size:9pt;color:#5f6368;
   font-family:Arial,sans-serif;
-  min-height:16px;
+  min-height:24px;
+  /* White background for "bottom of page" look */
+  background:#fff;
+  border-bottom:1px solid #d0d0d0;
+  box-shadow:0 2px 4px rgba(60,64,67,.15);
 }
 .page-break .pb-gap{
-  height:12px;width:100%;
-  background:#e8eaed;
+  height:24px;width:100%;
+  background:var(--bg-app);
   position:relative;
 }
 .page-break .pb-header{
-  width:100%;padding:6px 96px;
+  width:100%;padding:16px 96px 8px;
   font-size:9pt;color:#5f6368;
   font-family:Arial,sans-serif;
-  min-height:16px;
+  min-height:24px;
+  /* White background for "top of next page" look */
+  background:#fff;
+  border-top:1px solid #d0d0d0;
+  box-shadow:0 -2px 4px rgba(60,64,67,.15);
 }
 .page-break .pb-badge{
   position:absolute;right:12px;top:50%;transform:translateY(-50%);
   background:#fff;border:1px solid #dadce0;
   border-radius:10px;
   padding:2px 10px;font-size:10px;color:#80868b;
-  font-family:var(--font-ui);
+  font-family:var(--font-ui);z-index:1;
 }
 /* Footer at the very end of the document */
 .editor-footer{
@@ -513,6 +520,12 @@ html,body{height:100%;overflow:hidden;font-family:var(--font-ui);background:var(
   font-family:Arial,sans-serif;
   pointer-events:none;user-select:none;
   min-height:24px;
+}
+
+/* Page bottom spacer — fills remaining page height before page break */
+.page-bottom-spacer{
+  pointer-events:none;user-select:none;
+  flex-shrink:0;
 }
 
 /* ═══════════════════════════════════════════════════
@@ -998,10 +1011,43 @@ mark.find-highlight.active{background:#f9a825;color:#fff}
 }
 
 /* ═══════════════════════════════════════════════════
-   DARK MODE — prefers-color-scheme
+   DARK MODE — auto (prefers-color-scheme) + manual ([data-theme="dark"])
    ═══════════════════════════════════════════════════ */
+/* Manual toggle via data attribute */
+[data-theme="dark"] {
+  --bg-app: #202124;
+  --bg-white: #292a2d;
+  --bg-toolbar: #35363a;
+  --bg-toolbar-hover: #44454a;
+  --bg-active: #1a3a5c;
+  --border: #5f6368;
+  --border-light: #3c4043;
+  --text-primary: #e8eaed;
+  --text-secondary: #bdc1c6;
+  --text-muted: #9aa0a6;
+  --accent: #8ab4f8;
+  --accent-light: #1a3a5c;
+  --danger: #f28b82;
+  --success: #81c995;
+  --shadow-sm: 0 1px 2px rgba(0,0,0,.5);
+  --shadow-md: 0 2px 6px rgba(0,0,0,.6);
+  --shadow-lg: 0 4px 16px rgba(0,0,0,.7);
+}
+[data-theme="dark"] .doc-page { background: #fff !important; color: #000 !important; }
+[data-theme="dark"] .doc-page h1,[data-theme="dark"] .doc-page h2,[data-theme="dark"] .doc-page h3,[data-theme="dark"] .doc-page h4,[data-theme="dark"] .doc-page h5,[data-theme="dark"] .doc-page h6 { color: inherit !important; }
+[data-theme="dark"] .doc-page p,[data-theme="dark"] .doc-page li,[data-theme="dark"] .doc-page td,[data-theme="dark"] .doc-page th { color: inherit !important; }
+[data-theme="dark"] .doc-page a { color: #1a73e8 !important; }
+[data-theme="dark"] .doc-page:empty::before { color: #bbb !important; }
+[data-theme="dark"] .ruler { background: #292a2d; }
+[data-theme="dark"] .ruler-margin { background: #202124; }
+[data-theme="dark"] .dropdown-item:hover,[data-theme="dark"] .ctx-item:hover { background: #44454a; }
+[data-theme="dark"] .modal { background: #292a2d; color: #e8eaed; }
+[data-theme="dark"] .find-bar { background: #292a2d; }
+[data-theme="dark"] .find-input { background: #35363a; color: #e8eaed; border-color: #5f6368; }
+[data-theme="dark"] input[type=number],[data-theme="dark"] select { color-scheme: dark; }
+
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     --bg-app: #202124;
     --bg-white: #292a2d;
     --bg-toolbar: #35363a;

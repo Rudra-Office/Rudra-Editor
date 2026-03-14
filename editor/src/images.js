@@ -170,6 +170,21 @@ function startResize(e) {
   document.addEventListener('mouseup', stopResize);
 }
 
+// E-08: Throttled resize persist — save to WASM every 500ms during drag
+let _resizePersistTimer = null;
+
+function persistResizeDuringDrag(img) {
+  const nodeEl = img.closest('[data-node-id]');
+  if (!nodeEl || !state.doc) return;
+  const imgNodeId = nodeEl.dataset.nodeId;
+  if (!imgNodeId) return;
+  const wPt = img.offsetWidth * 0.75;
+  const hPt = img.offsetHeight * 0.75;
+  try {
+    state.doc.resize_image(imgNodeId, wPt, hPt);
+  } catch (_) {}
+}
+
 function doResize(e) {
   const r = state.resizing;
   if (!r) return;
@@ -186,11 +201,21 @@ function doResize(e) {
   newW = Math.max(20, newW); newH = Math.max(20, newH);
   r.img.style.width = newW + 'px';
   r.img.style.height = newH + 'px';
+  // E-08: Throttled persist during drag so resize is not lost on unexpected close
+  if (!_resizePersistTimer) {
+    _resizePersistTimer = setTimeout(() => {
+      _resizePersistTimer = null;
+      persistResizeDuringDrag(r.img);
+    }, 500);
+  }
 }
 
 function stopResize() {
   document.removeEventListener('mousemove', doResize);
   document.removeEventListener('mouseup', stopResize);
+  // E-08: Clear throttle timer on mouseup (deselectImage will do the final persist)
+  clearTimeout(_resizePersistTimer);
+  _resizePersistTimer = null;
   state.resizing = null;
 }
 

@@ -1,0 +1,5 @@
+Line 1: This file uses Windows-style line endings.
+Line 2: Each line ends with \r\n (CRLF).
+Line 3: Document engines must handle this correctly.
+Line 4: Mixing line endings can cause subtle bugs.
+Line 5: This is the final line.

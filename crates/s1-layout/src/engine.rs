@@ -120,6 +120,7 @@ impl<'a> LayoutEngine<'a> {
                         page_index,
                         &page_layout,
                         std::mem::take(&mut page_blocks),
+                        current_section_idx,
                     ));
                     page_section_indices.push(current_section_idx);
                     page_index += 1;
@@ -149,6 +150,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index,
                                 &page_layout,
                                 Vec::new(),
+                                current_section_idx,
                             ));
                             page_section_indices.push(current_section_idx);
                             page_index += 1;
@@ -162,6 +164,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index,
                                 &page_layout,
                                 Vec::new(),
+                                current_section_idx,
                             ));
                             page_section_indices.push(current_section_idx);
                             page_index += 1;
@@ -189,14 +192,15 @@ impl<'a> LayoutEngine<'a> {
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
+                            current_section_idx,
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
                         current_y = content_rect.y;
                     }
 
-                    // Add spacing before
-                    current_y += para_style.space_before;
+                    // Add spacing before (sanitize to guard against NaN/infinity)
+                    current_y += sanitize_pt(para_style.space_before);
 
                     let block = self.layout_paragraph_cached(
                         *node_id,
@@ -215,10 +219,11 @@ impl<'a> LayoutEngine<'a> {
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
+                            current_section_idx,
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
-                        current_y = content_rect.y + para_style.space_before;
+                        current_y = content_rect.y + sanitize_pt(para_style.space_before);
 
                         // Re-layout at top of new page
                         let block = self.layout_paragraph_cached(
@@ -229,10 +234,10 @@ impl<'a> LayoutEngine<'a> {
                         )?;
                         let block_height = block.bounds.height;
                         page_blocks.push(block);
-                        current_y += block_height + para_style.space_after;
+                        current_y += block_height + sanitize_pt(para_style.space_after);
                     } else {
                         page_blocks.push(block);
-                        current_y += block_height + para_style.space_after;
+                        current_y += block_height + sanitize_pt(para_style.space_after);
                     }
                 }
                 NodeType::Table => {
@@ -331,6 +336,7 @@ impl<'a> LayoutEngine<'a> {
                                     page_index,
                                     &page_layout,
                                     std::mem::take(&mut page_blocks),
+                                    current_section_idx,
                                 ));
                                 page_section_indices.push(current_section_idx);
                                 page_index += 1;
@@ -352,6 +358,7 @@ impl<'a> LayoutEngine<'a> {
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
+                            current_section_idx,
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
@@ -377,6 +384,7 @@ impl<'a> LayoutEngine<'a> {
                             page_index,
                             &page_layout,
                             std::mem::take(&mut page_blocks),
+                            current_section_idx,
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
@@ -389,7 +397,7 @@ impl<'a> LayoutEngine<'a> {
 
         // Flush remaining blocks
         if !page_blocks.is_empty() {
-            pages.push(self.make_page(page_index, &page_layout, page_blocks));
+            pages.push(self.make_page(page_index, &page_layout, page_blocks, current_section_idx));
             page_section_indices.push(current_section_idx);
         }
 
@@ -405,6 +413,7 @@ impl<'a> LayoutEngine<'a> {
                 blocks: Vec::new(),
                 header: None,
                 footer: None,
+                section_index: initial_section_idx,
             });
             page_section_indices.push(initial_section_idx);
         }
@@ -602,6 +611,28 @@ impl<'a> LayoutEngine<'a> {
         hash = hash.wrapping_mul(0x100000001b3);
         hash ^= para_style.indent_first_line.to_bits();
         hash = hash.wrapping_mul(0x100000001b3);
+        // Include alignment so cache invalidates on alignment change (L-18)
+        hash ^= para_style.alignment as u64;
+        hash = hash.wrapping_mul(0x100000001b3);
+        // Include spacing so cache invalidates on spacing change
+        hash ^= para_style.space_before.to_bits();
+        hash = hash.wrapping_mul(0x100000001b3);
+        hash ^= para_style.space_after.to_bits();
+        hash = hash.wrapping_mul(0x100000001b3);
+        // Include line spacing
+        hash ^= match &para_style.line_spacing {
+            LineSpacing::Single => 1u64,
+            LineSpacing::OnePointFive => 2,
+            LineSpacing::Double => 3,
+            LineSpacing::Multiple(m) => 4 ^ m.to_bits(),
+            LineSpacing::AtLeast(v) => 5 ^ v.to_bits(),
+            LineSpacing::Exact(v) => 6 ^ v.to_bits(),
+            _ => 7,
+        };
+        hash = hash.wrapping_mul(0x100000001b3);
+        // Include keep flags and page break
+        hash ^= (para_style.keep_with_next as u64) | ((para_style.keep_lines as u64) << 1) | ((para_style.page_break_before as u64) << 2);
+        hash = hash.wrapping_mul(0x100000001b3);
 
         // Check cache
         if let Some(ref cache) = self.cache {
@@ -634,8 +665,10 @@ impl<'a> LayoutEngine<'a> {
         content_rect: Rect,
         y_pos: f64,
     ) -> Result<LayoutBlock, LayoutError> {
-        let available_width = content_rect.width - para_style.indent_left - para_style.indent_right;
-        let x_start = content_rect.x + para_style.indent_left;
+        let indent_left = sanitize_pt(para_style.indent_left);
+        let indent_right = sanitize_pt(para_style.indent_right);
+        let available_width = content_rect.width - indent_left - indent_right;
+        let x_start = content_rect.x + indent_left;
 
         let para = match self.doc.node(para_id) {
             Some(n) => n,
@@ -697,10 +730,52 @@ impl<'a> LayoutEngine<'a> {
                             character_spacing: 0.0,
                             revision_type: None,
                             revision_author: None,
+                            inline_image: None,
                         });
                     }
                     NodeType::Tab => {
-                        // Represent tab as a space-like run with fixed advance
+                        // Compute current x position from accumulated shaped runs
+                        let current_x: f64 = shaped_runs.iter().map(|r| {
+                            let glyph_w: f64 = r.glyphs.iter().map(|g| g.x_advance).sum();
+                            let nc = r.text.chars().count();
+                            let sp = if nc > 1 { (nc as f64 - 1.0) * r.character_spacing } else { 0.0 };
+                            glyph_w + sp
+                        }).sum();
+
+                        // Look up paragraph tab stops from attributes
+                        let tab_advance = if let Some(AttributeValue::TabStops(ref stops)) =
+                            para.attributes.get(&AttributeKey::TabStops)
+                        {
+                            // Find the next tab stop position after current_x
+                            let mut next_stop: Option<f64> = None;
+                            for ts in stops {
+                                if ts.position > current_x + 0.5 {
+                                    match next_stop {
+                                        Some(prev) if ts.position < prev => {
+                                            next_stop = Some(ts.position);
+                                        }
+                                        None => {
+                                            next_stop = Some(ts.position);
+                                        }
+                                        _ => {}
+                                    }
+                                }
+                            }
+                            if let Some(stop_pos) = next_stop {
+                                (stop_pos - current_x).max(1.0)
+                            } else {
+                                // No custom tab stop found — fall back to default 36pt interval
+                                let default_interval = 36.0;
+                                let next_default = ((current_x / default_interval).floor() + 1.0) * default_interval;
+                                (next_default - current_x).max(1.0)
+                            }
+                        } else {
+                            // No custom tab stops — use default 36pt (0.5") interval
+                            let default_interval = 36.0;
+                            let next_default = ((current_x / default_interval).floor() + 1.0) * default_interval;
+                            (next_default - current_x).max(1.0)
+                        };
+
                         shaped_runs.push(ShapedRunInfo {
                             source_id: child_id,
                             font_id: None,
@@ -708,7 +783,7 @@ impl<'a> LayoutEngine<'a> {
                             color: s1_model::Color::new(0, 0, 0),
                             glyphs: vec![ShapedGlyph {
                                 glyph_id: 0,
-                                x_advance: 36.0, // ~0.5" tab stop
+                                x_advance: tab_advance,
                                 y_advance: 0.0,
                                 x_offset: 0.0,
                                 y_offset: 0.0,
@@ -728,6 +803,7 @@ impl<'a> LayoutEngine<'a> {
                             character_spacing: 0.0,
                             revision_type: None,
                             revision_author: None,
+                            inline_image: None,
                         });
                     }
                     // Bookmark/Comment markers — no visual output, skip silently
@@ -764,18 +840,105 @@ impl<'a> LayoutEngine<'a> {
                                 character_spacing: 0.0,
                                 revision_type: None,
                                 revision_author: None,
+                                inline_image: None,
                             });
                         }
                     }
-                    // Drawing — skip (TODO: inline drawings)
-                    NodeType::Drawing | NodeType::Image => {}
+                    // Inline images/drawings within a paragraph
+                    NodeType::Drawing | NodeType::Image => {
+                        let img_node = child;
+                        // Try ImageWidth first, fall back to ShapeWidth for VML drawings
+                        let img_w = img_node
+                            .attributes
+                            .get(&AttributeKey::ImageWidth)
+                            .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            .or_else(|| {
+                                img_node.attributes.get(&AttributeKey::ShapeWidth)
+                                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            })
+                            .unwrap_or(100.0);
+                        // Try ImageHeight first, fall back to ShapeHeight for VML drawings
+                        let img_h = img_node
+                            .attributes
+                            .get(&AttributeKey::ImageHeight)
+                            .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            .or_else(|| {
+                                img_node.attributes.get(&AttributeKey::ShapeHeight)
+                                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            })
+                            .unwrap_or(100.0);
+
+                        // Constrain to available width
+                        let scale = if img_w > available_width { available_width / img_w } else { 1.0 };
+                        let final_w = img_w * scale;
+                        let final_h = img_h * scale;
+
+                        // Get media ID and image data
+                        let media_id_val = img_node
+                            .attributes
+                            .get(&AttributeKey::ImageMediaId)
+                            .and_then(|v| if let AttributeValue::MediaId(mid) = v { Some(mid.0) } else { None });
+                        let media_id_str = media_id_val
+                            .map(|id| format!("{id}"))
+                            .or_else(|| {
+                                img_node.attributes.get_string(&AttributeKey::ImageMediaId).map(|s| s.to_string())
+                            })
+                            .unwrap_or_default();
+                        let (image_data, content_type) = if let Some(mid) = media_id_val {
+                            let media_id_key = s1_model::MediaId(mid);
+                            if let Some(item) = self.doc.media().get(media_id_key) {
+                                (Some(item.data.clone()), Some(item.content_type.clone()))
+                            } else {
+                                (None, None)
+                            }
+                        } else {
+                            (None, None)
+                        };
+
+                        // Create a synthetic shaped run with the image's width
+                        shaped_runs.push(ShapedRunInfo {
+                            source_id: child_id,
+                            font_id: None,
+                            font_size: final_h, // use image height as "font size" for line height
+                            color: s1_model::Color::new(0, 0, 0),
+                            glyphs: vec![ShapedGlyph {
+                                glyph_id: 0,
+                                x_advance: final_w,
+                                y_advance: 0.0,
+                                x_offset: 0.0,
+                                y_offset: 0.0,
+                                cluster: 0,
+                            }],
+                            is_line_break: false,
+                            metrics: None,
+                            hyperlink_url: None,
+                            text: String::new(),
+                            bold: false,
+                            italic: false,
+                            underline: false,
+                            strikethrough: false,
+                            superscript: false,
+                            subscript: false,
+                            highlight_color: None,
+                            character_spacing: 0.0,
+                            revision_type: None,
+                            revision_author: None,
+                            inline_image: Some(InlineImage {
+                                media_id: media_id_str,
+                                width: final_w,
+                                height: final_h,
+                                image_data,
+                                content_type,
+                            }),
+                        });
+                    }
                     _ => {}
                 }
             }
         }
 
         // Break into lines (greedy algorithm)
-        let first_line_indent = para_style.indent_first_line;
+        let first_line_indent = sanitize_pt(para_style.indent_first_line);
         let lines =
             self.break_into_lines(&shaped_runs, available_width, first_line_indent, para_style);
 
@@ -838,14 +1001,24 @@ impl<'a> LayoutEngine<'a> {
     fn shape_run(&self, run_id: NodeId) -> Result<ShapedRunInfo, LayoutError> {
         let run_style = resolve_run_style(self.doc, run_id);
 
-        // Find font
+        // Find font with extended fallback chain
         let font_id = self
             .font_db
             .find(&run_style.font_family, run_style.bold, run_style.italic)
+            // Try the same font without bold/italic
+            .or_else(|| self.font_db.find(&run_style.font_family, false, false))
             .or_else(|| self.font_db.find(DEFAULT_FONT_FAMILY, false, false))
+            // Common serif fonts
+            .or_else(|| self.font_db.find("Times New Roman", false, false))
+            .or_else(|| self.font_db.find("Georgia", false, false))
+            // Common sans-serif fonts
             .or_else(|| self.font_db.find("Helvetica", false, false))
             .or_else(|| self.font_db.find("Arial", false, false))
-            .or_else(|| self.font_db.find("DejaVu Sans", false, false));
+            .or_else(|| self.font_db.find("Verdana", false, false))
+            .or_else(|| self.font_db.find("Roboto", false, false))
+            .or_else(|| self.font_db.find("Noto Sans", false, false))
+            .or_else(|| self.font_db.find("DejaVu Sans", false, false))
+            .or_else(|| self.font_db.find("Liberation Sans", false, false));
 
         // Collect text from children
         let mut text = String::new();
@@ -863,8 +1036,12 @@ impl<'a> LayoutEngine<'a> {
 
         let (glyphs, metrics) = if let Some(fid) = font_id {
             if let Some(font) = self.font_db.load_font(fid) {
-                let font_size = if run_style.superscript || run_style.subscript {
-                    run_style.font_size * 0.65 // sub/super at ~65% size
+                // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
+                let has_explicit_size = self.doc.node(run_id)
+                    .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
+                    .unwrap_or(false);
+                let font_size = if (run_style.superscript || run_style.subscript) && !has_explicit_size {
+                    run_style.font_size * 0.65
                 } else {
                     run_style.font_size
                 };
@@ -923,6 +1100,7 @@ impl<'a> LayoutEngine<'a> {
             character_spacing: run_style.character_spacing,
             revision_type: run_style.revision_type.clone(),
             revision_author: run_style.revision_author.clone(),
+            inline_image: None,
         })
     }
 
@@ -940,10 +1118,20 @@ impl<'a> LayoutEngine<'a> {
         let font_id = self
             .font_db
             .find(&run_style.font_family, run_style.bold, run_style.italic)
+            // Try the same font without bold/italic
+            .or_else(|| self.font_db.find(&run_style.font_family, false, false))
             .or_else(|| self.font_db.find(DEFAULT_FONT_FAMILY, false, false))
+            // Common serif fonts
+            .or_else(|| self.font_db.find("Times New Roman", false, false))
+            .or_else(|| self.font_db.find("Georgia", false, false))
+            // Common sans-serif fonts
             .or_else(|| self.font_db.find("Helvetica", false, false))
             .or_else(|| self.font_db.find("Arial", false, false))
-            .or_else(|| self.font_db.find("DejaVu Sans", false, false));
+            .or_else(|| self.font_db.find("Verdana", false, false))
+            .or_else(|| self.font_db.find("Roboto", false, false))
+            .or_else(|| self.font_db.find("Noto Sans", false, false))
+            .or_else(|| self.font_db.find("DejaVu Sans", false, false))
+            .or_else(|| self.font_db.find("Liberation Sans", false, false));
 
         let hyperlink_url = run_node.attributes.get_string(&AttributeKey::HyperlinkUrl)
             .map(|s| s.to_string())
@@ -995,6 +1183,7 @@ impl<'a> LayoutEngine<'a> {
                             character_spacing: run_style.character_spacing,
                             revision_type: run_style.revision_type.clone(),
                             revision_author: run_style.revision_author.clone(),
+                            inline_image: None,
                         });
                     }
                     NodeType::Tab => {
@@ -1025,7 +1214,11 @@ impl<'a> LayoutEngine<'a> {
     ) -> Result<ShapedRunInfo, LayoutError> {
         let (glyphs, metrics) = if let Some(fid) = font_id {
             if let Some(font) = self.font_db.load_font(fid) {
-                let font_size = if run_style.superscript || run_style.subscript {
+                // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
+                let has_explicit_size = self.doc.node(source_id)
+                    .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
+                    .unwrap_or(false);
+                let font_size = if (run_style.superscript || run_style.subscript) && !has_explicit_size {
                     run_style.font_size * 0.65
                 } else {
                     run_style.font_size
@@ -1062,6 +1255,7 @@ impl<'a> LayoutEngine<'a> {
             character_spacing: run_style.character_spacing,
             revision_type: run_style.revision_type.clone(),
             revision_author: run_style.revision_author.clone(),
+            inline_image: None,
         })
     }
 
@@ -1074,7 +1268,14 @@ impl<'a> LayoutEngine<'a> {
         para_style: &ResolvedParagraphStyle,
     ) -> Vec<LayoutLine> {
         if runs.is_empty() {
-            let line_height = compute_line_height(DEFAULT_FONT_SIZE, &para_style.line_spacing);
+            // For empty paragraphs, use Exact/AtLeast line spacing directly if set,
+            // otherwise use DEFAULT_FONT_SIZE. This prevents empty paragraphs from
+            // being forced to 13.8pt when a smaller height is styled.
+            let base_size = match &para_style.line_spacing {
+                LineSpacing::Exact(h) => *h,
+                _ => DEFAULT_FONT_SIZE,
+            };
+            let line_height = compute_line_height(base_size, &para_style.line_spacing);
             return vec![LayoutLine {
                 baseline_y: 0.0,
                 height: line_height,
@@ -1135,6 +1336,7 @@ impl<'a> LayoutEngine<'a> {
                             character_spacing: run_info.character_spacing,
                             revision_type: run_info.revision_type.clone(),
                             revision_author: run_info.revision_author.clone(),
+                            inline_image: run_info.inline_image.clone(),
                         });
                         current_x += width;
                         if *height > max_height {
@@ -1192,7 +1394,16 @@ impl<'a> LayoutEngine<'a> {
                 continue;
             }
 
-            let run_width: f64 = run_info.glyphs.iter().map(|g| g.x_advance).sum();
+            let glyph_advance: f64 = run_info.glyphs.iter().map(|g| g.x_advance).sum();
+            // Add character spacing contribution: spacing applies between characters,
+            // so (num_chars - 1) * spacing. Guard against empty text.
+            let num_chars = run_info.text.chars().count();
+            let spacing_contribution = if num_chars > 1 {
+                (num_chars as f64 - 1.0) * run_info.character_spacing
+            } else {
+                0.0
+            };
+            let run_width = glyph_advance + spacing_contribution;
             let run_height = run_info
                 .metrics
                 .map(|m| m.ascent - m.descent)
@@ -1230,12 +1441,17 @@ impl<'a> LayoutEngine<'a> {
             None => return Ok(Vec::new()),
         };
 
+        // L-22: Limit table dimensions to prevent OOM on malicious documents
+        const MAX_TABLE_ROWS: usize = 10_000;
+        const MAX_TABLE_COLS: usize = 1_000;
+        let row_count = table.children.len().min(MAX_TABLE_ROWS);
+
         // Count columns from first row
         let num_cols = table
             .children
             .first()
             .and_then(|&row_id| self.doc.node(row_id))
-            .map(|row| row.children.len())
+            .map(|row| row.children.len().min(MAX_TABLE_COLS))
             .unwrap_or(1)
             .max(1);
 
@@ -1243,7 +1459,7 @@ impl<'a> LayoutEngine<'a> {
         let mut rows: Vec<LayoutTableRow> = Vec::new();
         let mut cumulative_y = 0.0;
 
-        for &row_id in &table.children {
+        for &row_id in table.children.iter().take(row_count) {
             if let Some(row_node) = self.doc.node(row_id) {
                 if row_node.node_type != NodeType::TableRow {
                     continue;
@@ -1277,7 +1493,7 @@ impl<'a> LayoutEngine<'a> {
                                         cell_content_rect,
                                         cell_y,
                                     )?;
-                                    cell_y += block.bounds.height + ps.space_after;
+                                    cell_y += block.bounds.height + sanitize_pt(ps.space_after);
                                     cell_blocks.push(block);
                                 }
                             }
@@ -1344,6 +1560,9 @@ impl<'a> LayoutEngine<'a> {
     }
 
     /// Layout an image node.
+    ///
+    /// Handles both `NodeType::Image` (with `ImageWidth`/`ImageHeight`) and
+    /// `NodeType::Drawing` (VML shapes with `ShapeWidth`/`ShapeHeight` fallback).
     fn layout_image(
         &self,
         image_id: NodeId,
@@ -1353,6 +1572,7 @@ impl<'a> LayoutEngine<'a> {
         let node = self.doc.node(image_id);
         let (width, height) = node
             .map(|n| {
+                // Try ImageWidth first, fall back to ShapeWidth for VML drawings
                 let w = n
                     .attributes
                     .get(&AttributeKey::ImageWidth)
@@ -1363,7 +1583,17 @@ impl<'a> LayoutEngine<'a> {
                             None
                         }
                     })
+                    .or_else(|| {
+                        n.attributes.get(&AttributeKey::ShapeWidth).and_then(|v| {
+                            if let AttributeValue::Float(d) = v {
+                                Some(*d)
+                            } else {
+                                None
+                            }
+                        })
+                    })
                     .unwrap_or(100.0);
+                // Try ImageHeight first, fall back to ShapeHeight for VML drawings
                 let h = n
                     .attributes
                     .get(&AttributeKey::ImageHeight)
@@ -1373,6 +1603,15 @@ impl<'a> LayoutEngine<'a> {
                         } else {
                             None
                         }
+                    })
+                    .or_else(|| {
+                        n.attributes.get(&AttributeKey::ShapeHeight).and_then(|v| {
+                            if let AttributeValue::Float(d) = v {
+                                Some(*d)
+                            } else {
+                                None
+                            }
+                        })
                     })
                     .unwrap_or(100.0);
                 (w, h)
@@ -1618,14 +1857,31 @@ impl<'a> LayoutEngine<'a> {
                             _ => continue,
                         };
 
-                        // Find any glyph run with this source_id and update it,
-                        // or append a synthesized run to the last line
+                        // Update existing glyph run with matching source_id,
+                        // or append a synthesized run to the last line if not found
                         if let LayoutBlockKind::Paragraph { lines, .. } = &mut block.kind {
                             let font_size = DEFAULT_FONT_SIZE;
                             let glyphs = synthesize_glyphs(&text, font_size);
                             let width: f64 = glyphs.iter().map(|g| g.x_advance).sum();
 
-                            if let Some(last_line) = lines.last_mut() {
+                            // First try to update an existing run in-place
+                            let mut found = false;
+                            for line in lines.iter_mut() {
+                                for run in line.runs.iter_mut() {
+                                    if run.source_id == child_id {
+                                        run.text.clone_from(&text);
+                                        run.glyphs = glyphs.clone();
+                                        run.width = width;
+                                        found = true;
+                                        break;
+                                    }
+                                }
+                                if found { break; }
+                            }
+
+                            // Only append if no existing run was found
+                            if !found {
+                              if let Some(last_line) = lines.last_mut() {
                                 let x_offset = last_line
                                     .runs
                                     .last()
@@ -1652,7 +1908,9 @@ impl<'a> LayoutEngine<'a> {
                                     character_spacing: 0.0,
                                     revision_type: None,
                                     revision_author: None,
+                                    inline_image: None,
                                 });
+                              }
                             }
                         }
                     }
@@ -1668,7 +1926,7 @@ impl<'a> LayoutEngine<'a> {
     fn apply_widow_orphan_control(
         &self,
         pages: &mut Vec<LayoutPage>,
-        _page_section_indices: &[usize],
+        page_section_indices: &[usize],
     ) -> Result<(), LayoutError> {
         let min_orphan = self.config.min_orphan_lines;
         let min_widow = self.config.min_widow_lines;
@@ -1716,7 +1974,12 @@ impl<'a> LayoutEngine<'a> {
                 orphan_problem || widow_problem
             };
 
-            if needs_fix {
+            // L-13: Don't move blocks across section boundaries
+            let same_section = i < page_section_indices.len()
+                && i + 1 < page_section_indices.len()
+                && page_section_indices[i] == page_section_indices[i + 1];
+
+            if needs_fix && same_section {
                 // Move the last block from current page to the start of next page.
                 // Use the next page's content area for positioning.
                 let current_page = &mut pages[i];
@@ -1767,14 +2030,47 @@ impl<'a> LayoutEngine<'a> {
     }
 
     /// Collect bookmarks from laid-out pages by scanning for BookmarkStart nodes.
+    ///
+    /// Recursively scans all blocks including table rows/cells and
+    /// header/footer blocks so that bookmarks inside those containers are
+    /// not missed.
     fn collect_bookmarks(&self, pages: &[LayoutPage]) -> Vec<LayoutBookmark> {
         let mut bookmarks = Vec::new();
 
         for page in pages {
+            // Scan content blocks (paragraphs, tables, images)
             for block in &page.blocks {
-                // Check if the source paragraph has BookmarkStart children
-                if let Some(para_node) = self.doc.node(block.source_id) {
-                    for &child_id in &para_node.children {
+                self.collect_bookmarks_from_block(block, page.index, &mut bookmarks);
+            }
+            // Scan header block
+            if let Some(header) = &page.header {
+                self.collect_bookmarks_from_block(header, page.index, &mut bookmarks);
+            }
+            // Scan footer block
+            if let Some(footer) = &page.footer {
+                self.collect_bookmarks_from_block(footer, page.index, &mut bookmarks);
+            }
+        }
+
+        bookmarks
+    }
+
+    /// Recursively collect bookmarks from a single layout block.
+    ///
+    /// For paragraph blocks, scans the source node's children for
+    /// BookmarkStart nodes. For table blocks, descends into rows, cells,
+    /// and their nested content blocks.
+    fn collect_bookmarks_from_block(
+        &self,
+        block: &LayoutBlock,
+        page_index: usize,
+        bookmarks: &mut Vec<LayoutBookmark>,
+    ) {
+        match &block.kind {
+            LayoutBlockKind::Paragraph { .. } | LayoutBlockKind::Image { .. } => {
+                // Check if the source node has BookmarkStart children
+                if let Some(node) = self.doc.node(block.source_id) {
+                    for &child_id in &node.children {
                         if let Some(child) = self.doc.node(child_id) {
                             if child.node_type == NodeType::BookmarkStart {
                                 if let Some(name) =
@@ -1782,7 +2078,7 @@ impl<'a> LayoutEngine<'a> {
                                 {
                                     bookmarks.push(LayoutBookmark {
                                         name: name.to_string(),
-                                        page_index: page.index,
+                                        page_index,
                                         y_position: block.bounds.y,
                                     });
                                 }
@@ -1791,9 +2087,20 @@ impl<'a> LayoutEngine<'a> {
                     }
                 }
             }
+            LayoutBlockKind::Table { rows, .. } => {
+                for row in rows {
+                    for cell in &row.cells {
+                        for cell_block in &cell.blocks {
+                            self.collect_bookmarks_from_block(
+                                cell_block,
+                                page_index,
+                                bookmarks,
+                            );
+                        }
+                    }
+                }
+            }
         }
-
-        bookmarks
     }
 
     fn make_page(
@@ -1801,6 +2108,7 @@ impl<'a> LayoutEngine<'a> {
         index: usize,
         page_layout: &PageLayout,
         blocks: Vec<LayoutBlock>,
+        section_index: usize,
     ) -> LayoutPage {
         LayoutPage {
             index,
@@ -1810,6 +2118,7 @@ impl<'a> LayoutEngine<'a> {
             blocks,
             header: None,
             footer: None,
+            section_index,
         }
     }
 }
@@ -1846,6 +2155,8 @@ struct ShapedRunInfo {
     revision_type: Option<String>,
     /// Revision author for track changes.
     revision_author: Option<String>,
+    /// Inline image data, if this run represents an inline image.
+    inline_image: Option<InlineImage>,
 }
 
 /// Compute a content hash for a node and its descendants.
@@ -1946,31 +2257,58 @@ fn format_border_css(border: &s1_model::BorderSide) -> String {
 }
 
 /// Synthesize glyphs when no font is available (fallback for headless testing).
+///
+/// Uses character-class-based width estimation for more accurate line breaking
+/// than a single average width for all characters.
 fn synthesize_glyphs(text: &str, font_size: f64) -> Vec<ShapedGlyph> {
-    let avg_advance = font_size * 0.6; // Rough average character width
     text.char_indices()
-        .map(|(i, _)| ShapedGlyph {
-            glyph_id: 0,
-            x_advance: avg_advance,
-            y_advance: 0.0,
-            x_offset: 0.0,
-            y_offset: 0.0,
-            cluster: i as u32,
+        .map(|(i, ch)| {
+            // Estimate width by character class for more accurate line breaking
+            let width_factor = match ch {
+                'i' | 'j' | 'l' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '"' | '`' => 0.3,
+                'f' | 'r' | 't' | '(' | ')' | '[' | ']' | '{' | '}' => 0.4,
+                'm' | 'w' | 'M' | 'W' | '@' | '%' => 0.8,
+                'A'..='Z' => 0.65,
+                ' ' => 0.3,
+                _ => 0.5,
+            };
+            ShapedGlyph {
+                glyph_id: 0,
+                x_advance: font_size * width_factor,
+                y_advance: 0.0,
+                x_offset: 0.0,
+                y_offset: 0.0,
+                cluster: i as u32,
+            }
         })
         .collect()
 }
 
+/// Sanitize a floating-point value — replace NaN/infinity with 0.0.
+///
+/// Prevents garbage layout when style values are malformed or produced
+/// by division-by-zero or other floating-point edge cases.
+fn sanitize_pt(val: f64) -> f64 {
+    if val.is_finite() {
+        val
+    } else {
+        0.0
+    }
+}
+
 /// Compute line height from the tallest run and line spacing.
 fn compute_line_height(max_run_height: f64, line_spacing: &LineSpacing) -> f64 {
-    match line_spacing {
-        LineSpacing::Single => max_run_height,
-        LineSpacing::OnePointFive => max_run_height * 1.5,
-        LineSpacing::Double => max_run_height * 2.0,
-        LineSpacing::Multiple(m) => max_run_height * m,
-        LineSpacing::AtLeast(min) => max_run_height.max(*min),
-        LineSpacing::Exact(exact) => *exact,
-        _ => max_run_height,
-    }
+    let h = sanitize_pt(max_run_height);
+    let result = match line_spacing {
+        LineSpacing::Single => h,
+        LineSpacing::OnePointFive => h * 1.5,
+        LineSpacing::Double => h * 2.0,
+        LineSpacing::Multiple(m) => h * sanitize_pt(*m),
+        LineSpacing::AtLeast(min) => h.max(sanitize_pt(*min)),
+        LineSpacing::Exact(exact) => sanitize_pt(*exact),
+        _ => h,
+    };
+    sanitize_pt(result)
 }
 
 /// Item types for the Knuth-Plass line breaking algorithm.
@@ -2128,6 +2466,14 @@ fn knuth_plass_breaks(
 
         if !new_active.is_empty() {
             active = new_active;
+        }
+        // L-21: Cap active node count to prevent unbounded growth on very long paragraphs.
+        // Keep only the best 100 candidates by demerits.
+        if active.len() > 100 {
+            active.sort_by(|&a, &b| {
+                nodes[a].demerits.partial_cmp(&nodes[b].demerits).unwrap_or(std::cmp::Ordering::Equal)
+            });
+            active.truncate(100);
         }
         // If active becomes empty, KP fails — return None for greedy fallback
         if active.is_empty() {
@@ -2498,7 +2844,18 @@ mod tests {
     fn synthesize_glyphs_for_text() {
         let glyphs = synthesize_glyphs("ABC", 12.0);
         assert_eq!(glyphs.len(), 3);
-        assert!((glyphs[0].x_advance - 7.2).abs() < 0.01); // 12 * 0.6
+        // 'A' is uppercase => 0.65 factor => 12 * 0.65 = 7.8
+        assert!((glyphs[0].x_advance - 7.8).abs() < 0.01);
+        // 'B' and 'C' are uppercase => 0.65 factor
+        assert!((glyphs[1].x_advance - 7.8).abs() < 0.01);
+
+        // Test narrow chars
+        let narrow = synthesize_glyphs("i.", 12.0);
+        assert!((narrow[0].x_advance - 3.6).abs() < 0.01); // 12 * 0.3
+
+        // Test wide chars
+        let wide = synthesize_glyphs("MW", 12.0);
+        assert!((wide[0].x_advance - 9.6).abs() < 0.01); // 12 * 0.8
     }
 
     #[test]
@@ -3993,6 +4350,157 @@ mod tests {
                 }
                 _ => {}
             }
+        }
+    }
+
+    #[test]
+    fn layout_block_level_image() {
+        // Create a document with a block-level Image node as a direct child of Body
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add an Image node as a direct child of Body
+        let img_id = doc.next_id();
+        let mut img_node = Node::new(img_id, NodeType::Image);
+        img_node.attributes.set(
+            AttributeKey::ImageWidth,
+            AttributeValue::Float(200.0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHeight,
+            AttributeValue::Float(150.0),
+        );
+        doc.insert_node(body_id, 0, img_node).unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Image { bounds, .. } => {
+                assert!((bounds.width - 200.0).abs() < 0.01);
+                assert!((bounds.height - 150.0).abs() < 0.01);
+            }
+            other => panic!("Expected Image block, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn layout_inline_image_in_paragraph() {
+        // Create a document with an Image node as a child of a Paragraph
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Add an inline image as a child of the paragraph
+        let img_id = doc.next_id();
+        let mut img_node = Node::new(img_id, NodeType::Image);
+        img_node.attributes.set(
+            AttributeKey::ImageWidth,
+            AttributeValue::Float(120.0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHeight,
+            AttributeValue::Float(80.0),
+        );
+        doc.insert_node(para_id, 0, img_node).unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        // The paragraph should contain a line with a glyph run that has an inline_image
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Paragraph { lines, .. } => {
+                assert!(!lines.is_empty(), "paragraph should have lines");
+                let has_inline_image = lines.iter().any(|line| {
+                    line.runs.iter().any(|run| run.inline_image.is_some())
+                });
+                assert!(has_inline_image, "paragraph should contain an inline image run");
+                // Check the inline image dimensions
+                let img_run = lines
+                    .iter()
+                    .flat_map(|l| l.runs.iter())
+                    .find(|r| r.inline_image.is_some())
+                    .unwrap();
+                let inline = img_run.inline_image.as_ref().unwrap();
+                assert!((inline.width - 120.0).abs() < 0.01);
+                assert!((inline.height - 80.0).abs() < 0.01);
+            }
+            other => panic!("Expected Paragraph block, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn layout_inline_drawing_in_paragraph() {
+        // Create a document with a Drawing (VML) node as a child of a Paragraph
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        // Add an inline Drawing with ShapeWidth/ShapeHeight
+        let drawing_id = doc.next_id();
+        let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+        drawing_node.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String("oval".to_string()),
+        );
+        drawing_node.attributes.set(
+            AttributeKey::ShapeWidth,
+            AttributeValue::Float(160.0),
+        );
+        drawing_node.attributes.set(
+            AttributeKey::ShapeHeight,
+            AttributeValue::Float(100.0),
+        );
+        doc.insert_node(para_id, 0, drawing_node).unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Paragraph { lines, .. } => {
+                assert!(!lines.is_empty(), "paragraph should have lines");
+                let img_run = lines
+                    .iter()
+                    .flat_map(|l| l.runs.iter())
+                    .find(|r| r.inline_image.is_some());
+                assert!(img_run.is_some(), "paragraph should contain an inline image run for Drawing");
+                let inline = img_run.unwrap().inline_image.as_ref().unwrap();
+                assert!(
+                    (inline.width - 160.0).abs() < 0.01,
+                    "expected width 160, got {}",
+                    inline.width
+                );
+                assert!(
+                    (inline.height - 100.0).abs() < 0.01,
+                    "expected height 100, got {}",
+                    inline.height
+                );
+            }
+            other => panic!("Expected Paragraph block, got {:?}", other),
         }
     }
 }

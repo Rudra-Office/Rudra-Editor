@@ -45,16 +45,44 @@ function doAutosave() {
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
     openAutosaveDB().then(db => {
-      const tx = db.transaction('documents', 'readwrite');
-      tx.objectStore('documents').put({
-        id: 'current', name, bytes, timestamp: Date.now()
-      });
-      state.dirty = false;
-      updateDirtyIndicator();
-      const info = $('statusInfo');
-      info._userMsg = true;
-      info.textContent = 'Auto-saved';
-      setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
+      // Multi-tab locking: read current stored document first
+      const readTx = db.transaction('documents', 'readonly');
+      const getReq = readTx.objectStore('documents').get('current');
+      getReq.onsuccess = () => {
+        const existing = getReq.result;
+        // If another tab saved more recently than our last save, skip
+        if (existing && existing.timestamp > state.lastSaveTimestamp && existing.tabId && existing.tabId !== state.tabId) {
+          const info = $('statusInfo');
+          info._userMsg = true;
+          info.textContent = 'Skipped save (another tab is active)';
+          setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
+          return;
+        }
+        // Safe to save — write with our tabId and timestamp
+        const now = Date.now();
+        const writeTx = db.transaction('documents', 'readwrite');
+        writeTx.objectStore('documents').put({
+          id: 'current', name, bytes, timestamp: now, tabId: state.tabId
+        });
+        state.lastSaveTimestamp = now;
+        state.dirty = false;
+        updateDirtyIndicator();
+        const info = $('statusInfo');
+        info._userMsg = true;
+        info.textContent = 'Auto-saved';
+        setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
+      };
+      getReq.onerror = () => {
+        // If read fails, still attempt to save
+        const now = Date.now();
+        const writeTx = db.transaction('documents', 'readwrite');
+        writeTx.objectStore('documents').put({
+          id: 'current', name, bytes, timestamp: now, tabId: state.tabId
+        });
+        state.lastSaveTimestamp = now;
+        state.dirty = false;
+        updateDirtyIndicator();
+      };
     }).catch(() => {});
   } catch (_) {}
 }
@@ -193,7 +221,7 @@ function _updateStatusBarImpl() {
     const text = doc.to_plain_text();
     const words = text.trim() ? text.trim().split(/\s+/).filter(w => w.length > 0) : [];
     const wordCount = words.length;
-    const charCount = text.length;
+    const charCount = [...text].length;
     const page = $('docPage');
     const paraCount = page ? page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]').length : 0;
     // Count page breaks to estimate page count

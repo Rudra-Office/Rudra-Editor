@@ -4,7 +4,7 @@ import { setupImages } from './images.js';
 import { updatePageBreaks } from './pagination.js';
 import { updateUndoRedo } from './toolbar.js';
 import { markDirty, updateTrackChanges, updateStatusBar } from './file.js';
-import { broadcastTextSync } from './collab.js';
+import { broadcastTextSync, broadcastOp } from './collab.js';
 
 export function renderDocument() {
   const { doc } = state;
@@ -34,8 +34,15 @@ export function renderDocument() {
     updateUndoRedo();
     updateTrackChanges();
     updateStatusBar();
+    // E-19: Re-apply zoom level after full re-render (DOM is rebuilt)
+    if (state.zoomLevel && state.zoomLevel !== 100) {
+      page.style.transform = `scale(${state.zoomLevel / 100})`;
+      page.style.transformOrigin = 'top center';
+    }
     // Activate virtual scrolling for large documents
     maybeInitVirtualScroll();
+    // E1.5: Refresh find highlights after full re-render
+    state._onTextChanged?.();
   } catch (e) { console.error('Render error:', e); }
 }
 
@@ -84,6 +91,7 @@ function showTcPopup(el) {
     dismissTcPopup();
     try {
       state.doc.accept_change(nodeId);
+      broadcastOp({ action: 'acceptChange', nodeId });
       renderDocument();
     } catch (err) { console.error('accept change:', err); }
   });
@@ -98,6 +106,7 @@ function showTcPopup(el) {
     dismissTcPopup();
     try {
       state.doc.reject_change(nodeId);
+      broadcastOp({ action: 'rejectChange', nodeId });
       renderDocument();
     } catch (err) { console.error('reject change:', err); }
   });
@@ -134,6 +143,7 @@ export function renderNodeById(nodeIdStr) {
   if (!doc) return null;
   try {
     const html = doc.render_node_html(nodeIdStr);
+    // E-05: Always re-query the DOM to get the current element, avoiding stale references
     const el = $('docPage').querySelector(`[data-node-id="${nodeIdStr}"]`);
     if (!el) return null;
     const temp = document.createElement('div');
@@ -147,6 +157,18 @@ export function renderNodeById(nodeIdStr) {
     return newEl;
   } catch (e) { console.error('renderNode error:', e); }
   return null;
+}
+
+// E-05: Batch render multiple nodes in a single pass to avoid race conditions
+// where rendering one node invalidates another's DOM reference. Each node is
+// re-queried from the DOM immediately before replacement, ensuring we always
+// operate on the current element.
+export function renderNodesById(nodeIds) {
+  const results = new Map();
+  for (const id of nodeIds) {
+    results.set(id, renderNodeById(id));
+  }
+  return results;
 }
 
 export function fixEmptyBlocks() {
@@ -177,8 +199,26 @@ export function syncParagraphText(el) {
     doc.set_paragraph_text(nodeId, newText);
     syncedTextCache.set(nodeId, newText);
     markDirty();
+    // E-09: Immediately clear stale find highlights when text changes
+    clearFindHighlights();
     // Broadcast to collaboration peers
     broadcastTextSync(nodeId, newText);
+
+    // E3.1: Track continuous typing for batch undo
+    const batch = state._typingBatch;
+    if (batch && batch.nodeId === nodeId) {
+      batch.count++;
+      clearTimeout(batch.timer);
+      batch.timer = setTimeout(() => { state._typingBatch = null; }, 500);
+    } else {
+      // New typing session (different paragraph or first sync)
+      if (batch) clearTimeout(batch.timer);
+      state._typingBatch = {
+        nodeId,
+        count: 1,
+        timer: setTimeout(() => { state._typingBatch = null; }, 500),
+      };
+    }
   } catch (e) { console.error('sync error:', e); }
 }
 
@@ -192,6 +232,20 @@ export function syncAllText() {
   });
 }
 
+// E-09: Clear stale find highlights immediately when text content changes
+function clearFindHighlights() {
+  const page = $('docPage');
+  if (!page) return;
+  const marks = page.querySelectorAll('mark.find-highlight');
+  if (marks.length === 0) return;
+  marks.forEach(m => {
+    const parent = m.parentNode;
+    while (m.firstChild) parent.insertBefore(m.firstChild, m);
+    m.remove();
+    parent.normalize();
+  });
+}
+
 export function debouncedSync(el) {
   clearTimeout(state.syncTimer);
   state.syncTimer = setTimeout(() => {
@@ -200,6 +254,8 @@ export function debouncedSync(el) {
     updatePageBreaks();
     updateUndoRedo();
     updateStatusBar();
+    // E1.5: Refresh find highlights after text edits
+    state._onTextChanged?.();
   }, 200);
 }
 
@@ -327,6 +383,15 @@ function collapseBlock(entry, idx, vs) {
     }
   }
 
+  // E-07: Sync text content to WASM model before hiding, so any user edits
+  // are preserved even if the block is off-screen when a sync would occur.
+  if (entry.nodeId) {
+    const tag = entry.el.tagName?.toLowerCase() || '';
+    if (tag === 'p' || /^h[1-6]$/.test(tag)) {
+      syncParagraphText(entry.el);
+    }
+  }
+
   // Save current HTML and measured height
   entry.html = entry.el.outerHTML;
   const rect = entry.el.getBoundingClientRect();
@@ -351,14 +416,34 @@ function collapseBlock(entry, idx, vs) {
 
 function restoreBlock(entry, idx) {
   if (entry.visible || !entry.el || !entry.el.parentNode) return;
-  if (!entry.html) return;
-
-  const temp = document.createElement('div');
-  temp.innerHTML = entry.html;
-  const newEl = temp.firstElementChild;
-  if (!newEl) return;
 
   const vs = state.virtualScroll;
+  let newEl = null;
+
+  // E-07: Always re-render from WASM model when revealing a placeholder, so that
+  // any edits made while the block was off-screen (e.g., via find/replace, undo,
+  // or collaboration) are reflected. Fall back to cached HTML only if WASM render
+  // is unavailable.
+  if (entry.nodeId && state.doc) {
+    try {
+      const html = state.doc.render_node_html(entry.nodeId);
+      const temp = document.createElement('div');
+      temp.innerHTML = html;
+      newEl = temp.firstElementChild;
+    } catch (_) {
+      // WASM render failed — fall back to cached HTML below
+    }
+  }
+
+  if (!newEl) {
+    // Fall back to cached HTML
+    if (!entry.html) return;
+    const temp = document.createElement('div');
+    temp.innerHTML = entry.html;
+    newEl = temp.firstElementChild;
+    if (!newEl) return;
+  }
+
   // Unobserve placeholder, replace with real element
   vs.observer.unobserve(entry.el);
   entry.el.replaceWith(newEl);
@@ -370,7 +455,7 @@ function restoreBlock(entry, idx) {
   // Re-run fixup on restored element
   if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
   setupImages(newEl);
-  // Update text cache
+  // Update text cache from the freshly rendered content
   if (entry.nodeId) {
     state.syncedTextCache.set(entry.nodeId, newEl.textContent || '');
   }
