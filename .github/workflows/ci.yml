@@ -26,7 +26,20 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@1.75
       - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - name: Test core crates (excluding pdf/wasm/c which need newer Rust)
+        run: >
+          cargo test
+          -p s1-model
+          -p s1-ops
+          -p s1-format-docx
+          -p s1-format-odt
+          -p s1-format-txt
+          -p s1-format-md
+          -p s1-convert
+          -p s1-crdt
+          -p s1-layout
+          -p s1-text
+          -p s1engine
 
   clippy:
     name: Clippy
