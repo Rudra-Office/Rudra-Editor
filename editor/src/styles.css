@@ -1843,3 +1843,73 @@ mark.find-highlight.active{background:#f9a825;color:#fff}
     scroll-behavior: auto !important;
   }
 }
+
+/* ═══════════════════════════════════════════════════
+   E9.2 — Template Gallery
+   ═══════════════════════════════════════════════════ */
+.template-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+  margin: 12px 0;
+}
+.template-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 16px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-md);
+  background: var(--bg-app);
+  cursor: pointer;
+  transition: border-color .12s, box-shadow .12s;
+  font-family: var(--font-ui);
+}
+.template-card:hover {
+  border-color: var(--accent);
+  box-shadow: var(--shadow-sm);
+}
+.template-icon { font-size: 32px; color: var(--accent); }
+.template-name { font-size: 12px; font-weight: 500; color: var(--text-primary); }
+
+/* ═══════════════════════════════════════════════════
+   E9.5 — Table of Contents
+   ═══════════════════════════════════════════════════ */
+.doc-toc {
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  padding: 16px 20px;
+  margin: 8px 0 16px;
+  background: var(--bg-app);
+}
+.doc-toc-title {
+  font-size: 16px; font-weight: 600; margin-bottom: 8px;
+  color: var(--text-primary); display: flex; align-items: center; gap: 8px;
+}
+.doc-toc-title button {
+  font-size: 11px; padding: 2px 8px; border: 1px solid var(--border);
+  border-radius: var(--radius-sm); background: var(--bg-white); cursor: pointer;
+  color: var(--text-secondary); font-family: var(--font-ui);
+}
+.doc-toc-title button:hover { background: var(--bg-toolbar); }
+.toc-entry {
+  padding: 3px 0; cursor: pointer; color: var(--accent);
+  font-size: 13px; text-decoration: none;
+}
+.toc-entry:hover { text-decoration: underline; }
+.toc-level-1 { padding-left: 0; }
+.toc-level-2 { padding-left: 16px; }
+.toc-level-3 { padding-left: 32px; }
+.toc-level-4 { padding-left: 48px; }
+.toc-level-5 { padding-left: 64px; }
+.toc-level-6 { padding-left: 80px; }
+
+/* ═══════════════════════════════════════════════════
+   E10.4 — Onboarding
+   ═══════════════════════════════════════════════════ */
+.onboarding-steps { display: flex; flex-direction: column; gap: 12px; margin: 12px 0; }
+.onboarding-step { display: flex; align-items: flex-start; gap: 12px; padding: 8px; border-radius: var(--radius-sm); }
+.onboarding-step .msi { font-size: 28px; color: var(--accent); flex-shrink: 0; }
+.onboarding-step div { font-size: 13px; line-height: 1.5; }
+.onboarding-step strong { font-size: 14px; }

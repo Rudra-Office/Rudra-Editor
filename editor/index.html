@@ -39,6 +39,7 @@
       <div class="app-menu-dropdown" id="fileMenu" role="menu" aria-label="File">
         <button class="app-menu-entry" id="btnNew" role="menuitem" tabindex="-1"><span class="msi">note_add</span> New <span class="shortcut">Ctrl+N</span></button>
         <button class="app-menu-entry" id="btnOpen" role="menuitem" tabindex="-1"><span class="msi">folder_open</span> Open <span class="shortcut">Ctrl+O</span></button>
+        <button class="app-menu-entry" id="btnTemplate" role="menuitem" tabindex="-1"><span class="msi">description</span> New from Template...</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" data-fmt="docx" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as DOCX</button>
         <button class="app-menu-entry" data-fmt="odt" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as ODT</button>
@@ -257,6 +258,7 @@
         <button class="ctx-item" data-action="link" role="menuitem"><span class="msi ctx-icon">link</span> Hyperlink...</button>
         <button class="ctx-item" data-action="comment" role="menuitem"><span class="msi ctx-icon">add_comment</span> Comment...</button>
         <div class="ctx-sep"></div>
+        <button class="ctx-item" data-action="toc" role="menuitem"><span class="msi ctx-icon">toc</span> Table of Contents</button>
         <button class="ctx-item" data-action="toc" role="menuitem"><span class="msi ctx-icon">toc</span> Table of Contents</button>
         <button class="ctx-item" data-action="hr" role="menuitem"><span class="msi ctx-icon">horizontal_rule</span> Horizontal Rule</button>
         <button class="ctx-item" data-action="pagebreak" role="menuitem"><span class="msi ctx-icon">insert_page_break</span> Page Break</button>
@@ -658,6 +660,40 @@
 
 <!-- Toast Notification Container (E5.3) -->
 <div class="toast-container" id="toastContainer"></div>
+
+<!-- E9.2: Template Gallery Modal -->
+<div class="modal-overlay" id="templateModal" role="dialog" aria-modal="true" aria-label="New from Template">
+  <div class="modal" style="max-width:520px">
+    <h3><span class="msi modal-icon">description</span> New from Template</h3>
+    <div class="template-grid" id="templateGrid">
+      <button class="template-card" data-template="blank"><span class="msi template-icon">note_add</span><span class="template-name">Blank</span></button>
+      <button class="template-card" data-template="letter"><span class="msi template-icon">mail</span><span class="template-name">Letter</span></button>
+      <button class="template-card" data-template="resume"><span class="msi template-icon">person</span><span class="template-name">Resume</span></button>
+      <button class="template-card" data-template="report"><span class="msi template-icon">summarize</span><span class="template-name">Report</span></button>
+      <button class="template-card" data-template="meeting"><span class="msi template-icon">groups</span><span class="template-name">Meeting Notes</span></button>
+      <button class="template-card" data-template="essay"><span class="msi template-icon">school</span><span class="template-name">Essay</span></button>
+    </div>
+    <div class="modal-actions">
+      <button id="templateCancelBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- E10.4: Onboarding Modal -->
+<div class="modal-overlay" id="onboardingModal" role="dialog" aria-modal="true" aria-label="Welcome">
+  <div class="modal" style="max-width:500px">
+    <h3><span class="msi modal-icon">school</span> Welcome to s1 editor</h3>
+    <div class="onboarding-steps">
+      <div class="onboarding-step"><span class="msi">edit</span><div><strong>Rich Editing</strong><br>Format text with the toolbar or shortcuts (Ctrl+B, Ctrl+I, Ctrl+U)</div></div>
+      <div class="onboarding-step"><span class="msi">table</span><div><strong>Tables &amp; Images</strong><br>Insert tables and images from the Insert menu or toolbar</div></div>
+      <div class="onboarding-step"><span class="msi">share</span><div><strong>Collaboration</strong><br>Click Share to start a real-time editing session with others</div></div>
+      <div class="onboarding-step"><span class="msi">download</span><div><strong>Export</strong><br>Export as DOCX, ODT, PDF, Markdown, or plain text</div></div>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="onboardingDone">Get Started</button>
+    </div>
+  </div>
+</div>
 
 <script type="module" src="/src/main.js"></script>
 </body>

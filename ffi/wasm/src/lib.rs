@@ -1359,13 +1359,29 @@ impl WasmDocument {
             txn.push(Operation::delete_node(run_id));
         }
 
-        // Create new paragraph with tail text
+        // Create new paragraph with tail text, copying paragraph-level attributes
         let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
         if let Some(sid) = &style_id {
             new_para.attributes.set(
                 AttributeKey::StyleId,
                 AttributeValue::String(sid.clone()),
             );
+        }
+        // Copy paragraph-level formatting: list info, alignment, line spacing, heading level
+        if let Some(para_node_ref) = doc.node(para_id) {
+            let keys_to_copy = [
+                AttributeKey::ListInfo,
+                AttributeKey::Alignment,
+                AttributeKey::LineSpacing,
+                AttributeKey::IndentLeft,
+                AttributeKey::IndentRight,
+                AttributeKey::IndentFirstLine,
+            ];
+            for key in &keys_to_copy {
+                if let Some(val) = para_node_ref.attributes.get(key) {
+                    new_para.attributes.set(key.clone(), val.clone());
+                }
+            }
         }
         txn.push(Operation::insert_node(parent_id, index + 1, new_para));
         txn.push(Operation::insert_node(

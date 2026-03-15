@@ -105,11 +105,12 @@ export function initToolbar() {
     if (!info) return;
     syncAllText();
     try {
-      state.doc.set_line_spacing(info.startNodeId, e.target.value);
-      broadcastOp({ action: 'setLineSpacing', nodeId: info.startNodeId, value: e.target.value });
-      renderNodeById(info.startNodeId);
-      state.pagesRendered = false;
-      updatePageBreaks();
+      const paraIds = getSelectedParagraphIds(info);
+      paraIds.forEach(nodeId => {
+        state.doc.set_line_spacing(nodeId, e.target.value);
+        broadcastOp({ action: 'setLineSpacing', nodeId, value: e.target.value });
+      });
+      renderDocument();
       updateUndoRedo();
     } catch (err) { console.error('line spacing:', err); }
   });
@@ -421,6 +422,7 @@ export function initToolbar() {
         else if (action === 'image') $('miImage').click();
         else if (action === 'link') $('miLink').click();
         else if (action === 'comment') $('miComment').click();
+        else if (action === 'toc') $('miTOC').click();
         else if (action === 'hr') $('miHR').click();
         else if (action === 'pagebreak') $('miPageBreak').click();
       });
@@ -470,15 +472,14 @@ function applyAlignment(align) {
   if (!state.doc) return;
   const info = getSelectionInfo();
   if (!info) return;
-  const el = $('docPage').querySelector(`[data-node-id="${info.startNodeId}"]`);
-  if (el) syncParagraphText(el);
+  syncAllText();
   try {
-    state.doc.set_alignment(info.startNodeId, align);
-    broadcastOp({ action: 'setAlignment', nodeId: info.startNodeId, alignment: align });
-    const updated = renderNodeById(info.startNodeId);
-    if (updated) setCursorAtOffset(updated, info.startOffset);
-    state.pagesRendered = false;
-    updatePageBreaks();
+    const paraIds = getSelectedParagraphIds(info);
+    paraIds.forEach(nodeId => {
+      state.doc.set_alignment(nodeId, align);
+      broadcastOp({ action: 'setAlignment', nodeId, alignment: align });
+    });
+    renderDocument();
     updateToolbarState();
     updateUndoRedo();
     announce('Alignment: ' + align);
@@ -491,12 +492,39 @@ function toggleList(format) {
   if (!info) return;
   syncAllText();
   try {
-    state.doc.set_list_format(info.startNodeId, format, 0);
-    broadcastOp({ action: 'setListFormat', nodeId: info.startNodeId, format, level: 0 });
+    // Collect all paragraph node IDs in the selection range
+    const paraIds = getSelectedParagraphIds(info);
+    // Check if first paragraph already has this list format — if so, toggle off
+    let toggleOff = false;
+    try {
+      const fmt = JSON.parse(state.doc.get_formatting_json(info.startNodeId));
+      if (fmt.listFormat === format) toggleOff = true;
+    } catch (_) {}
+    const applyFormat = toggleOff ? 'none' : format;
+    paraIds.forEach(nodeId => {
+      state.doc.set_list_format(nodeId, applyFormat, 0);
+      broadcastOp({ action: 'setListFormat', nodeId, format: applyFormat, level: 0 });
+    });
     renderDocument();
     updateToolbarState();
     updateUndoRedo();
   } catch (e) { console.error('list:', e); }
+}
+
+// Get all paragraph node IDs between selection start and end
+function getSelectedParagraphIds(info) {
+  const page = $('docPage');
+  if (!page) return [info.startNodeId];
+  const paraEls = page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]');
+  const ids = [];
+  let inRange = false;
+  for (const el of paraEls) {
+    const nid = el.dataset.nodeId;
+    if (nid === info.startNodeId) inRange = true;
+    if (inRange) ids.push(nid);
+    if (nid === info.endNodeId) break;
+  }
+  return ids.length > 0 ? ids : [info.startNodeId];
 }
 
 function applyIndent(delta) {
@@ -505,15 +533,15 @@ function applyIndent(delta) {
   if (!info) return;
   syncAllText();
   try {
-    // Get current indent, add delta, clamp to 0
-    const fmt = JSON.parse(state.doc.get_formatting_json(info.startNodeId));
-    const current = parseFloat(fmt.indentLeft || '0');
-    const newVal = Math.max(0, current + delta);
-    state.doc.set_indent(info.startNodeId, 'left', newVal);
-    broadcastOp({ action: 'setIndent', nodeId: info.startNodeId, side: 'left', value: newVal });
-    renderNodeById(info.startNodeId);
-    state.pagesRendered = false;
-    updatePageBreaks();
+    const paraIds = getSelectedParagraphIds(info);
+    paraIds.forEach(nodeId => {
+      const fmt = JSON.parse(state.doc.get_formatting_json(nodeId));
+      const current = parseFloat(fmt.indentLeft || '0');
+      const newVal = Math.max(0, current + delta);
+      state.doc.set_indent(nodeId, 'left', newVal);
+      broadcastOp({ action: 'setIndent', nodeId, side: 'left', value: newVal });
+    });
+    renderDocument();
     updateUndoRedo();
   } catch (e) { console.error('indent:', e); }
 }
@@ -1032,28 +1060,31 @@ function initStyleGallery() {
       if (!def) { panel.classList.remove('show'); return; }
 
       try {
-        // Set heading level
-        state.doc.set_heading_level(info.startNodeId, def.heading);
-        broadcastOp({ action: 'setHeading', nodeId: info.startNodeId, level: def.heading });
+        syncAllText();
+        const paraIds = getSelectedParagraphIds(info);
+        paraIds.forEach(nodeId => {
+          // Set heading level on each paragraph
+          state.doc.set_heading_level(nodeId, def.heading);
+          broadcastOp({ action: 'setHeading', nodeId, level: def.heading });
 
-        // Apply font size (whole paragraph)
-        const textLen = el ? Array.from(el.textContent || '').length : 0;
-        const sn = info.startNodeId;
-        if (textLen > 0) {
-          const bcast = (key, value) => {
-            state.doc.format_selection(sn, 0, sn, textLen, key, value);
-            broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: 0, endNode: sn, endOffset: textLen, key, value });
-          };
-          if (def.fontSize) bcast('fontSize', def.fontSize);
-          if (def.fontFamily) bcast('fontFamily', def.fontFamily);
-          if (def.color) bcast('color', def.color);
-          if (def.italic) {
-            bcast('italic', 'true');
-          } else {
-            // Clear italic if switching away from quote
-            try { bcast('italic', 'false'); } catch(_) {}
+          // Apply font formatting (whole paragraph)
+          const pEl = $('docPage').querySelector(`[data-node-id="${nodeId}"]`);
+          const textLen = pEl ? Array.from(pEl.textContent || '').length : 0;
+          if (textLen > 0) {
+            const bcast = (key, value) => {
+              state.doc.format_selection(nodeId, 0, nodeId, textLen, key, value);
+              broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: textLen, key, value });
+            };
+            if (def.fontSize) bcast('fontSize', def.fontSize);
+            if (def.fontFamily) bcast('fontFamily', def.fontFamily);
+            if (def.color) bcast('color', def.color);
+            if (def.italic) {
+              bcast('italic', 'true');
+            } else {
+              try { bcast('italic', 'false'); } catch(_) {}
+            }
           }
-        }
+        });
 
         renderDocument();
         updateToolbarState();
