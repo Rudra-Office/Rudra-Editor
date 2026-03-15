@@ -5,11 +5,12 @@ import {
   setCursorAtOffset, setCursorAtStart, isCursorAtStart, isCursorAtEnd,
 } from './selection.js';
 import { renderDocument, renderNodeById, syncParagraphText, syncAllText, debouncedSync } from './render.js';
-import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo } from './toolbar.js';
+import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction, renderUndoHistory } from './toolbar.js';
 import { deleteSelectedImage, setupImages } from './images.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar } from './file.js';
 import { broadcastOp } from './collab.js';
+import { setZoomLevel } from './toolbar-handlers.js';
 
 export function initInput() {
   const page = $('docPage');
@@ -17,6 +18,26 @@ export function initInput() {
   // ─── E-01 fix: Capture cursor offset before text insertion for pending formats ───
   page.addEventListener('beforeinput', (e) => {
     if (state.ignoreInput) return;
+    // E1.6 fix: Prevent browser from deleting page-break / HR elements via
+    // native deletion (deleteContentBackward/Forward). Check if any target
+    // range includes a non-editable element.
+    if (e.inputType && e.inputType.startsWith('delete') && e.getTargetRanges) {
+      const ranges = e.getTargetRanges();
+      for (const r of ranges) {
+        // Walk through the range to see if it spans a page-break or HR
+        const container = r.commonAncestorContainer;
+        const parent = container.nodeType === 1 ? container : container.parentElement;
+        if (parent) {
+          const breaks = parent.querySelectorAll ? parent.querySelectorAll('.page-break, hr.page-break, .editor-header, .editor-footer') : [];
+          for (const b of breaks) {
+            if (r.intersectsNode?.(b)) {
+              e.preventDefault();
+              return;
+            }
+          }
+        }
+      }
+    }
     if (e.inputType === 'insertText' && e.data) {
       const pending = state.pendingFormats;
       if (pending && Object.keys(pending).length > 0) {
@@ -100,7 +121,7 @@ export function initInput() {
     }
   });
 
-  // ─── Copy — write both plain text and HTML to clipboard ───
+  // ─── Copy — write both plain text and HTML to clipboard via WASM ───
   page.addEventListener('copy', e => {
     if (!state.doc) return;
     const sel = window.getSelection();
@@ -108,11 +129,24 @@ export function initInput() {
 
     e.preventDefault();
     const text = sel.toString();
-    const html = getSelectionHtml();
 
-    // Store internal clipboard for rich paste within editor
+    // E2.1: Generate clean semantic HTML from WASM model (no data attributes, no node IDs)
     syncAllText();
-    storeInternalClipboard();
+    const info = getSelectionInfo();
+    let html = '';
+    if (info && info.startNodeId && info.endNodeId) {
+      try {
+        html = state.doc.export_selection_html(
+          info.startNodeId, info.startOffset,
+          info.endNodeId, info.endOffset
+        );
+      } catch (err) {
+        console.warn('WASM export_selection_html failed, falling back to DOM:', err);
+        html = getSelectionHtml();
+      }
+    } else {
+      html = getSelectionHtml();
+    }
 
     e.clipboardData.setData('text/plain', text);
     e.clipboardData.setData('text/html', html);
@@ -203,6 +237,7 @@ export function initInput() {
         case '+': e.preventDefault(); adjustEditorZoom(10); return;
         case '-': e.preventDefault(); adjustEditorZoom(-10); return;
         case '0': e.preventDefault(); adjustEditorZoom(0); return;
+        case '/': e.preventDefault(); { const m = document.getElementById('shortcutsModal'); if (m) m.classList.add('show'); } return;
       }
     }
 
@@ -225,12 +260,16 @@ export function initInput() {
             setCursorAtStart(el);
           } else {
             // Document is completely empty — create a new paragraph
-            try { doc.append_paragraph(''); } catch (_) {}
+            try {
+              doc.append_paragraph('');
+              broadcastOp({ action: 'insertParagraph', afterNodeId: null, text: '' });
+            } catch (_) {}
             renderDocument();
             const n = page.querySelector('[data-node-id]');
             if (n) setCursorAtStart(n);
           }
         }
+        recordUndoAction('Delete selection');
         updateUndoRedo();
         broadcastOp({ action: 'deleteSelection', startNode: info.startNodeId, startOffset: info.startOffset, endNode: info.endNodeId, endOffset: info.endOffset });
       } catch (err) { console.error('delete selection:', err); }
@@ -254,6 +293,30 @@ export function initInput() {
           const textNode = next.querySelector('[data-node-id]');
           if (textNode) { setCursorAtStart(textNode); }
           else { next.focus(); }
+        } else if (!e.shiftKey && idx === cells.length - 1) {
+          // E4.1: Tab in last cell — insert new row
+          const tableNodeId = table.dataset?.nodeId;
+          if (tableNodeId && doc) {
+            try {
+              syncAllText();
+              const dims = JSON.parse(doc.get_table_dimensions(tableNodeId));
+              const rowIdx = dims.rows; // Insert at end
+              doc.insert_table_row(tableNodeId, rowIdx);
+              broadcastOp({ action: 'insertTableRow', tableNodeId, rowIndex: rowIdx });
+              renderDocument();
+              // Focus first cell of new row
+              const updatedTable = page.querySelector(`[data-node-id="${tableNodeId}"]`);
+              if (updatedTable) {
+                const newCells = updatedTable.querySelectorAll('td, th');
+                const firstNewCell = newCells[newCells.length - dims.cols];
+                if (firstNewCell) {
+                  const tn = firstNewCell.querySelector('[data-node-id]');
+                  if (tn) setCursorAtStart(tn);
+                }
+              }
+              updateUndoRedo(); markDirty();
+            } catch (err) { console.error('Tab add row:', err); }
+          }
         }
         return;
       }
@@ -271,6 +334,7 @@ export function initInput() {
         broadcastOp({ action: 'insertLineBreak', nodeId, offset });
         const updated = renderNodeById(nodeId);
         if (updated) setCursorAtOffset(updated, offset + 1);
+        recordUndoAction('Insert line break');
         state.pagesRendered = false; updatePageBreaks(); updateUndoRedo();
       } catch (err) {
         console.error('insert line break:', err);
@@ -299,6 +363,7 @@ export function initInput() {
           setupImages(newEl);
           setCursorAtStart(newEl);
         }
+        recordUndoAction('Split paragraph');
         state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
         broadcastOp({ action: 'splitParagraph', nodeId, offset });
       } catch (err) { console.error('split:', err); }
@@ -322,7 +387,14 @@ export function initInput() {
     // ── Backspace at start — merge prev ──
     if (e.key === 'Backspace' && el && isCursorAtStart(el)) {
       let prev = el.previousElementSibling;
-      while (prev && (prev.classList.contains('page-break') || prev.classList.contains('editor-footer') || prev.classList.contains('editor-header'))) prev = prev.previousElementSibling;
+      // Skip CSS pagination divs (editor-header/footer, page-break DIVs) but
+      // NOT model-level page break HRs — those should block merging.
+      while (prev && prev.tagName !== 'HR' && (prev.classList.contains('page-break') || prev.classList.contains('editor-footer') || prev.classList.contains('editor-header'))) prev = prev.previousElementSibling;
+      // If we hit a model-level page break HR, don't merge across it
+      if (prev && prev.tagName === 'HR' && prev.classList.contains('page-break')) {
+        e.preventDefault();
+        return;
+      }
       if (prev?.dataset?.nodeId) {
         e.preventDefault();
         clearTimeout(state.syncTimer); syncParagraphText(el); syncParagraphText(prev);
@@ -334,6 +406,7 @@ export function initInput() {
           const updated = renderNodeById(nodeId1);
           el.remove();
           if (updated) setCursorAtOffset(updated, cursorPos);
+          recordUndoAction('Merge paragraphs');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
           broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
         } catch (err) { console.error('merge:', err); }
@@ -344,7 +417,13 @@ export function initInput() {
     // ── Delete at end — merge next ──
     if (e.key === 'Delete' && el && isCursorAtEnd(el)) {
       let next = el.nextElementSibling;
-      while (next && (next.classList.contains('page-break') || next.classList.contains('editor-footer') || next.classList.contains('editor-header'))) next = next.nextElementSibling;
+      // Skip CSS pagination divs but NOT model-level page break HRs
+      while (next && next.tagName !== 'HR' && (next.classList.contains('page-break') || next.classList.contains('editor-footer') || next.classList.contains('editor-header'))) next = next.nextElementSibling;
+      // If we hit a model-level page break HR, don't merge across it
+      if (next && next.tagName === 'HR' && next.classList.contains('page-break')) {
+        e.preventDefault();
+        return;
+      }
       if (next?.dataset?.nodeId) {
         e.preventDefault();
         clearTimeout(state.syncTimer); syncParagraphText(el); syncParagraphText(next);
@@ -356,6 +435,7 @@ export function initInput() {
           const updated = renderNodeById(nodeId1);
           next.remove();
           if (updated) setCursorAtOffset(updated, cursorPos);
+          recordUndoAction('Merge paragraphs');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
           broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
         } catch (err) { console.error('merge:', err); }
@@ -392,7 +472,11 @@ export function initInput() {
       let firstEl = page.querySelector('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]');
       if (!firstEl) {
         // Document is completely empty — create a paragraph
-        try { doc.append_paragraph(''); renderDocument(); } catch (_) {}
+        try {
+          doc.append_paragraph('');
+          broadcastOp({ action: 'insertParagraph', afterNodeId: null, text: '' });
+          renderDocument();
+        } catch (_) {}
         firstEl = page.querySelector('[data-node-id]');
       }
       if (firstEl) {
@@ -415,6 +499,28 @@ export function initInput() {
     }
 
     const text = e.clipboardData.getData('text/plain');
+    const html = e.clipboardData.getData('text/html');
+
+    // E2.2: Try rich paste (HTML → formatted runs via WASM) first
+    if (html && text) {
+      const parsed = parseClipboardHtml(html);
+      if (parsed && parsed.paragraphs.length > 0) {
+        try {
+          const runsJson = JSON.stringify(parsed);
+          doc.paste_formatted_runs_json(info.startNodeId, info.startOffset, runsJson);
+          broadcastOp({ action: 'pasteFormattedRuns', nodeId: info.startNodeId, offset: info.startOffset, runsJson });
+          renderDocument();
+          placeCursorAfterPaste(page, text);
+          recordUndoAction('Paste formatted text');
+          updateUndoRedo();
+          markDirty();
+          return;
+        } catch (err) {
+          console.warn('Rich paste failed, falling back to plain text:', err);
+        }
+      }
+    }
+
     if (!text) return;
 
     if (text.includes('\n')) {
@@ -422,20 +528,8 @@ export function initInput() {
         doc.paste_plain_text(info.startNodeId, info.startOffset, text);
         broadcastOp({ action: 'pasteText', nodeId: info.startNodeId, offset: info.startOffset, text });
         renderDocument();
-        // E-11: Place cursor at end of pasted content — find the paragraph
-        // whose text ends with the last pasted line, searching from the bottom
-        const lines = text.split('\n');
-        const lastLine = lines[lines.length - 1];
-        const allEls = Array.from(page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]'));
-        let targetEl = null;
-        for (let i = allEls.length - 1; i >= 0; i--) {
-          if ((allEls[i].textContent || '').endsWith(lastLine)) {
-            targetEl = allEls[i];
-            break;
-          }
-        }
-        if (!targetEl && allEls.length > 0) targetEl = allEls[allEls.length - 1];
-        if (targetEl) setCursorAtOffset(targetEl, [...(targetEl.textContent || '')].length);
+        placeCursorAfterPaste(page, text);
+        recordUndoAction('Paste text');
         updateUndoRedo();
         markDirty();
       } catch (err) {
@@ -455,6 +549,7 @@ export function initInput() {
         broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text });
         const updated = renderNodeById(info.startNodeId);
         if (updated) setCursorAtOffset(updated, info.startOffset + Array.from(text).length);
+        recordUndoAction('Paste text');
         updateUndoRedo();
         markDirty();
       } catch (err) {
@@ -489,6 +584,116 @@ export function initInput() {
     }
     updateToolbarState();
   });
+
+  // ─── E2.4: Text Drag & Drop within editor ─────
+  let dragSourceInfo = null;
+
+  page.addEventListener('dragstart', e => {
+    if (state.selectedImg) return; // Image drag handled by images.js
+    const sel = window.getSelection();
+    if (!sel || sel.isCollapsed) return;
+    const info = getSelectionInfo();
+    if (!info || info.collapsed) return;
+    syncAllText();
+    dragSourceInfo = { ...info };
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', sel.toString());
+    // Generate rich HTML for the drag
+    try {
+      const html = state.doc.export_selection_html(
+        info.startNodeId, info.startOffset, info.endNodeId, info.endOffset
+      );
+      e.dataTransfer.setData('text/html', html);
+    } catch (_) {}
+  });
+
+  page.addEventListener('dragover', e => {
+    if (!dragSourceInfo) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+  });
+
+  page.addEventListener('drop', e => {
+    if (!dragSourceInfo || !state.doc) return;
+    e.preventDefault();
+    const doc = state.doc;
+    const text = e.dataTransfer.getData('text/plain');
+    if (!text) { dragSourceInfo = null; return; }
+
+    // Find drop target paragraph and offset from caret position
+    let dropNode = null, dropOffset = 0;
+    if (document.caretPositionFromPoint) {
+      const pos = document.caretPositionFromPoint(e.clientX, e.clientY);
+      if (pos) {
+        const el = pos.offsetNode?.nodeType === 1 ? pos.offsetNode : pos.offsetNode?.parentElement;
+        const block = el?.closest('[data-node-id]');
+        if (block) { dropNode = block; dropOffset = getCursorOffset(block); }
+      }
+    } else if (document.caretRangeFromPoint) {
+      const range = document.caretRangeFromPoint(e.clientX, e.clientY);
+      if (range) {
+        const el = range.startContainer?.nodeType === 1 ? range.startContainer : range.startContainer?.parentElement;
+        const block = el?.closest('[data-node-id]');
+        if (block) {
+          // Approximate char offset from range
+          const sel = window.getSelection();
+          sel.removeAllRanges();
+          sel.addRange(range);
+          dropNode = block;
+          dropOffset = getCursorOffset(block);
+        }
+      }
+    }
+
+    if (!dropNode || !dropNode.dataset.nodeId) { dragSourceInfo = null; return; }
+
+    const dropNodeId = dropNode.dataset.nodeId;
+    const src = dragSourceInfo;
+    dragSourceInfo = null;
+
+    try {
+      // Delete source text first, then insert at drop position
+      // Adjust drop offset if drop is in the same paragraph and after the deleted range
+      doc.delete_selection(src.startNodeId, src.startOffset, src.endNodeId, src.endOffset);
+      broadcastOp({ action: 'deleteSelection', startNode: src.startNodeId, startOffset: src.startOffset, endNode: src.endNodeId, endOffset: src.endOffset });
+
+      // After deletion, the drop node might have been removed or offset changed
+      // Re-render and find the drop target again
+      renderDocument();
+      const newDrop = page.querySelector(`[data-node-id="${dropNodeId}"]`);
+      if (newDrop) {
+        // Adjust offset if deleting from same node shifted the position
+        let adjustedOffset = dropOffset;
+        if (src.startNodeId === dropNodeId && src.endNodeId === dropNodeId) {
+          if (dropOffset > src.endOffset) {
+            adjustedOffset -= (src.endOffset - src.startOffset);
+          } else if (dropOffset > src.startOffset) {
+            adjustedOffset = src.startOffset;
+          }
+        }
+        const maxLen = [...(newDrop.textContent || '')].length;
+        adjustedOffset = Math.min(adjustedOffset, maxLen);
+
+        doc.insert_text_in_paragraph(dropNodeId, adjustedOffset, text);
+        broadcastOp({ action: 'insertText', nodeId: dropNodeId, offset: adjustedOffset, text });
+        renderDocument();
+        const updated = page.querySelector(`[data-node-id="${dropNodeId}"]`);
+        if (updated) setCursorAtOffset(updated, adjustedOffset + [...text].length);
+      } else {
+        // Drop node was deleted — insert into first available paragraph
+        const firstEl = page.querySelector('[data-node-id]');
+        if (firstEl) {
+          doc.insert_text_in_paragraph(firstEl.dataset.nodeId, 0, text);
+          broadcastOp({ action: 'insertText', nodeId: firstEl.dataset.nodeId, offset: 0, text });
+          renderDocument();
+        }
+      }
+      updateUndoRedo();
+      markDirty();
+    } catch (err) { console.error('text drop:', err); }
+  });
+
+  page.addEventListener('dragend', () => { dragSourceInfo = null; });
 
   // ─── Prevent toolbar from stealing focus ───────
   $('toolbar').addEventListener('mousedown', e => {
@@ -574,6 +779,167 @@ function getSelectionHtml() {
 
 // insertTextAtCursor removed — all text insertion must go through WASM to maintain model consistency
 
+// ─── E2.2: Parse clipboard HTML into structured runs for WASM ─────
+// Converts HTML from clipboard (Google Docs, Word, LibreOffice, etc.) into
+// the JSON format expected by paste_formatted_runs_json:
+// { paragraphs: [{ runs: [{ text, bold, italic, ... }] }] }
+function parseClipboardHtml(html) {
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(html, 'text/html');
+    const body = doc.body;
+    if (!body || !body.childNodes.length) return null;
+
+    const paragraphs = [];
+    // Walk top-level block elements
+    const blocks = body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, li, tr');
+    if (blocks.length === 0) {
+      // No block elements — treat entire body as one paragraph
+      const runs = extractRunsFromElement(body);
+      if (runs.length > 0) paragraphs.push({ runs });
+    } else {
+      for (const block of blocks) {
+        // Skip nested blocks (e.g., div inside p)
+        if (block.closest('li') && block.tagName !== 'LI') continue;
+        if (block.closest('td') && block.tagName !== 'TD' && block.tagName !== 'TR') continue;
+        const runs = extractRunsFromElement(block);
+        if (runs.length > 0) paragraphs.push({ runs });
+      }
+    }
+
+    if (paragraphs.length === 0) {
+      // Last resort: extract all text
+      const text = body.textContent || '';
+      if (text) return { paragraphs: [{ runs: [{ text }] }] };
+      return null;
+    }
+
+    return { paragraphs };
+  } catch (_) {
+    return null;
+  }
+}
+
+function extractRunsFromElement(el) {
+  const runs = [];
+  walkInline(el, {}, runs);
+  // Merge adjacent runs with identical formatting
+  const merged = [];
+  for (const run of runs) {
+    if (merged.length > 0) {
+      const prev = merged[merged.length - 1];
+      if (sameFormatting(prev, run)) {
+        prev.text += run.text;
+        continue;
+      }
+    }
+    merged.push({ ...run });
+  }
+  return merged;
+}
+
+function walkInline(node, inherited, runs) {
+  if (node.nodeType === 3) { // Text node
+    const text = node.textContent;
+    if (text) {
+      runs.push({ text, ...inherited });
+    }
+    return;
+  }
+  if (node.nodeType !== 1) return;
+
+  // Skip non-inline block elements nested inside (we handle blocks at top level)
+  const tag = node.tagName.toLowerCase();
+
+  // Build formatting from this element
+  const fmt = { ...inherited };
+  if (tag === 'b' || tag === 'strong') fmt.bold = true;
+  if (tag === 'i' || tag === 'em') fmt.italic = true;
+  if (tag === 'u') fmt.underline = true;
+  if (tag === 's' || tag === 'strike' || tag === 'del') fmt.strikethrough = true;
+  if (tag === 'sup') fmt.superscript = true;
+  if (tag === 'sub') fmt.subscript = true;
+  if (tag === 'br') {
+    // Line breaks within a block become newline text
+    runs.push({ text: '\n', ...inherited });
+    return;
+  }
+
+  // Parse inline styles
+  const style = node.style;
+  if (style) {
+    if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700) fmt.bold = true;
+    if (style.fontStyle === 'italic') fmt.italic = true;
+    if (style.textDecoration?.includes('underline')) fmt.underline = true;
+    if (style.textDecoration?.includes('line-through')) fmt.strikethrough = true;
+    if (style.fontSize) {
+      const size = parseFloat(style.fontSize);
+      if (size > 0) {
+        // Convert px to pt (rough: 1pt ≈ 1.333px)
+        if (style.fontSize.endsWith('px')) fmt.fontSize = Math.round(size * 0.75 * 10) / 10;
+        else if (style.fontSize.endsWith('pt')) fmt.fontSize = size;
+      }
+    }
+    if (style.fontFamily) {
+      const ff = style.fontFamily.replace(/['"]/g, '').split(',')[0].trim();
+      if (ff) fmt.fontFamily = ff;
+    }
+    if (style.color) {
+      const hex = colorToHex(style.color);
+      if (hex) fmt.color = hex;
+    }
+  }
+
+  for (const child of node.childNodes) {
+    walkInline(child, fmt, runs);
+  }
+}
+
+function sameFormatting(a, b) {
+  return !!a.bold === !!b.bold &&
+    !!a.italic === !!b.italic &&
+    !!a.underline === !!b.underline &&
+    !!a.strikethrough === !!b.strikethrough &&
+    (a.fontSize || null) === (b.fontSize || null) &&
+    (a.fontFamily || null) === (b.fontFamily || null) &&
+    (a.color || null) === (b.color || null);
+}
+
+function colorToHex(cssColor) {
+  if (!cssColor) return null;
+  // Already hex
+  if (cssColor.startsWith('#')) {
+    let hex = cssColor.slice(1);
+    if (hex.length === 3) hex = hex[0]+hex[0]+hex[1]+hex[1]+hex[2]+hex[2];
+    return hex.toUpperCase();
+  }
+  // rgb(r, g, b)
+  const m = cssColor.match(/rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)/);
+  if (m) {
+    const r = parseInt(m[1]).toString(16).padStart(2, '0');
+    const g = parseInt(m[2]).toString(16).padStart(2, '0');
+    const b = parseInt(m[3]).toString(16).padStart(2, '0');
+    return (r + g + b).toUpperCase();
+  }
+  return null;
+}
+
+// Place cursor at end of pasted content
+function placeCursorAfterPaste(page, text) {
+  const lines = text.split('\n');
+  const lastLine = lines[lines.length - 1];
+  const allEls = Array.from(page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]'));
+  let targetEl = null;
+  for (let i = allEls.length - 1; i >= 0; i--) {
+    if ((allEls[i].textContent || '').endsWith(lastLine)) {
+      targetEl = allEls[i];
+      break;
+    }
+  }
+  if (!targetEl && allEls.length > 0) targetEl = allEls[allEls.length - 1];
+  if (targetEl) setCursorAtOffset(targetEl, [...(targetEl.textContent || '')].length);
+}
+
 function doUndo() {
   if (!state.doc) return;
   clearTimeout(state.syncTimer);
@@ -592,9 +958,11 @@ function doUndo() {
       state._typingBatch = null;
       state.doc.undo();
     }
+    // E3.2: Advance undo history position
+    state.undoHistoryPos = Math.min(state.undoHistoryPos + 1, state.undoHistory.length);
     renderDocument();
     updateToolbarState();
-    // Broadcast full document sync so peers see the undo result
+    renderUndoHistory();
     broadcastOp({ action: 'fullDocSync' });
   } catch (e) { console.error('undo:', e); }
 }
@@ -603,9 +971,11 @@ function doRedo() {
   if (!state.doc) return;
   try {
     state.doc.redo();
+    // E3.2: Move undo history position back
+    state.undoHistoryPos = Math.max(state.undoHistoryPos - 1, 0);
     renderDocument();
     updateToolbarState();
-    // Broadcast full document sync so peers see the redo result
+    renderUndoHistory();
     broadcastOp({ action: 'fullDocSync' });
   } catch (e) { console.error('redo:', e); }
 }
@@ -614,16 +984,23 @@ function doCut() {
   const info = getSelectionInfo();
   if (!info || info.collapsed || !state.doc) return;
 
-  // Store document state for rich paste
+  // E2.3: Copy via WASM then delete
   syncAllText();
-  storeInternalClipboard();
 
-  // Copy HTML + plain text to system clipboard
+  // Generate clean HTML from WASM model
   const sel = window.getSelection();
   if (sel) {
     const text = sel.toString();
-    const html = getSelectionHtml();
-    // Use clipboard API with both formats
+    let html = '';
+    try {
+      html = state.doc.export_selection_html(
+        info.startNodeId, info.startOffset,
+        info.endNodeId, info.endOffset
+      );
+    } catch (err) {
+      console.warn('WASM export_selection_html failed in cut, falling back:', err);
+      html = getSelectionHtml();
+    }
     try {
       const blob = new Blob([html], { type: 'text/html' });
       const textBlob = new Blob([text], { type: 'text/plain' });
@@ -649,6 +1026,7 @@ function doCut() {
       if (first) setCursorAtStart(first);
       else { state.doc.append_paragraph(''); renderDocument(); }
     }
+    recordUndoAction('Cut text');
     updateUndoRedo();
   } catch (e) { console.error('cut:', e); }
 }
@@ -817,14 +1195,19 @@ function executeSlashCommand(cmdId) {
   syncAllText();
 
   try {
+    const bcastFmt = (key, value, len) => {
+      doc.format_selection(nodeId, 0, nodeId, len, key, value);
+      broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: len, key, value });
+    };
     switch (cmdId) {
-      case 'heading1': doc.set_heading_level(nodeId, 1); renderDocument(); break;
-      case 'heading2': doc.set_heading_level(nodeId, 2); renderDocument(); break;
-      case 'heading3': doc.set_heading_level(nodeId, 3); renderDocument(); break;
-      case 'bullet':   doc.set_list_format(nodeId, 'bullet', 0); renderDocument(); break;
-      case 'numbered': doc.set_list_format(nodeId, 'decimal', 0); renderDocument(); break;
+      case 'heading1': doc.set_heading_level(nodeId, 1); broadcastOp({ action: 'setHeading', nodeId, level: 1 }); renderDocument(); break;
+      case 'heading2': doc.set_heading_level(nodeId, 2); broadcastOp({ action: 'setHeading', nodeId, level: 2 }); renderDocument(); break;
+      case 'heading3': doc.set_heading_level(nodeId, 3); broadcastOp({ action: 'setHeading', nodeId, level: 3 }); renderDocument(); break;
+      case 'bullet':   doc.set_list_format(nodeId, 'bullet', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'bullet', level: 0 }); renderDocument(); break;
+      case 'numbered': doc.set_list_format(nodeId, 'decimal', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'decimal', level: 0 }); renderDocument(); break;
       case 'table':
         doc.insert_table(nodeId, 3, 3);
+        broadcastOp({ action: 'insertTable', afterNodeId: nodeId, rows: 3, cols: 3 });
         renderDocument();
         break;
       case 'image':
@@ -832,33 +1215,42 @@ function executeSlashCommand(cmdId) {
         break;
       case 'hr':
         doc.insert_horizontal_rule(nodeId);
+        broadcastOp({ action: 'insertHR', afterNodeId: nodeId });
         renderDocument();
         break;
       case 'pagebreak':
         doc.insert_page_break(nodeId);
+        broadcastOp({ action: 'insertPageBreak', afterNodeId: nodeId });
         renderDocument();
         break;
       case 'quote': {
         doc.set_heading_level(nodeId, 0);
+        broadcastOp({ action: 'setHeading', nodeId, level: 0 });
         const textLen = el ? Array.from(el.textContent || '').length : 0;
         if (textLen > 0) {
-          doc.format_selection(nodeId, 0, nodeId, textLen, 'italic', 'true');
-          doc.format_selection(nodeId, 0, nodeId, textLen, 'color', '666666');
+          bcastFmt('italic', 'true', textLen);
+          bcastFmt('color', '666666', textLen);
         }
         renderDocument();
         break;
       }
       case 'code': {
         doc.set_heading_level(nodeId, 0);
+        broadcastOp({ action: 'setHeading', nodeId, level: 0 });
         const codeLen = el ? Array.from(el.textContent || '').length : 0;
         if (codeLen > 0) {
-          doc.format_selection(nodeId, 0, nodeId, codeLen, 'fontFamily', 'Courier New');
-          doc.format_selection(nodeId, 0, nodeId, codeLen, 'fontSize', '11');
+          bcastFmt('fontFamily', 'Courier New', codeLen);
+          bcastFmt('fontSize', '11', codeLen);
         }
         renderDocument();
         break;
       }
     }
+    // E3.4: Record slash command in undo history
+    const labels = { heading1: 'Set Heading 1', heading2: 'Set Heading 2', heading3: 'Set Heading 3',
+      bullet: 'Insert bullet list', numbered: 'Insert numbered list', table: 'Insert table',
+      hr: 'Insert horizontal rule', pagebreak: 'Insert page break', quote: 'Apply quote style', code: 'Apply code style' };
+    if (labels[cmdId]) recordUndoAction(labels[cmdId]);
     updateToolbarState();
     updateUndoRedo();
   } catch (e) { console.error('slash command:', e); }
@@ -872,15 +1264,8 @@ export { doUndo, doRedo };
 // E10.2: Zoom via keyboard (Ctrl+=/Ctrl+-/Ctrl+0)
 function adjustEditorZoom(delta) {
   if (delta === 0) {
-    state.zoomLevel = 100;
+    setZoomLevel(100);
   } else {
-    state.zoomLevel = Math.max(50, Math.min(200, (state.zoomLevel || 100) + delta));
-  }
-  const zoomEl = $('zoomValue');
-  if (zoomEl) zoomEl.textContent = state.zoomLevel + '%';
-  const page = $('docPage');
-  if (page) {
-    page.style.transform = `scale(${state.zoomLevel / 100})`;
-    page.style.transformOrigin = 'top center';
+    setZoomLevel((state.zoomLevel || 100) + delta);
   }
 }

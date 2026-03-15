@@ -4,6 +4,7 @@
 import { state } from './state.js';
 import { getSelectionInfo } from './selection.js';
 import { renderNodeById, syncParagraphText } from './render.js';
+import { broadcastOp } from './collab.js';
 
 const PX_PER_INCH = 96;
 const PT_PER_INCH = 72;
@@ -107,10 +108,13 @@ function applyIndent(type, valuePt, nodeId) {
 
     if (type === 'left') {
       state.doc.set_indent(nodeId, 'left', valuePt);
+      broadcastOp({ action: 'setIndent', nodeId, side: 'left', value: valuePt });
     } else if (type === 'right') {
       state.doc.set_indent(nodeId, 'right', valuePt);
+      broadcastOp({ action: 'setIndent', nodeId, side: 'right', value: valuePt });
     } else if (type === 'firstLine') {
       state.doc.set_indent(nodeId, 'firstLine', valuePt);
+      broadcastOp({ action: 'setIndent', nodeId, side: 'firstLine', value: valuePt });
     }
 
     renderNodeById(nodeId);

@@ -91,9 +91,61 @@ function _updateToolbarStateImpl() {
 export function updateUndoRedo() {
   if (!state.doc) return;
   try {
-    $('btnUndo').disabled = !state.doc.can_undo();
-    $('btnRedo').disabled = !state.doc.can_redo();
+    const canUndo = state.doc.can_undo();
+    const canRedo = state.doc.can_redo();
+    $('btnUndo').disabled = !canUndo;
+    $('btnRedo').disabled = !canRedo;
+    // E3.4: Set tooltip with action label
+    const undoLabel = state.undoHistory.length > state.undoHistoryPos
+      ? state.undoHistory[state.undoHistoryPos]?.label : null;
+    $('btnUndo').title = undoLabel ? `Undo: ${undoLabel}` : 'Undo (Ctrl+Z)';
+    $('btnRedo').title = canRedo ? 'Redo (Ctrl+Y)' : 'Redo';
   } catch (_) {}
+}
+
+// E3.2: Record an action for the undo history viewer
+export function recordUndoAction(label) {
+  // Truncate any redo entries (new action invalidates redo history)
+  if (state.undoHistoryPos > 0) {
+    state.undoHistory.splice(0, state.undoHistoryPos);
+    state.undoHistoryPos = 0;
+  }
+  state.undoHistory.unshift({ label, timestamp: Date.now() });
+  // Cap at 100 entries
+  if (state.undoHistory.length > 100) state.undoHistory.length = 100;
+  renderUndoHistory();
+}
+
+// E3.2: Render the undo history in the history panel
+export function renderUndoHistory() {
+  const list = $('undoHistoryList');
+  if (!list) return;
+  list.innerHTML = '';
+  state.undoHistory.forEach((entry, idx) => {
+    const item = document.createElement('div');
+    item.className = 'history-item' + (idx < state.undoHistoryPos ? ' undone' : '');
+    const time = new Date(entry.timestamp);
+    const timeStr = time.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+    item.innerHTML = `<span class="history-label">${escapeHistoryHtml(entry.label)}</span><span class="history-time">${timeStr}</span>`;
+    item.addEventListener('click', () => {
+      // Jump to this state: undo or redo as needed
+      const stepsToUndo = idx - state.undoHistoryPos;
+      if (stepsToUndo > 0) {
+        for (let i = 0; i < stepsToUndo; i++) { try { state.doc.undo(); } catch (_) { break; } }
+        state.undoHistoryPos = idx;
+      } else if (stepsToUndo < 0) {
+        for (let i = 0; i < -stepsToUndo; i++) { try { state.doc.redo(); } catch (_) { break; } }
+        state.undoHistoryPos = idx;
+      }
+      // Re-import renderDocument dynamically to avoid circular deps
+      import('./render.js').then(m => { m.renderDocument(); renderUndoHistory(); updateUndoRedo(); });
+    });
+    list.appendChild(item);
+  });
+}
+
+function escapeHistoryHtml(str) {
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 }
 
 export function applyFormat(key, value) {
@@ -130,6 +182,9 @@ export function applyFormat(key, value) {
     let sn, so, en, eo;
     doc.format_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset, key, value);
     sn = info.startNodeId; so = info.startOffset; en = info.endNodeId; eo = info.endOffset;
+    // E3.4: Record formatting action
+    const friendlyKey = key.charAt(0).toUpperCase() + key.slice(1);
+    recordUndoAction(`${value === 'false' ? 'Remove' : 'Apply'} ${friendlyKey}`);
 
     // E-05: Batch render all affected nodes to avoid race conditions
     const nodeIds = [info.startNodeId];

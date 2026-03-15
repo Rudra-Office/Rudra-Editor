@@ -3,53 +3,24 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Folio — Document Editor</title>
+  <title>s1 editor</title>
   <link rel="stylesheet" href="/src/styles.css">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Google+Sans:wght@400;500;600&family=Roboto+Mono:wght@400&display=swap" rel="stylesheet">
 </head>
 <body>
 <div class="app" id="app">
-  <!-- Menu Bar -->
+  <!-- Title Bar -->
   <div class="menubar">
     <div class="logo">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-      Folio<span>.</span>
+      <img src="/assets/logo.svg" alt="s1" width="28" height="28">
+      <span class="logo-text">s1 editor</span>
     </div>
     <div class="sep"></div>
     <input class="doc-name" id="docName" value="Untitled Document" spellcheck="false">
     <div class="spacer"></div>
-    <button class="menu-btn" id="btnNew">New</button>
-    <button class="menu-btn" id="btnOpen">Open</button>
-    <input type="file" id="fileInput" accept=".docx,.odt,.txt,.md,.doc" hidden>
-    <input type="file" id="imageInput" accept="image/*" hidden>
-    <div class="dropdown">
-      <button class="menu-btn" id="btnExport">Export &#9662;</button>
-      <div class="dropdown-menu" id="exportMenu">
-        <button class="dropdown-item" data-fmt="docx">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          DOCX (Word)
-        </button>
-        <button class="dropdown-item" data-fmt="odt">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          ODT (OpenDocument)
-        </button>
-        <button class="dropdown-item" data-fmt="txt">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/></svg>
-          Plain Text
-        </button>
-        <button class="dropdown-item" data-fmt="md">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          Markdown
-        </button>
-        <button class="dropdown-item" data-fmt="pdf">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
-          PDF
-        </button>
-      </div>
-    </div>
-    <button class="menu-btn" id="btnHistory" title="Version History">History</button>
-    <button class="menu-btn" id="btnShare" title="Start a collaboration session">Share</button>
+    <button class="menu-btn menubar-collapsible-1024" id="btnHistory" title="Version History"><span class="msi">history</span></button>
+    <button class="menu-btn menubar-collapsible-1024" id="btnShare" title="Start a collaboration session"><span class="msi">share</span> Share</button>
     <div class="collab-status" id="collabStatus" style="display:none">
       <div class="collab-indicator" id="collabIndicator" title="Connection status"></div>
       <span class="collab-peer-count" id="collabPeerCount"></span>
@@ -61,28 +32,110 @@
     </div>
   </div>
 
+  <!-- Menu Bar (File / Edit / View / Insert / Format / Tools) -->
+  <div class="app-menubar" id="appMenubar" role="menubar" aria-label="Menu bar">
+    <div class="app-menu-item" data-menu="fileMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="0">File</button>
+      <div class="app-menu-dropdown" id="fileMenu" role="menu" aria-label="File">
+        <button class="app-menu-entry" id="btnNew" role="menuitem" tabindex="-1"><span class="msi">note_add</span> New <span class="shortcut">Ctrl+N</span></button>
+        <button class="app-menu-entry" id="btnOpen" role="menuitem" tabindex="-1"><span class="msi">folder_open</span> Open <span class="shortcut">Ctrl+O</span></button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" data-fmt="docx" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as DOCX</button>
+        <button class="app-menu-entry" data-fmt="odt" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as ODT</button>
+        <button class="app-menu-entry" data-fmt="pdf" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as PDF</button>
+        <button class="app-menu-entry" data-fmt="txt" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as Plain Text</button>
+        <button class="app-menu-entry" data-fmt="md" role="menuitem" tabindex="-1"><span class="msi">download</span> Export as Markdown</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="btnPrint" role="menuitem" tabindex="-1"><span class="msi">print</span> Print <span class="shortcut">Ctrl+P</span></button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="editMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Edit</button>
+      <div class="app-menu-dropdown" id="editMenu" role="menu" aria-label="Edit">
+        <button class="app-menu-entry" id="menuUndo" role="menuitem" tabindex="-1"><span class="msi">undo</span> Undo <span class="shortcut">Ctrl+Z</span></button>
+        <button class="app-menu-entry" id="menuRedo" role="menuitem" tabindex="-1"><span class="msi">redo</span> Redo <span class="shortcut">Ctrl+Y</span></button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuFind" role="menuitem" tabindex="-1"><span class="msi">search</span> Find & Replace <span class="shortcut">Ctrl+F</span></button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="viewMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">View</button>
+      <div class="app-menu-dropdown" id="viewMenu" role="menu" aria-label="View">
+        <button class="app-menu-entry tab-menu-entry" data-view="editor" role="menuitem" tabindex="-1"><span class="msi">edit</span> Editor</button>
+        <button class="app-menu-entry tab-menu-entry" data-view="pages" role="menuitem" tabindex="-1"><span class="msi">description</span> Pages</button>
+        <button class="app-menu-entry tab-menu-entry" data-view="text" role="menuitem" tabindex="-1"><span class="msi">text_fields</span> Plain Text</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuZoomIn" role="menuitem" tabindex="-1"><span class="msi">zoom_in</span> Zoom In <span class="shortcut">Ctrl++</span></button>
+        <button class="app-menu-entry" id="menuZoomOut" role="menuitem" tabindex="-1"><span class="msi">zoom_out</span> Zoom Out <span class="shortcut">Ctrl+-</span></button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuPrintPreview" role="menuitem" tabindex="-1"><span class="msi">preview</span> Print Preview</button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="insertMenuBar">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Insert</button>
+      <div class="app-menu-dropdown" id="insertMenuBar" role="menu" aria-label="Insert">
+        <button class="app-menu-entry" id="miTable" role="menuitem" tabindex="-1"><span class="msi">table</span> Table...</button>
+        <button class="app-menu-entry" id="miImage" role="menuitem" tabindex="-1"><span class="msi">image</span> Image...</button>
+        <button class="app-menu-entry" id="miLink" role="menuitem" tabindex="-1"><span class="msi">link</span> Hyperlink...</button>
+        <button class="app-menu-entry" id="miComment" role="menuitem" tabindex="-1"><span class="msi">add_comment</span> Comment...</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="miTOC" role="menuitem" tabindex="-1"><span class="msi">toc</span> Table of Contents</button>
+        <button class="app-menu-entry" id="miHR" role="menuitem" tabindex="-1"><span class="msi">horizontal_rule</span> Horizontal Rule</button>
+        <button class="app-menu-entry" id="miPageBreak" role="menuitem" tabindex="-1"><span class="msi">insert_page_break</span> Page Break</button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="formatMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Format</button>
+      <div class="app-menu-dropdown" id="formatMenu" role="menu" aria-label="Format">
+        <button class="app-menu-entry" id="menuBold" role="menuitem" tabindex="-1"><span class="msi">format_bold</span> Bold <span class="shortcut">Ctrl+B</span></button>
+        <button class="app-menu-entry" id="menuItalic" role="menuitem" tabindex="-1"><span class="msi">format_italic</span> Italic <span class="shortcut">Ctrl+I</span></button>
+        <button class="app-menu-entry" id="menuUnderline" role="menuitem" tabindex="-1"><span class="msi">format_underlined</span> Underline <span class="shortcut">Ctrl+U</span></button>
+        <button class="app-menu-entry" id="menuStrike" role="menuitem" tabindex="-1"><span class="msi">strikethrough_s</span> Strikethrough</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuClearFormat" role="menuitem" tabindex="-1"><span class="msi">format_clear</span> Clear formatting</button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="toolsMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Tools</button>
+      <div class="app-menu-dropdown" id="toolsMenu" role="menu" aria-label="Tools">
+        <button class="app-menu-entry" id="btnSpellCheck" role="menuitem" tabindex="-1"><span class="msi">spellcheck</span> Spell check</button>
+        <button class="app-menu-entry" id="btnComments" role="menuitem" tabindex="-1"><span class="msi">comment</span> Comments</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuDarkMode" role="menuitem" tabindex="-1"><span class="msi">dark_mode</span> Dark mode</button>
+      </div>
+    </div>
+    <div class="app-menu-item" data-menu="helpMenu">
+      <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Help</button>
+      <div class="app-menu-dropdown" id="helpMenu" role="menu" aria-label="Help">
+        <button class="app-menu-entry" id="menuShortcuts" role="menuitem" tabindex="-1"><span class="msi">keyboard</span> Keyboard Shortcuts <span class="shortcut">Ctrl+/</span></button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuAbout" role="menuitem" tabindex="-1"><span class="msi">info</span> About s1engine Editor</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Hidden file inputs (used by JS) -->
+  <input type="file" id="fileInput" accept=".docx,.odt,.txt,.md,.doc" hidden>
+  <input type="file" id="imageInput" accept="image/*" hidden>
+
   <!-- Toolbar -->
   <div class="toolbar" id="toolbar" role="toolbar" aria-label="Formatting toolbar">
     <!-- Undo/Redo -->
-    <button class="tb-btn" id="btnUndo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="1 4 1 10 7 10"/><path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"/></svg>
-    </button>
-    <button class="tb-btn" id="btnRedo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled>
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
-    </button>
+    <button class="tb-btn" id="btnUndo" title="Undo (Ctrl+Z)" aria-label="Undo" disabled><span class="msi">undo</span></button>
+    <button class="tb-btn" id="btnRedo" title="Redo (Ctrl+Y)" aria-label="Redo" disabled><span class="msi">redo</span></button>
     <div class="tb-sep" role="separator"></div>
 
-    <!-- Print -->
-    <button class="tb-btn" id="btnPrint" title="Print (Ctrl+P)" aria-label="Print">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M19 8H5c-1.66 0-3 1.34-3 3v6h4v4h12v-4h4v-6c0-1.66-1.34-3-3-3zm-3 11H8v-5h8v5zm3-7c-.55 0-1-.45-1-1s.45-1 1-1 1 .45 1 1-.45 1-1 1zm-1-9H6v4h12V3z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <!-- Zoom -->
+    <button class="tb-btn tb-collapsible-768" id="tbZoomOut" title="Zoom out" aria-label="Zoom out"><span class="msi">zoom_out</span></button>
+    <span class="tb-zoom-value tb-collapsible-768" id="tbZoomValue">100%</span>
+    <button class="tb-btn tb-collapsible-768" id="tbZoomIn" title="Zoom in" aria-label="Zoom in"><span class="msi">zoom_in</span></button>
+    <div class="tb-sep tb-collapsible-768" role="separator"></div>
 
     <!-- Style Gallery -->
-    <div class="style-gallery" id="styleGallery">
+    <div class="style-gallery tb-collapsible-480" id="styleGallery">
       <button class="style-gallery-btn" id="styleGalleryBtn" title="Paragraph style" aria-label="Paragraph style" aria-haspopup="true" aria-expanded="false">
         <span class="style-gallery-label" id="styleGalleryLabel">Normal</span>
-        <svg viewBox="0 0 24 24" fill="currentColor" width="12" height="12"><path d="M7 10l5 5 5-5z"/></svg>
+        <span class="msi msi-sm">expand_more</span>
       </button>
       <div class="style-gallery-panel" id="styleGalleryPanel" role="listbox" aria-label="Paragraph styles">
         <div class="style-gallery-item active" role="option" data-style="normal" aria-selected="true">
@@ -119,7 +172,7 @@
     <div class="tb-sep" role="separator"></div>
 
     <!-- Font -->
-    <select class="tb-select" id="fontFamily" title="Font family" aria-label="Font family" style="min-width:120px">
+    <select class="tb-select tb-collapsible-480" id="fontFamily" title="Font family" aria-label="Font family" style="min-width:120px">
       <option value="">Default</option>
       <option value="Arial" style="font-family:Arial">Arial</option>
       <option value="Times New Roman" style="font-family:'Times New Roman'">Times New Roman</option>
@@ -134,69 +187,47 @@
     </select>
 
     <!-- Font size -->
-    <input class="tb-input" id="fontSize" type="number" min="6" max="96" value="12" title="Font size (pt)" aria-label="Font size">
-    <div class="tb-sep" role="separator"></div>
+    <input class="tb-input tb-collapsible-480" id="fontSize" type="number" min="6" max="96" value="12" title="Font size (pt)" aria-label="Font size">
+    <div class="tb-sep tb-collapsible-480" role="separator"></div>
 
     <!-- Bold / Italic / Underline / Strikethrough -->
-    <button class="tb-btn" id="btnBold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.6 10.79c.97-.67 1.65-1.77 1.65-2.79 0-2.26-1.75-4-4-4H7v14h7.04c2.09 0 3.71-1.7 3.71-3.79 0-1.52-.86-2.82-2.15-3.42zM10 6.5h3c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5h-3v-3zm3.5 9H10v-3h3.5c.83 0 1.5.67 1.5 1.5s-.67 1.5-1.5 1.5z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnItalic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 4v3h2.21l-3.42 8H6v3h8v-3h-2.21l3.42-8H18V4z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnUnderline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 17c3.31 0 6-2.69 6-6V3h-2.5v8c0 1.93-1.57 3.5-3.5 3.5S8.5 12.93 8.5 11V3H6v8c0 3.31 2.69 6 6 6zm-7 2v2h14v-2H5z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnStrike" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M10 19h4v-3h-4v3zM5 4v3h5v3h4V7h5V4H5zM3 14h18v-2H3v2z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn" id="btnBold" title="Bold (Ctrl+B)" aria-label="Bold" aria-pressed="false"><span class="msi">format_bold</span></button>
+    <button class="tb-btn" id="btnItalic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false"><span class="msi">format_italic</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnUnderline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false"><span class="msi">format_underlined</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnStrike" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false"><span class="msi">strikethrough_s</span></button>
+    <div class="tb-sep tb-collapsible-480" role="separator"></div>
 
     <!-- Superscript / Subscript -->
-    <button class="tb-btn" id="btnSuperscript" title="Superscript" aria-label="Superscript" aria-pressed="false" style="font-size:12px;font-weight:600">
-      X<sup style="font-size:8px;font-weight:700">2</sup>
-    </button>
-    <button class="tb-btn" id="btnSubscript" title="Subscript" aria-label="Subscript" aria-pressed="false" style="font-size:12px;font-weight:600">
-      X<sub style="font-size:8px;font-weight:700">2</sub>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn tb-collapsible-768" id="btnSuperscript" title="Superscript" aria-label="Superscript" aria-pressed="false"><span class="msi">superscript</span></button>
+    <button class="tb-btn tb-collapsible-768" id="btnSubscript" title="Subscript" aria-label="Subscript" aria-pressed="false"><span class="msi">subscript</span></button>
+    <div class="tb-sep tb-collapsible-768" role="separator"></div>
 
     <!-- Text color -->
-    <div class="color-btn tb-btn" title="Text color" aria-label="Text color">
-      <svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18"><path d="M11 2L5.5 16h2.25l1.12-3h6.25l1.12 3h2.25L13 2h-2zm-1.38 9L12 4.67 14.38 11H9.62z"/></svg>
+    <div class="color-btn tb-btn tb-collapsible-480" title="Text color" aria-label="Text color">
+      <span class="msi">format_color_text</span>
       <div class="color-swatch" id="colorSwatch" style="background:#000"></div>
       <input type="color" id="colorPicker" value="#000000" aria-label="Choose text color">
     </div>
 
     <!-- Highlight -->
-    <div class="color-btn tb-btn" title="Highlight color" aria-label="Highlight color">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M16.56 8.94L7.62 0 6.21 1.41l2.38 2.38-5.15 5.15c-.59.59-.59 1.54 0 2.12l5.5 5.5c.29.29.68.44 1.06.44s.77-.15 1.06-.44l5.5-5.5c.59-.58.59-1.53 0-2.12zM5.21 10L10 5.21 14.79 10H5.21z"/><rect x="0" y="20" width="24" height="4" fill="#fef08a" rx="1"/></svg>
+    <div class="color-btn tb-btn tb-collapsible-768" title="Highlight color" aria-label="Highlight color">
+      <span class="msi">ink_highlighter</span>
       <input type="color" id="highlightPicker" value="#fef08a" aria-label="Choose highlight color">
     </div>
 
     <!-- Clear formatting -->
-    <button class="tb-btn" id="btnClearFormat" title="Clear formatting" aria-label="Clear formatting">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3.27 5L2 6.27l6.97 6.97L6.5 19h3l1.57-3.66L16.73 21 18 19.73 3.27 5zM6 5v.18L8.82 8h2.4l-.72 1.68 2.1 2.1L14.21 8H20V5H6z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn tb-collapsible-768" id="btnClearFormat" title="Clear formatting" aria-label="Clear formatting"><span class="msi">format_clear</span></button>
+    <div class="tb-sep tb-collapsible-768" role="separator"></div>
 
     <!-- Alignment -->
-    <button class="tb-btn" id="btnAlignL" title="Left align" aria-label="Align left" aria-pressed="true">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15 15H3v2h12v-2zm0-8H3v2h12V7zM3 13h18v-2H3v2zM3 21h18v-2H3v2zM3 3v2h18V3H3z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnAlignC" title="Center align" aria-label="Align center" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 15v2h10v-2H7zm-4 6h18v-2H3v2zm0-8h18v-2H3v2zm4-6v2h10V7H7zM3 3v2h18V3H3z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnAlignR" title="Right align" aria-label="Align right" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3v2zm6-4h12v-2H9v2zm-6-4h18v-2H3v2zm6-4h12V7H9v2zM3 3v2h18V3H3z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnAlignJ" title="Justify" aria-label="Justify" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18v-2H3v2zm0-4h18V7H3v2zM3 3v2h18V3H3z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn tb-collapsible-480" id="btnAlignL" title="Left align" aria-label="Align left" aria-pressed="true"><span class="msi">format_align_left</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnAlignC" title="Center align" aria-label="Align center" aria-pressed="false"><span class="msi">format_align_center</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnAlignR" title="Right align" aria-label="Align right" aria-pressed="false"><span class="msi">format_align_right</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnAlignJ" title="Justify" aria-label="Justify" aria-pressed="false"><span class="msi">format_align_justify</span></button>
+    <div class="tb-sep tb-collapsible-480" role="separator"></div>
 
     <!-- Line spacing -->
-    <select class="tb-select tb-select-narrow" id="lineSpacing" title="Line spacing" aria-label="Line spacing" style="min-width:48px">
+    <select class="tb-select tb-select-narrow tb-collapsible-1024" id="lineSpacing" title="Line spacing" aria-label="Line spacing" style="min-width:48px">
       <option value="1.0">1</option>
       <option value="1.15" selected>1.15</option>
       <option value="1.5">1.5</option>
@@ -206,77 +237,56 @@
     </select>
 
     <!-- Indent / Outdent -->
-    <button class="tb-btn" id="btnOutdent" title="Decrease indent" aria-label="Decrease indent">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M11 17h10v-2H11v2zm-8-5l4 4V8l-4 4zm0 9h18v-2H3v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnIndent" title="Increase indent" aria-label="Increase indent">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M3 21h18v-2H3v2zM3 8v8l4-4-4-4zm8 9h10v-2H11v2zM3 3v2h18V3H3zm8 6h10V7H11v2zm0 4h10v-2H11v2z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn tb-collapsible-1024" id="btnOutdent" title="Decrease indent" aria-label="Decrease indent"><span class="msi">format_indent_decrease</span></button>
+    <button class="tb-btn tb-collapsible-1024" id="btnIndent" title="Increase indent" aria-label="Increase indent"><span class="msi">format_indent_increase</span></button>
+    <div class="tb-sep tb-collapsible-1024" role="separator"></div>
 
     <!-- Lists -->
-    <button class="tb-btn" id="btnBulletList" title="Bulleted list" aria-label="Bulleted list" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z"/></svg>
-    </button>
-    <button class="tb-btn" id="btnNumberList" title="Numbered list" aria-label="Numbered list" aria-pressed="false">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 17h2v.5H3v1h1v.5H2v1h3v-4H2v1zm1-9h1V4H2v1h1v3zm-1 3h1.8L2 13.1v.9h3v-1H3.2L5 10.9V10H2v1zm5-6v2h14V5H7zm0 14h14v-2H7v2zm0-6h14v-2H7v2z"/></svg>
-    </button>
-    <div class="tb-sep" role="separator"></div>
+    <button class="tb-btn tb-collapsible-480" id="btnBulletList" title="Bulleted list" aria-label="Bulleted list" aria-pressed="false"><span class="msi">format_list_bulleted</span></button>
+    <button class="tb-btn tb-collapsible-480" id="btnNumberList" title="Numbered list" aria-label="Numbered list" aria-pressed="false"><span class="msi">format_list_numbered</span></button>
+    <div class="tb-sep tb-collapsible-480" role="separator"></div>
 
-    <!-- Insert -->
+    <!-- Insert (toolbar shortcut) -->
     <div class="insert-dropdown">
-      <button class="tb-btn" id="btnInsertMenu" title="Insert" aria-label="Insert menu" aria-haspopup="true" aria-expanded="false" style="width:auto;padding:0 8px;gap:4px;font-size:12px;font-weight:500">
-        <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16"><path d="M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z"/></svg>
-        Insert
+      <button class="tb-btn tb-btn-wide" id="btnInsertMenu" title="Insert" aria-label="Insert menu" aria-haspopup="true" aria-expanded="false">
+        <span class="msi">add</span> Insert
       </button>
       <div class="insert-menu" id="insertMenu" role="menu">
-        <button class="ctx-item" id="miTable" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><rect x="3" y="3" width="18" height="18" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="15" x2="21" y2="15"/><line x1="9" y1="3" x2="9" y2="21"/><line x1="15" y1="3" x2="15" y2="21"/></svg>
-          Table...
-        </button>
-        <button class="ctx-item" id="miImage" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
-          Image...
-        </button>
-        <button class="ctx-item" id="miLink" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg>
-          Hyperlink...
-        </button>
-        <button class="ctx-item" id="miComment" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-          Comment...
-        </button>
+        <button class="ctx-item" data-action="table" role="menuitem"><span class="msi ctx-icon">table</span> Table...</button>
+        <button class="ctx-item" data-action="image" role="menuitem"><span class="msi ctx-icon">image</span> Image...</button>
+        <button class="ctx-item" data-action="link" role="menuitem"><span class="msi ctx-icon">link</span> Hyperlink...</button>
+        <button class="ctx-item" data-action="comment" role="menuitem"><span class="msi ctx-icon">add_comment</span> Comment...</button>
         <div class="ctx-sep"></div>
-        <button class="ctx-item" id="miHR" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="currentColor" width="16" height="16" style="margin-right:8px"><rect x="3" y="11" width="18" height="2" rx="1"/></svg>
-          Horizontal Rule
-        </button>
-        <button class="ctx-item" id="miPageBreak" role="menuitem">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16" style="margin-right:8px"><polyline points="17 1 21 5 17 9"/><line x1="3" y1="5" x2="21" y2="5"/><line x1="3" y1="12" x2="21" y2="12" stroke-dasharray="4 2"/><polyline points="7 15 3 19 7 23"/><line x1="3" y1="19" x2="21" y2="19"/></svg>
-          Page Break
-        </button>
+        <button class="ctx-item" data-action="toc" role="menuitem"><span class="msi ctx-icon">toc</span> Table of Contents</button>
+        <button class="ctx-item" data-action="hr" role="menuitem"><span class="msi ctx-icon">horizontal_rule</span> Horizontal Rule</button>
+        <button class="ctx-item" data-action="pagebreak" role="menuitem"><span class="msi ctx-icon">insert_page_break</span> Page Break</button>
       </div>
     </div>
     <div class="tb-sep" role="separator"></div>
 
-    <!-- Comments toggle -->
-    <button class="tb-btn" id="btnComments" title="Comments" aria-label="Toggle comments panel">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-    </button>
-
     <!-- Find -->
-    <button class="tb-btn" id="btnFind" title="Find & Replace (Ctrl+F)" aria-label="Find and replace">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
-    </button>
+    <button class="tb-btn tb-collapsible-1024" id="btnFind" title="Find & Replace (Ctrl+F)" aria-label="Find and replace"><span class="msi">search</span></button>
 
-    <!-- Spell Check -->
-    <button class="tb-btn active" id="btnSpellCheck" title="Spell check" aria-label="Toggle spell check" aria-pressed="true">
-      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M12.45 16h2.09L9.43 3H7.57L2.46 16h2.09l1.12-3h5.64l1.14 3zm-6.02-5L8.5 5.48 10.57 11H6.43zm15.16.59l-8.09 8.09L9.83 16l-1.41 1.41 5.09 5.09L23 13l-1.41-1.41z"/></svg>
-    </button>
+    <!-- More (overflow) menu — visible at narrow widths -->
+    <div class="more-dropdown" id="moreDropdown">
+      <button class="tb-btn tb-more-btn" id="btnMore" title="More options" aria-label="More options" aria-haspopup="true" aria-expanded="false"><span class="msi">more_horiz</span></button>
+      <div class="more-menu" id="moreMenu" role="menu" aria-label="More toolbar options">
+        <button class="ctx-item more-item" data-more="lineSpacing" role="menuitem"><span class="msi ctx-icon">format_line_spacing</span> Line Spacing</button>
+        <button class="ctx-item more-item" data-more="indent" role="menuitem"><span class="msi ctx-icon">format_indent_increase</span> Increase Indent</button>
+        <button class="ctx-item more-item" data-more="outdent" role="menuitem"><span class="msi ctx-icon">format_indent_decrease</span> Decrease Indent</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item more-item" data-more="find" role="menuitem"><span class="msi ctx-icon">search</span> Find & Replace</button>
+        <button class="ctx-item more-item" data-more="spellcheck" role="menuitem"><span class="msi ctx-icon">spellcheck</span> Spell Check</button>
+        <button class="ctx-item more-item" data-more="comments" role="menuitem"><span class="msi ctx-icon">comment</span> Comments</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item more-item" data-more="history" role="menuitem"><span class="msi ctx-icon">history</span> History</button>
+        <button class="ctx-item more-item" data-more="share" role="menuitem"><span class="msi ctx-icon">share</span> Share</button>
+      </div>
+    </div>
   </div>
 
-  <!-- Tab Bar -->
-  <div class="tabbar" id="tabbar">
+  <!-- Tab Bar (hidden by default, used for JS compatibility) -->
+  <div class="tabbar" id="tabbar" style="display:none">
     <button class="tab active" data-view="editor">Editor</button>
     <button class="tab" data-view="pages">Pages</button>
     <button class="tab" data-view="text">Text</button>
@@ -284,22 +294,26 @@
 
   <!-- Track Changes Bar -->
   <div class="tc-bar" id="tcBar">
+    <span class="msi tc-bar-icon">rate_review</span>
     <span id="tcCount">0 tracked changes</span>
     <div class="spacer"></div>
-    <button class="tc-btn accept" id="btnAcceptAll">Accept All</button>
-    <button class="tc-btn reject" id="btnRejectAll">Reject All</button>
+    <button class="tc-btn accept" id="btnAcceptAll"><span class="msi tc-btn-icon">check</span> Accept All</button>
+    <button class="tc-btn reject" id="btnRejectAll"><span class="msi tc-btn-icon">close</span> Reject All</button>
   </div>
 
   <!-- Welcome Screen -->
   <div class="welcome" id="welcomeScreen">
-    <svg width="64" height="64" viewBox="0 0 24 24" fill="none" stroke="#0b57d0" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg>
-    <h2>Welcome to Folio</h2>
+    <img src="/assets/logo.svg" alt="s1 editor" width="80" height="80" class="welcome-logo">
+    <h2>Welcome to s1 editor</h2>
     <p>A professional document editor powered by s1engine — full DOCX, ODT, PDF, and Markdown support with real-time formatting.</p>
     <div class="actions">
-      <button class="big-btn primary" id="welcomeNew">New Document</button>
-      <button class="big-btn" id="welcomeOpen">Open File</button>
+      <button class="big-btn primary" id="welcomeNew"><span class="msi">note_add</span> New Document</button>
+      <button class="big-btn" id="welcomeOpen"><span class="msi">folder_open</span> Open File</button>
     </div>
-    <div class="drop-zone" id="dropZone">Drop a DOCX, ODT, TXT, or Markdown file here</div>
+    <div class="drop-zone" id="dropZone">
+      <span class="msi drop-icon">upload_file</span>
+      <span>Drop a DOCX, ODT, TXT, or Markdown file here</span>
+    </div>
   </div>
 
   <!-- Editor -->
@@ -308,13 +322,15 @@
     <div class="doc-page" id="docPage" contenteditable="true" spellcheck="true" lang="en" role="textbox" aria-multiline="true" aria-label="Document content"></div>
     <div class="find-bar" id="findBar">
       <div class="find-row">
+        <span class="msi find-icon">search</span>
         <input class="find-input" id="findInput" placeholder="Find in document..." autocomplete="off">
         <span class="find-count" id="findCount"></span>
-        <button class="find-btn" id="findPrev">&#9650;</button>
-        <button class="find-btn" id="findNext">&#9660;</button>
-        <button class="find-close" id="findClose">&times;</button>
+        <button class="find-btn" id="findPrev" title="Previous match"><span class="msi">keyboard_arrow_up</span></button>
+        <button class="find-btn" id="findNext" title="Next match"><span class="msi">keyboard_arrow_down</span></button>
+        <button class="find-close" id="findClose" title="Close"><span class="msi">close</span></button>
       </div>
       <div class="find-row">
+        <span class="msi find-icon">find_replace</span>
         <input class="find-input" id="replaceInput" placeholder="Replace with...">
         <button class="find-btn" id="replaceBtn">Replace</button>
         <button class="find-btn primary" id="replaceAllBtn">All</button>
@@ -331,37 +347,81 @@
   <div class="comments-panel" id="commentsPanel" role="complementary" aria-label="Comments">
     <div class="comments-header">
       <h3>Comments</h3>
-      <button class="comments-close" id="commentsClose" aria-label="Close comments panel">&times;</button>
+      <button class="comments-close" id="commentsClose" aria-label="Close comments panel"><span class="msi">close</span></button>
     </div>
     <div class="comments-list" id="commentsList"></div>
   </div>
 
-  <!-- Version History Sidebar -->
-  <div class="history-panel" id="historyPanel" role="complementary" aria-label="Version History">
+  <!-- History Sidebar -->
+  <div class="history-panel" id="historyPanel" role="complementary" aria-label="History">
     <div class="history-header">
-      <h3>Version History</h3>
-      <button class="history-close" id="historyClose" aria-label="Close history panel">&times;</button>
+      <h3>History</h3>
+      <button class="history-close" id="historyClose" aria-label="Close history panel"><span class="msi">close</span></button>
     </div>
-    <div class="history-list" id="historyList"></div>
+    <div class="history-tabs">
+      <button class="history-tab active" data-tab="undo">Undo History</button>
+      <button class="history-tab" data-tab="versions">Versions</button>
+    </div>
+    <div class="history-tab-content" id="undoHistoryTab">
+      <div class="history-list" id="undoHistoryList" style="padding:4px 0"></div>
+    </div>
+    <div class="history-tab-content" id="versionsTab" style="display:none">
+      <div class="history-list" id="historyList"></div>
+    </div>
   </div>
 
   <!-- Status Bar -->
   <div class="statusbar" id="statusbar" role="status" aria-live="polite">
     <span id="statusInfo">Ready</span>
+    <!-- E5.2: Peer presence dots -->
+    <div class="status-peer-container" id="statusBarPeers" style="display:none"></div>
+    <!-- E5.3: Sync status indicator -->
+    <span class="collab-sync-status" id="collabSyncStatus" style="display:none">Offline</span>
     <div class="spacer"></div>
-    <div class="zoom-controls" aria-label="Zoom">
-      <button class="zoom-btn" id="zoomOut" title="Zoom out" aria-label="Zoom out">−</button>
-      <span class="zoom-value" id="zoomValue">100%</span>
-      <button class="zoom-btn" id="zoomIn" title="Zoom in" aria-label="Zoom in">+</button>
+    <div class="status-views" aria-label="View mode">
+      <button class="status-view-btn active" data-view="editor" title="Editor view"><span class="msi">edit</span></button>
+      <button class="status-view-btn" data-view="pages" title="Pages view"><span class="msi">description</span></button>
+      <button class="status-view-btn" data-view="text" title="Plain text view"><span class="msi">text_fields</span></button>
     </div>
+    <div class="status-sep"></div>
+    <div class="zoom-controls" aria-label="Zoom">
+      <button class="zoom-btn" id="zoomOut" title="Zoom out" aria-label="Zoom out"><span class="msi">zoom_out</span></button>
+      <div class="zoom-value-wrap">
+        <button class="zoom-value" id="zoomValue" title="Zoom presets" aria-haspopup="true" aria-expanded="false">100%</button>
+        <div class="zoom-dropdown" id="zoomDropdown" role="menu" aria-label="Zoom presets">
+          <button class="zoom-preset" data-zoom="50" role="menuitem">50%</button>
+          <button class="zoom-preset" data-zoom="75" role="menuitem">75%</button>
+          <button class="zoom-preset" data-zoom="100" role="menuitem">100%</button>
+          <button class="zoom-preset" data-zoom="125" role="menuitem">125%</button>
+          <button class="zoom-preset" data-zoom="150" role="menuitem">150%</button>
+          <button class="zoom-preset" data-zoom="200" role="menuitem">200%</button>
+          <div class="zoom-preset-sep"></div>
+          <button class="zoom-preset" data-zoom="fit-width" role="menuitem">Fit Width</button>
+          <button class="zoom-preset" data-zoom="fit-page" role="menuitem">Fit Page</button>
+        </div>
+      </div>
+      <button class="zoom-btn" id="zoomIn" title="Zoom in" aria-label="Zoom in"><span class="msi">zoom_in</span></button>
+    </div>
+    <div class="status-sep"></div>
+    <button class="zoom-btn" id="btnDarkMode" title="Toggle dark mode" aria-label="Toggle dark mode"><span class="msi">dark_mode</span></button>
+    <div class="status-sep"></div>
     <span id="statusFormat"></span>
   </div>
 </div>
 
+<!-- Export dropdown (hidden, used by legacy JS) -->
+<div class="dropdown-menu" id="exportMenu" style="display:none">
+  <button class="dropdown-item" data-fmt="docx">DOCX</button>
+  <button class="dropdown-item" data-fmt="odt">ODT</button>
+  <button class="dropdown-item" data-fmt="txt">TXT</button>
+  <button class="dropdown-item" data-fmt="md">MD</button>
+  <button class="dropdown-item" data-fmt="pdf">PDF</button>
+</div>
+
 <!-- Table Insert Modal -->
-<div class="modal-overlay" id="tableModal">
+<div class="modal-overlay" id="tableModal" role="dialog" aria-modal="true" aria-label="Insert Table">
   <div class="modal">
-    <h3>Insert Table</h3>
+    <h3><span class="msi modal-icon">table</span> Insert Table</h3>
     <label>Rows: <input type="number" id="tableRows" value="3" min="1" max="50"></label>
     <label>Columns: <input type="number" id="tableCols" value="3" min="1" max="20"></label>
     <div class="modal-actions">
@@ -372,9 +432,9 @@
 </div>
 
 <!-- Comment Insert Modal -->
-<div class="modal-overlay" id="commentModal">
+<div class="modal-overlay" id="commentModal" role="dialog" aria-modal="true" aria-label="Add Comment">
   <div class="modal">
-    <h3>Add Comment</h3>
+    <h3><span class="msi modal-icon">add_comment</span> Add Comment</h3>
     <label>Comment: <textarea id="commentText" rows="3" placeholder="Write your comment..." style="width:100%;resize:vertical;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></textarea></label>
     <label>Author: <input type="text" id="commentAuthor" value="User" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
     <div class="modal-actions">
@@ -385,9 +445,9 @@
 </div>
 
 <!-- Hyperlink Insert Modal -->
-<div class="modal-overlay" id="linkModal">
+<div class="modal-overlay" id="linkModal" role="dialog" aria-modal="true" aria-label="Insert Hyperlink">
   <div class="modal">
-    <h3>Insert Hyperlink</h3>
+    <h3><span class="msi modal-icon">link</span> Insert Hyperlink</h3>
     <label>URL: <input type="url" id="linkUrl" placeholder="https://example.com" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
     <div class="modal-actions">
       <button id="linkCancelBtn">Cancel</button>
@@ -397,9 +457,9 @@
 </div>
 
 <!-- Image Alt Text Modal -->
-<div class="modal-overlay" id="altTextModal">
+<div class="modal-overlay" id="altTextModal" role="dialog" aria-modal="true" aria-label="Image Alt Text">
   <div class="modal">
-    <h3>Image Alt Text</h3>
+    <h3><span class="msi modal-icon">image</span> Image Alt Text</h3>
     <label>Description: <input type="text" id="altTextInput" placeholder="Describe this image..." style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none"></label>
     <div class="modal-actions">
       <button id="altTextCancelBtn">Cancel</button>
@@ -410,32 +470,194 @@
 
 <!-- Table Context Menu -->
 <div class="ctx-menu" id="tableContextMenu">
-  <button class="ctx-item" id="cmInsertRowAbove">Insert Row Above</button>
-  <button class="ctx-item" id="cmInsertRowBelow">Insert Row Below</button>
-  <button class="ctx-item" id="cmDeleteRow">Delete Row</button>
+  <button class="ctx-item" id="cmInsertRowAbove"><span class="msi ctx-icon">add</span> Insert Row Above</button>
+  <button class="ctx-item" id="cmInsertRowBelow"><span class="msi ctx-icon">add</span> Insert Row Below</button>
+  <button class="ctx-item" id="cmDeleteRow"><span class="msi ctx-icon">delete</span> Delete Row</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="cmInsertColLeft">Insert Column Left</button>
-  <button class="ctx-item" id="cmInsertColRight">Insert Column Right</button>
-  <button class="ctx-item" id="cmDeleteCol">Delete Column</button>
+  <button class="ctx-item" id="cmInsertColLeft"><span class="msi ctx-icon">add</span> Insert Column Left</button>
+  <button class="ctx-item" id="cmInsertColRight"><span class="msi ctx-icon">add</span> Insert Column Right</button>
+  <button class="ctx-item" id="cmDeleteCol"><span class="msi ctx-icon">delete</span> Delete Column</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="cmCellBg">Cell Background...
+  <button class="ctx-item" id="cmCellBg"><span class="msi ctx-icon">format_color_fill</span> Cell Background...
     <input type="color" id="cmCellBgPicker" value="#ffffff" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
   </button>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="cmTableProps"><span class="msi ctx-icon">settings</span> Table Properties...</button>
+</div>
+
+<!-- Table Properties Modal (E4.3) -->
+<div class="modal-overlay" id="tablePropsModal" role="dialog" aria-modal="true" aria-label="Table Properties">
+  <div class="modal" style="max-width:420px">
+    <h3><span class="msi modal-icon">table</span> Table Properties</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Table Width</legend>
+        <div style="display:flex;align-items:center;gap:8px">
+          <select id="tpWidthMode" style="flex:1;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg-white);color:var(--text-primary)">
+            <option value="auto">Auto</option>
+            <option value="percent">Percentage</option>
+            <option value="fixed">Fixed (px)</option>
+          </select>
+          <input type="number" id="tpWidthValue" value="100" min="10" max="2000" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;display:none">
+          <span id="tpWidthUnit" style="font-size:12px;color:var(--text-muted);display:none">%</span>
+        </div>
+      </fieldset>
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Borders</legend>
+        <div style="display:flex;gap:6px;flex-wrap:wrap">
+          <button class="tp-border-btn active" data-borders="all" title="All borders"><span class="msi" style="font-size:18px">border_all</span></button>
+          <button class="tp-border-btn" data-borders="outer" title="Outer borders only"><span class="msi" style="font-size:18px">border_outer</span></button>
+          <button class="tp-border-btn" data-borders="none" title="No borders"><span class="msi" style="font-size:18px">border_clear</span></button>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;margin-top:8px">
+          <label style="font-size:12px;color:var(--text-secondary);min-width:50px">Color:</label>
+          <input type="color" id="tpBorderColor" value="#000000" style="width:32px;height:24px;border:1px solid var(--border);border-radius:2px;cursor:pointer">
+          <label style="font-size:12px;color:var(--text-secondary);margin-left:8px">Width:</label>
+          <select id="tpBorderWidth" style="padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg-white);color:var(--text-primary)">
+            <option value="1">1px</option>
+            <option value="2">2px</option>
+            <option value="3">3px</option>
+          </select>
+        </div>
+      </fieldset>
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Alignment</legend>
+        <div style="display:flex;gap:6px">
+          <button class="tp-align-btn active" data-align="left" title="Align left"><span class="msi" style="font-size:18px">format_align_left</span></button>
+          <button class="tp-align-btn" data-align="center" title="Align center"><span class="msi" style="font-size:18px">format_align_center</span></button>
+          <button class="tp-align-btn" data-align="right" title="Align right"><span class="msi" style="font-size:18px">format_align_right</span></button>
+        </div>
+      </fieldset>
+    </div>
+    <div class="modal-actions">
+      <button id="tpCancelBtn">Cancel</button>
+      <button class="primary" id="tpApplyBtn">Apply</button>
+    </div>
+  </div>
 </div>
 
 <!-- Image Context Menu -->
 <div class="ctx-menu" id="imageContextMenu">
-  <button class="ctx-item" id="imAlignLeft">Align Left</button>
-  <button class="ctx-item" id="imAlignCenter">Align Center</button>
-  <button class="ctx-item" id="imAlignRight">Align Right</button>
+  <button class="ctx-item" id="imAlignLeft"><span class="msi ctx-icon">format_align_left</span> Align Left</button>
+  <button class="ctx-item" id="imAlignCenter"><span class="msi ctx-icon">format_align_center</span> Align Center</button>
+  <button class="ctx-item" id="imAlignRight"><span class="msi ctx-icon">format_align_right</span> Align Right</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="imAltText">Alt Text...</button>
+  <button class="ctx-item" id="imAltText"><span class="msi ctx-icon">text_fields</span> Alt Text...</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="imDelete" style="color:var(--danger)">Delete Image</button>
+  <button class="ctx-item" id="imDelete" style="color:var(--danger)"><span class="msi ctx-icon">delete</span> Delete Image</button>
 </div>
 
 <!-- Slash Command Menu -->
 <div class="slash-menu" id="slashMenu" style="display:none" role="listbox" aria-label="Slash commands"></div>
+
+<!-- Keyboard Shortcuts Dialog (E7.4) -->
+<div class="modal-overlay" id="shortcutsModal" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts">
+  <div class="modal" style="max-width:540px;max-height:80vh;overflow-y:auto">
+    <h3><span class="msi modal-icon">keyboard</span> Keyboard Shortcuts</h3>
+    <div class="shortcuts-grid">
+      <div class="shortcuts-section">
+        <h4>Editing</h4>
+        <div class="shortcut-row"><span>Undo</span><kbd>Ctrl+Z</kbd></div>
+        <div class="shortcut-row"><span>Redo</span><kbd>Ctrl+Y</kbd></div>
+        <div class="shortcut-row"><span>Cut</span><kbd>Ctrl+X</kbd></div>
+        <div class="shortcut-row"><span>Copy</span><kbd>Ctrl+C</kbd></div>
+        <div class="shortcut-row"><span>Paste</span><kbd>Ctrl+V</kbd></div>
+        <div class="shortcut-row"><span>Select All</span><kbd>Ctrl+A</kbd></div>
+        <div class="shortcut-row"><span>Find & Replace</span><kbd>Ctrl+F</kbd></div>
+        <div class="shortcut-row"><span>Line Break</span><kbd>Shift+Enter</kbd></div>
+        <div class="shortcut-row"><span>Delete Word Left</span><kbd>Ctrl+Backspace</kbd></div>
+        <div class="shortcut-row"><span>Delete Word Right</span><kbd>Ctrl+Delete</kbd></div>
+      </div>
+      <div class="shortcuts-section">
+        <h4>Formatting</h4>
+        <div class="shortcut-row"><span>Bold</span><kbd>Ctrl+B</kbd></div>
+        <div class="shortcut-row"><span>Italic</span><kbd>Ctrl+I</kbd></div>
+        <div class="shortcut-row"><span>Underline</span><kbd>Ctrl+U</kbd></div>
+        <div class="shortcut-row"><span>Strikethrough</span><kbd>Alt+Shift+5</kbd></div>
+        <div class="shortcut-row"><span>Superscript</span><kbd>Ctrl+.</kbd></div>
+        <div class="shortcut-row"><span>Subscript</span><kbd>Ctrl+,</kbd></div>
+        <div class="shortcut-row"><span>Clear Formatting</span><kbd>Ctrl+\</kbd></div>
+      </div>
+      <div class="shortcuts-section">
+        <h4>Paragraphs</h4>
+        <div class="shortcut-row"><span>Align Left</span><kbd>Ctrl+L</kbd></div>
+        <div class="shortcut-row"><span>Align Center</span><kbd>Ctrl+E</kbd></div>
+        <div class="shortcut-row"><span>Align Right</span><kbd>Ctrl+R</kbd></div>
+        <div class="shortcut-row"><span>Justify</span><kbd>Ctrl+J</kbd></div>
+        <div class="shortcut-row"><span>Indent</span><kbd>Tab</kbd></div>
+        <div class="shortcut-row"><span>Outdent</span><kbd>Shift+Tab</kbd></div>
+      </div>
+      <div class="shortcuts-section">
+        <h4>File</h4>
+        <div class="shortcut-row"><span>New Document</span><kbd>Ctrl+N</kbd></div>
+        <div class="shortcut-row"><span>Open</span><kbd>Ctrl+O</kbd></div>
+        <div class="shortcut-row"><span>Save</span><kbd>Ctrl+S</kbd></div>
+        <div class="shortcut-row"><span>Print</span><kbd>Ctrl+P</kbd></div>
+        <div class="shortcut-row"><span>Zoom In</span><kbd>Ctrl++</kbd></div>
+        <div class="shortcut-row"><span>Zoom Out</span><kbd>Ctrl+-</kbd></div>
+        <div class="shortcut-row"><span>Reset Zoom</span><kbd>Ctrl+0</kbd></div>
+      </div>
+      <div class="shortcuts-section">
+        <h4>Slash Commands</h4>
+        <div class="shortcut-row"><span>Type <code>/</code> at start of paragraph for quick insert</span></div>
+        <div class="shortcut-row"><span>/heading1..4, /bullet, /numbered, /table, /hr, /pagebreak, /quote, /code</span></div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button class="primary" id="shortcutsCloseBtn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- Share / Collaboration Modal (E5.1) -->
+<div class="modal-overlay share-modal" id="shareModal" role="dialog" aria-modal="true" aria-label="Share Document">
+  <div class="modal" style="max-width:480px">
+    <div class="share-modal-header">
+      <h3><span class="msi modal-icon">group</span> Share & Collaborate</h3>
+      <button class="share-modal-close" id="shareModalClose" aria-label="Close"><span class="msi">close</span></button>
+    </div>
+    <div class="share-modal-body">
+      <!-- Shareable URL -->
+      <label class="share-field-label">Share link</label>
+      <div class="share-url-row">
+        <input type="text" id="shareUrlInput" class="share-url-input" readonly>
+        <button class="share-copy-btn" id="shareCopyBtn">Copy Link</button>
+      </div>
+
+      <!-- Display name -->
+      <label class="share-field-label">Your name</label>
+      <input type="text" id="shareNameInput" class="share-text-input" placeholder="Display name">
+
+      <!-- Relay server -->
+      <label class="share-field-label">Relay server</label>
+      <input type="text" id="shareRelayInput" class="share-text-input" placeholder="ws://localhost:8787">
+
+      <!-- Permission (cosmetic) -->
+      <label class="share-field-label">Default permission</label>
+      <select id="sharePermission" class="share-select">
+        <option value="edit">Can Edit</option>
+        <option value="comment">Can Comment</option>
+        <option value="view">Can View</option>
+      </select>
+
+      <!-- Connected peers list -->
+      <label class="share-field-label">Connected peers</label>
+      <div class="share-peer-list" id="sharePeerList">
+        <div class="share-no-peers">No peers connected</div>
+      </div>
+    </div>
+    <div class="modal-actions">
+      <button id="shareCancelBtn">Cancel</button>
+      <button class="primary" id="shareStartBtn"><span class="msi" style="font-size:16px;vertical-align:middle">play_arrow</span> Start Session</button>
+    </div>
+  </div>
+</div>
+
+<!-- E7.2: Screen reader announcement region -->
+<div id="a11yLive" class="sr-only" aria-live="polite" aria-atomic="true"></div>
+
+<!-- Toast Notification Container (E5.3) -->
+<div class="toast-container" id="toastContainer"></div>
 
 <script type="module" src="/src/main.js"></script>
 </body>

@@ -42,14 +42,25 @@ export const state = {
   pendingFormats: {},
   // Collaboration
   collabDoc: null,
+  collabStatus: 'disconnected', // 'disconnected' | 'connecting' | 'connected' | 'offline'
+  collabPeers: new Map(), // peerId -> { userName, userColor }
   // Header/footer HTML extracted from WASM to_html()
   docHeaderHtml: '',
   docFooterHtml: '',
+  // Page dimensions from WASM sections (in points)
+  pageDims: null,
   // E1.5: Callback for refreshing find highlights after text changes
   _findRefreshTimer: null,
   _onTextChanged: null,
   // E3.1: Typing batch undo — tracks continuous typing in same paragraph
   _typingBatch: null, // { nodeId, count, timer }
+  // E3.2: Undo history log (JS-side, for display only)
+  undoHistory: [], // [{ label, timestamp }]  — most recent first
+  undoHistoryPos: 0, // current position in undo history
+  // E8.2: O(1) DOM lookup map — nodeId string → DOM element
+  // Populated on full render and updated on per-node render.
+  // Cleared on full re-render so stale references don't linger.
+  nodeIdToElement: new Map(),
 };
 
 export const $ = (id) => document.getElementById(id);

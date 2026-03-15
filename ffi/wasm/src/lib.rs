@@ -1019,6 +1019,187 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Set the line spacing for a paragraph.
+    ///
+    /// `spacing` is one of: "single", "1.5", "double", or a numeric multiplier (e.g. "1.15").
+    pub fn set_line_spacing(&mut self, node_id_str: &str, spacing: &str) -> Result<(), JsError> {
+        use s1_model::LineSpacing;
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(node_id_str)?;
+        let ls = match spacing.to_lowercase().as_str() {
+            "single" | "1" => LineSpacing::Single,
+            "1.5" | "one-point-five" => LineSpacing::OnePointFive,
+            "double" | "2" => LineSpacing::Double,
+            other => {
+                let factor: f64 = other
+                    .parse()
+                    .map_err(|_| JsError::new(&format!("Invalid line spacing: {}", spacing)))?;
+                LineSpacing::Multiple(factor)
+            }
+        };
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(AttributeKey::LineSpacing, AttributeValue::LineSpacing(ls));
+        doc.apply(Operation::set_attributes(para_id, attrs))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Insert a line break (soft return) within a paragraph at a character offset.
+    ///
+    /// Creates a `LineBreak` node within the run at the specified offset,
+    /// splitting the text node if the offset falls in the middle.
+    pub fn insert_line_break(
+        &mut self,
+        node_id_str: &str,
+        char_offset: usize,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(node_id_str)?;
+
+        // Find the run and text node at the given offset
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let run_children: Vec<NodeId> = para
+            .children
+            .iter()
+            .filter(|&&c| doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false))
+            .copied()
+            .collect();
+
+        if run_children.is_empty() {
+            // No runs: create a run with a line break
+            let run_id = doc.next_id();
+            let lb_id = doc.next_id();
+            let mut txn = Transaction::with_label("Insert line break");
+            txn.push(Operation::insert_node(
+                para_id,
+                0,
+                Node::new(run_id, NodeType::Run),
+            ));
+            txn.push(Operation::insert_node(
+                run_id,
+                0,
+                Node::new(lb_id, NodeType::LineBreak),
+            ));
+            return doc
+                .apply_transaction(&txn)
+                .map_err(|e| JsError::new(&e.to_string()));
+        }
+
+        // Walk runs to find which run and local offset
+        let mut accumulated = 0usize;
+        let mut target_run_id = *run_children.last().unwrap();
+        let mut local_offset = 0usize;
+        for &run_id in &run_children {
+            let rlen = run_char_len(doc.model(), run_id);
+            if char_offset <= accumulated + rlen {
+                target_run_id = run_id;
+                local_offset = char_offset - accumulated;
+                break;
+            }
+            accumulated += rlen;
+        }
+
+        // Find the text node within this run at the local offset
+        let run = doc
+            .node(target_run_id)
+            .ok_or_else(|| JsError::new("Run not found"))?;
+        let run_children_ids: Vec<NodeId> = run.children.clone();
+        let mut text_accumulated = 0usize;
+        let mut target_text_idx = 0usize; // index in run.children
+        let mut text_local_offset = local_offset;
+        let mut found_text = false;
+
+        for (idx, &child_id) in run_children_ids.iter().enumerate() {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::Text {
+                    let len = child
+                        .text_content
+                        .as_ref()
+                        .map(|t| t.chars().count())
+                        .unwrap_or(0);
+                    if local_offset <= text_accumulated + len {
+                        target_text_idx = idx;
+                        text_local_offset = local_offset - text_accumulated;
+                        found_text = true;
+                        break;
+                    }
+                    text_accumulated += len;
+                } else if child.node_type == NodeType::LineBreak {
+                    // Line breaks count as 1 character for offset purposes
+                    if local_offset <= text_accumulated + 1 {
+                        target_text_idx = idx;
+                        text_local_offset = 0;
+                        found_text = true;
+                        break;
+                    }
+                    text_accumulated += 1;
+                }
+            }
+        }
+
+        let lb_id = doc.next_id();
+        let mut txn = Transaction::with_label("Insert line break");
+
+        if found_text && text_local_offset > 0 {
+            // Split the text node: delete tail, create new text with tail after the break
+            let text_node_id = run_children_ids[target_text_idx];
+            if let Some(text_node) = doc.node(text_node_id) {
+                if text_node.node_type == NodeType::Text {
+                    let content = text_node
+                        .text_content
+                        .as_ref()
+                        .map(|t| t.clone())
+                        .unwrap_or_default();
+                    let char_len = content.chars().count();
+                    let tail: String = content.chars().skip(text_local_offset).collect();
+                    let tail_len = char_len - text_local_offset;
+
+                    // Delete tail from current text node
+                    if tail_len > 0 {
+                        txn.push(Operation::delete_text(
+                            text_node_id,
+                            text_local_offset,
+                            tail_len,
+                        ));
+                    }
+                    // Insert line break after this text node
+                    txn.push(Operation::insert_node(
+                        target_run_id,
+                        target_text_idx + 1,
+                        Node::new(lb_id, NodeType::LineBreak),
+                    ));
+                    // Insert new text node with tail after the line break
+                    if !tail.is_empty() {
+                        let new_text_id = doc.next_id();
+                        txn.push(Operation::insert_node(
+                            target_run_id,
+                            target_text_idx + 2,
+                            Node::text(new_text_id, &tail),
+                        ));
+                    }
+                } else {
+                    // Not a text node — just insert line break after it
+                    txn.push(Operation::insert_node(
+                        target_run_id,
+                        target_text_idx + 1,
+                        Node::new(lb_id, NodeType::LineBreak),
+                    ));
+                }
+            }
+        } else {
+            // Insert at the beginning of the run or right before the found element
+            txn.push(Operation::insert_node(
+                target_run_id,
+                target_text_idx,
+                Node::new(lb_id, NodeType::LineBreak),
+            ));
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     /// Set the document title (metadata).
     pub fn set_title(&mut self, title: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
@@ -2920,6 +3101,317 @@ impl WasmDocument {
         Ok(doc.to_plain_text())
     }
 
+    // ─── E2.2: Rich Paste (Formatted Runs) ──────────────────────
+
+    /// Paste formatted text (with per-run styling) at a position in the document.
+    ///
+    /// `target_node_str` is the paragraph node ID (e.g. `"0:5"`).
+    /// `char_offset` is the character offset within that paragraph.
+    /// `runs_json` is a JSON string describing the formatted text to paste:
+    ///
+    /// ```json
+    /// {
+    ///   "paragraphs": [
+    ///     {
+    ///       "runs": [
+    ///         {"text": "Hello ", "bold": false},
+    ///         {"text": "world", "bold": true, "italic": true,
+    ///          "fontSize": 14, "fontFamily": "Arial",
+    ///          "color": "FF0000", "underline": true,
+    ///          "strikethrough": false}
+    ///       ]
+    ///     },
+    ///     {
+    ///       "runs": [
+    ///         {"text": "Second paragraph"}
+    ///       ]
+    ///     }
+    ///   ]
+    /// }
+    /// ```
+    ///
+    /// For a single paragraph: inserts all run text at the offset and formats
+    /// each run's character range. For multiple paragraphs: splits the target
+    /// paragraph, inserts new paragraphs between, each with formatted runs.
+    pub fn paste_formatted_runs_json(
+        &mut self,
+        target_node_str: &str,
+        char_offset: usize,
+        runs_json: &str,
+    ) -> Result<(), JsError> {
+        let paste_data = parse_paste_json(runs_json)?;
+
+        if paste_data.is_empty() {
+            return Ok(());
+        }
+
+        if paste_data.len() == 1 {
+            // --- Single paragraph: insert all run text, then format each run ---
+            let runs = &paste_data[0];
+            if runs.is_empty() {
+                return Ok(());
+            }
+
+            // Concatenate all run texts
+            let full_text: String = runs.iter().map(|r| r.text.as_str()).collect();
+            if full_text.is_empty() {
+                return Ok(());
+            }
+
+            // Insert the concatenated text at the offset
+            self.insert_text_in_paragraph(target_node_str, char_offset, &full_text)?;
+
+            // Format each run's character range
+            let mut run_start = char_offset;
+            for run in runs {
+                let run_len = run.text.chars().count();
+                if run_len == 0 {
+                    continue;
+                }
+                let run_end = run_start + run_len;
+                let attrs = run.to_attribute_map();
+                if !attrs.is_empty() {
+                    let doc = self.doc_mut()?;
+                    let para_id = parse_node_id(target_node_str)?;
+                    format_range_in_paragraph(doc, para_id, run_start, run_end, &attrs)?;
+                }
+                run_start = run_end;
+            }
+        } else {
+            // --- Multi-paragraph paste ---
+            // Strategy:
+            //   1. Insert first paragraph's text at offset in target
+            //   2. Split to create tail paragraph
+            //   3. For intermediate paragraphs: split at offset 0 to create new paras
+            //   4. Format runs in each paragraph
+
+            let target_id = parse_node_id(target_node_str)?;
+
+            // Step 1: Insert first paragraph's run text at offset
+            let first_runs = &paste_data[0];
+            let first_text: String = first_runs.iter().map(|r| r.text.as_str()).collect();
+            if !first_text.is_empty() {
+                self.insert_text_in_paragraph(target_node_str, char_offset, &first_text)?;
+            }
+
+            // Step 2: Split at end of inserted text to create tail paragraph
+            let first_text_char_len = first_text.chars().count();
+            let split_offset = char_offset + first_text_char_len;
+
+            // Check if we need to split (there's text after the split point, or we need new paragraphs)
+            let doc = self.doc_mut()?;
+            let full_text = extract_paragraph_text(doc.model(), target_id);
+            let full_char_len = full_text.chars().count();
+
+            let mut current_para_str;
+            if split_offset < full_char_len || paste_data.len() > 1 {
+                current_para_str = self.split_paragraph(target_node_str, split_offset)?;
+            } else {
+                // Nothing to split, but we still need a trailing paragraph
+                current_para_str = self.split_paragraph(target_node_str, split_offset)?;
+            }
+
+            // Step 3: Insert intermediate paragraphs (all except first and last)
+            // and the last paragraph's text
+            // For lines[1..last]: split at 0 to create new paragraph, then insert text
+            // For last line: prepend text to the tail paragraph (current_para_str)
+            let last_idx = paste_data.len() - 1;
+
+            for (i, para_runs) in paste_data[1..].iter().enumerate() {
+                if i < last_idx - 1 {
+                    // Intermediate paragraph: split at 0 to create a new empty paragraph
+                    let new_id = self.split_paragraph(&current_para_str, 0)?;
+                    // current_para_str now has empty text, new_id has the old text
+                    // Insert this paragraph's text into current_para_str
+                    let para_text: String = para_runs.iter().map(|r| r.text.as_str()).collect();
+                    if !para_text.is_empty() {
+                        self.insert_text_in_paragraph(&current_para_str, 0, &para_text)?;
+                    }
+                    // Format runs in this paragraph
+                    let mut run_start = 0usize;
+                    for run in para_runs {
+                        let run_len = run.text.chars().count();
+                        if run_len == 0 {
+                            continue;
+                        }
+                        let run_end = run_start + run_len;
+                        let attrs = run.to_attribute_map();
+                        if !attrs.is_empty() {
+                            let doc = self.doc_mut()?;
+                            let pid = parse_node_id(&current_para_str)?;
+                            format_range_in_paragraph(doc, pid, run_start, run_end, &attrs)?;
+                        }
+                        run_start = run_end;
+                    }
+                    current_para_str = new_id;
+                } else {
+                    // Last paragraph: insert text at start of the tail paragraph
+                    let para_text: String = para_runs.iter().map(|r| r.text.as_str()).collect();
+                    if !para_text.is_empty() {
+                        self.insert_text_in_paragraph(&current_para_str, 0, &para_text)?;
+                    }
+                    // Format runs in the last paragraph
+                    let mut run_start = 0usize;
+                    for run in para_runs {
+                        let run_len = run.text.chars().count();
+                        if run_len == 0 {
+                            continue;
+                        }
+                        let run_end = run_start + run_len;
+                        let attrs = run.to_attribute_map();
+                        if !attrs.is_empty() {
+                            let doc = self.doc_mut()?;
+                            let pid = parse_node_id(&current_para_str)?;
+                            format_range_in_paragraph(doc, pid, run_start, run_end, &attrs)?;
+                        }
+                        run_start = run_end;
+                    }
+                }
+            }
+
+            // Step 4: Format runs in the first (target) paragraph
+            let mut run_start = char_offset;
+            for run in first_runs {
+                let run_len = run.text.chars().count();
+                if run_len == 0 {
+                    continue;
+                }
+                let run_end = run_start + run_len;
+                let attrs = run.to_attribute_map();
+                if !attrs.is_empty() {
+                    let doc = self.doc_mut()?;
+                    format_range_in_paragraph(doc, target_id, run_start, run_end, &attrs)?;
+                }
+                run_start = run_end;
+            }
+        }
+
+        Ok(())
+    }
+
+    // ─── P.10: Rich Copy/Paste HTML Export ────────────────────────
+
+    /// Export a selection range as clean, portable semantic HTML.
+    ///
+    /// The output contains no `data-node-id` attributes, no editor-specific
+    /// classes, and no track-changes markup. Suitable for clipboard
+    /// rich-text copy/paste.
+    ///
+    /// `start_node_str` / `end_node_str` are paragraph node IDs (e.g.
+    /// `"0:5"`). `start_offset` / `end_offset` are character offsets within
+    /// those paragraphs.
+    pub fn export_selection_html(
+        &self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let start_para = parse_node_id(start_node_str)?;
+        let end_para = parse_node_id(end_node_str)?;
+
+        let body_id = doc
+            .body_id()
+            .ok_or_else(|| JsError::new("No body node"))?;
+        let body = doc
+            .node(body_id)
+            .ok_or_else(|| JsError::new("Body not found"))?;
+        let children = body.children.clone();
+
+        let mut html = String::new();
+
+        if start_para == end_para {
+            // Single paragraph selection
+            if let Some(para) = doc.node(start_para) {
+                if para.node_type == NodeType::Paragraph {
+                    render_paragraph_clean_partial(
+                        model,
+                        start_para,
+                        Some(start_offset),
+                        Some(end_offset),
+                        &mut html,
+                    );
+                } else if para.node_type == NodeType::Table {
+                    render_table_clean(model, start_para, &mut html);
+                }
+            }
+        } else {
+            let start_idx = children.iter().position(|&c| c == start_para);
+            let end_idx = children.iter().position(|&c| c == end_para);
+
+            match (start_idx, end_idx) {
+                (Some(si), Some(ei)) => {
+                    // First paragraph (partial from start_offset to end)
+                    if let Some(node) = doc.node(children[si]) {
+                        match node.node_type {
+                            NodeType::Paragraph => {
+                                render_paragraph_clean_partial(
+                                    model,
+                                    children[si],
+                                    Some(start_offset),
+                                    None,
+                                    &mut html,
+                                );
+                            }
+                            NodeType::Table => {
+                                render_table_clean(model, children[si], &mut html);
+                            }
+                            _ => {}
+                        }
+                    }
+
+                    // Middle paragraphs (full)
+                    for &child_id in &children[si + 1..ei] {
+                        if let Some(child) = doc.node(child_id) {
+                            match child.node_type {
+                                NodeType::Paragraph => {
+                                    render_paragraph_clean_partial(
+                                        model, child_id, None, None, &mut html,
+                                    );
+                                }
+                                NodeType::Table => {
+                                    render_table_clean(model, child_id, &mut html);
+                                }
+                                NodeType::Image => {
+                                    render_image_clean(model, child_id, &mut html);
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+
+                    // Last paragraph (partial from 0 to end_offset)
+                    if let Some(node) = doc.node(children[ei]) {
+                        match node.node_type {
+                            NodeType::Paragraph => {
+                                render_paragraph_clean_partial(
+                                    model,
+                                    children[ei],
+                                    None,
+                                    Some(end_offset),
+                                    &mut html,
+                                );
+                            }
+                            NodeType::Table => {
+                                render_table_clean(model, children[ei], &mut html);
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+                _ => {
+                    return Err(JsError::new(
+                        "Start or end paragraph not found in body",
+                    ));
+                }
+            }
+        }
+
+        Ok(html)
+    }
+
     // ─── Lifecycle ────────────────────────────────────────────────
 
     /// Free the document, releasing memory.
@@ -3053,6 +3545,323 @@ impl Default for WasmFontDatabase {
     fn default() -> Self {
         Self::new()
     }
+}
+
+// --- Paste JSON parsing helpers ---
+
+/// A single run of formatted text for rich paste.
+struct PasteRun {
+    text: String,
+    bold: Option<bool>,
+    italic: Option<bool>,
+    underline: Option<bool>,
+    strikethrough: Option<bool>,
+    font_size: Option<f64>,
+    font_family: Option<String>,
+    color: Option<String>,
+}
+
+impl PasteRun {
+    /// Convert this run's formatting properties into an `AttributeMap`.
+    /// Returns an empty map if no formatting is specified.
+    fn to_attribute_map(&self) -> s1_model::AttributeMap {
+        let mut attrs = s1_model::AttributeMap::new();
+        if let Some(b) = self.bold {
+            if b {
+                attrs.set(AttributeKey::Bold, AttributeValue::Bool(true));
+            }
+        }
+        if let Some(i) = self.italic {
+            if i {
+                attrs.set(AttributeKey::Italic, AttributeValue::Bool(true));
+            }
+        }
+        if let Some(u) = self.underline {
+            if u {
+                attrs.set(
+                    AttributeKey::Underline,
+                    AttributeValue::UnderlineStyle(UnderlineStyle::Single),
+                );
+            }
+        }
+        if let Some(s) = self.strikethrough {
+            if s {
+                attrs.set(AttributeKey::Strikethrough, AttributeValue::Bool(true));
+            }
+        }
+        if let Some(fs) = self.font_size {
+            attrs.set(AttributeKey::FontSize, AttributeValue::Float(fs));
+        }
+        if let Some(ref ff) = self.font_family {
+            attrs.set(
+                AttributeKey::FontFamily,
+                AttributeValue::String(ff.clone()),
+            );
+        }
+        if let Some(ref c) = self.color {
+            if let Some(color) = Color::from_hex(c) {
+                attrs.set(AttributeKey::Color, AttributeValue::Color(color));
+            }
+        }
+        attrs
+    }
+}
+
+/// Parse the paste JSON format into a vector of paragraphs, each containing a
+/// vector of `PasteRun`.
+///
+/// Expected format:
+/// ```json
+/// {
+///   "paragraphs": [
+///     { "runs": [{"text": "...", "bold": true, ...}, ...] },
+///     ...
+///   ]
+/// }
+/// ```
+///
+/// Uses manual JSON parsing to avoid adding serde_json as a dependency.
+fn parse_paste_json(json: &str) -> Result<Vec<Vec<PasteRun>>, JsError> {
+    let json = json.trim();
+    if json.is_empty() || json == "{}" || json == "[]" {
+        return Ok(Vec::new());
+    }
+
+    // Find the "paragraphs" array
+    let paragraphs_key = "\"paragraphs\"";
+    let para_key_pos = json
+        .find(paragraphs_key)
+        .ok_or_else(|| JsError::new("Missing 'paragraphs' key in paste JSON"))?;
+
+    // Find the '[' that starts the paragraphs array
+    let after_key = &json[para_key_pos + paragraphs_key.len()..];
+    let colon_pos = after_key
+        .find(':')
+        .ok_or_else(|| JsError::new("Missing ':' after 'paragraphs' key"))?;
+    let after_colon = &after_key[colon_pos + 1..];
+    let arr_start = after_colon
+        .find('[')
+        .ok_or_else(|| JsError::new("Missing '[' for paragraphs array"))?;
+
+    // Find matching ']' for the paragraphs array
+    let arr_content_start = para_key_pos + paragraphs_key.len() + colon_pos + 1 + arr_start;
+    let paragraphs_arr_end = find_matching_bracket(json, arr_content_start)?;
+    let paragraphs_arr = &json[arr_content_start + 1..paragraphs_arr_end];
+
+    // Split into individual paragraph objects
+    let para_objects = split_json_array_objects(paragraphs_arr)?;
+
+    let mut result = Vec::new();
+    for para_obj in para_objects {
+        let runs = parse_runs_from_paragraph_obj(&para_obj)?;
+        result.push(runs);
+    }
+
+    Ok(result)
+}
+
+/// Find the matching closing bracket for an opening bracket at `pos`.
+fn find_matching_bracket(s: &str, pos: usize) -> Result<usize, JsError> {
+    let bytes = s.as_bytes();
+    let open = bytes[pos];
+    let close = match open {
+        b'[' => b']',
+        b'{' => b'}',
+        _ => return Err(JsError::new("Expected '[' or '{'")),
+    };
+
+    let mut depth = 1i32;
+    let mut i = pos + 1;
+    let mut in_string = false;
+    let mut escape_next = false;
+
+    while i < bytes.len() {
+        if escape_next {
+            escape_next = false;
+            i += 1;
+            continue;
+        }
+        match bytes[i] {
+            b'\\' if in_string => {
+                escape_next = true;
+            }
+            b'"' => {
+                in_string = !in_string;
+            }
+            b if b == open && !in_string => {
+                depth += 1;
+            }
+            b if b == close && !in_string => {
+                depth -= 1;
+                if depth == 0 {
+                    return Ok(i);
+                }
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    Err(JsError::new("Unmatched bracket in paste JSON"))
+}
+
+/// Split a JSON array's content into individual top-level objects.
+/// Input is the content between `[` and `]`.
+fn split_json_array_objects(arr_content: &str) -> Result<Vec<String>, JsError> {
+    let trimmed = arr_content.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let mut objects = Vec::new();
+    let bytes = trimmed.as_bytes();
+    let mut i = 0;
+    while i < bytes.len() {
+        // Skip whitespace and commas
+        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\r' || bytes[i] == b'\t' || bytes[i] == b',') {
+            i += 1;
+        }
+        if i >= bytes.len() {
+            break;
+        }
+        if bytes[i] == b'{' {
+            let end = find_matching_bracket(trimmed, i)?;
+            objects.push(trimmed[i..=end].to_string());
+            i = end + 1;
+        } else {
+            i += 1;
+        }
+    }
+    Ok(objects)
+}
+
+/// Parse the "runs" array from a paragraph JSON object.
+fn parse_runs_from_paragraph_obj(obj: &str) -> Result<Vec<PasteRun>, JsError> {
+    let runs_key = "\"runs\"";
+    let key_pos = match obj.find(runs_key) {
+        Some(p) => p,
+        None => return Ok(Vec::new()),
+    };
+
+    let after_key = &obj[key_pos + runs_key.len()..];
+    let colon_pos = after_key
+        .find(':')
+        .ok_or_else(|| JsError::new("Missing ':' after 'runs' key"))?;
+    let after_colon = &after_key[colon_pos + 1..];
+    let arr_start_rel = after_colon
+        .find('[')
+        .ok_or_else(|| JsError::new("Missing '[' for runs array"))?;
+
+    let arr_start_abs = key_pos + runs_key.len() + colon_pos + 1 + arr_start_rel;
+    let arr_end = find_matching_bracket(obj, arr_start_abs)?;
+    let arr_content = &obj[arr_start_abs + 1..arr_end];
+
+    let run_objects = split_json_array_objects(arr_content)?;
+    let mut runs = Vec::new();
+    for run_obj in run_objects {
+        runs.push(parse_single_run(&run_obj)?);
+    }
+    Ok(runs)
+}
+
+/// Parse a single run JSON object into a `PasteRun`.
+fn parse_single_run(obj: &str) -> Result<PasteRun, JsError> {
+    let text = extract_json_string_opt(obj, "text").unwrap_or_default();
+    let bold = extract_json_bool_opt(obj, "bold");
+    let italic = extract_json_bool_opt(obj, "italic");
+    let underline = extract_json_bool_opt(obj, "underline");
+    let strikethrough = extract_json_bool_opt(obj, "strikethrough");
+    let font_size = extract_json_number_opt(obj, "fontSize");
+    let font_family = extract_json_string_opt(obj, "fontFamily");
+    let color = extract_json_string_opt(obj, "color");
+
+    Ok(PasteRun {
+        text,
+        bold,
+        italic,
+        underline,
+        strikethrough,
+        font_size,
+        font_family,
+        color,
+    })
+}
+
+/// Extract a string value for a given key from a JSON object string.
+/// Returns `None` if the key is not found or the value is not a string.
+fn extract_json_string_opt(obj: &str, key: &str) -> Option<String> {
+    let search = format!("\"{}\"", key);
+    let key_pos = obj.find(&search)?;
+    let after_key = &obj[key_pos + search.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[colon_pos + 1..].trim_start();
+
+    if after_colon.starts_with('"') {
+        // Find the closing quote, handling escapes
+        let mut i = 1;
+        let bytes = after_colon.as_bytes();
+        let mut result = String::new();
+        while i < bytes.len() {
+            if bytes[i] == b'\\' && i + 1 < bytes.len() {
+                match bytes[i + 1] {
+                    b'"' => { result.push('"'); i += 2; }
+                    b'\\' => { result.push('\\'); i += 2; }
+                    b'n' => { result.push('\n'); i += 2; }
+                    b'r' => { result.push('\r'); i += 2; }
+                    b't' => { result.push('\t'); i += 2; }
+                    _ => { result.push(after_colon.as_bytes()[i] as char); i += 1; }
+                }
+            } else if bytes[i] == b'"' {
+                return Some(result);
+            } else {
+                // Handle multi-byte UTF-8
+                let remaining = &after_colon[i..];
+                if let Some(c) = remaining.chars().next() {
+                    result.push(c);
+                    i += c.len_utf8();
+                } else {
+                    i += 1;
+                }
+            }
+        }
+        None
+    } else {
+        None
+    }
+}
+
+/// Extract a boolean value for a given key from a JSON object string.
+/// Returns `None` if the key is not found.
+fn extract_json_bool_opt(obj: &str, key: &str) -> Option<bool> {
+    let search = format!("\"{}\"", key);
+    let key_pos = obj.find(&search)?;
+    let after_key = &obj[key_pos + search.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[colon_pos + 1..].trim_start();
+
+    if after_colon.starts_with("true") {
+        Some(true)
+    } else if after_colon.starts_with("false") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+/// Extract a numeric value for a given key from a JSON object string.
+/// Returns `None` if the key is not found or the value is not a number.
+fn extract_json_number_opt(obj: &str, key: &str) -> Option<f64> {
+    let search = format!("\"{}\"", key);
+    let key_pos = obj.find(&search)?;
+    let after_key = &obj[key_pos + search.len()..];
+    let colon_pos = after_key.find(':')?;
+    let after_colon = after_key[colon_pos + 1..].trim_start();
+
+    // Collect digits, dots, minus sign
+    let num_str: String = after_colon
+        .chars()
+        .take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-')
+        .collect();
+    num_str.parse().ok()
 }
 
 // --- Node ID / editing helpers ---
@@ -4001,7 +4810,7 @@ fn render_node(model: &DocumentModel, node_id: NodeId, html: &mut String) {
         NodeType::TableCell => render_table_cell(model, node_id, html),
         NodeType::Image => render_image(model, node_id, html),
         NodeType::PageBreak => {
-            html.push_str("<hr class=\"page-break\" style=\"border:none;page-break-after:always;margin:0\" />");
+            html.push_str("<hr class=\"page-break\" contenteditable=\"false\" style=\"border:none;page-break-after:always;margin:0\" />");
         }
         NodeType::TableOfContents => {
             html.push_str("<div class=\"toc\" style=\"margin:1em 0;padding:1em;border:1px solid #dadce0;border-radius:4px\">");
@@ -4225,7 +5034,66 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
 
     match effective_level {
         Some(l @ 1..=6) => {
-            html.push_str(&format!("<h{l}{nid_attr}{style_attr}>"));
+            // Add heading typography as inline styles so rendering doesn't
+            // depend on editor CSS.  Resolve from the document's style table
+            // first; fall back to sensible defaults.
+            let mut heading_style = style.clone();
+
+            // Try to pull font-size / font-weight / font-family from the
+            // heading's named style in the document style table.
+            let (style_font_size, style_bold, style_font_family) = style_id
+                .and_then(|sid| model.style_by_id(sid))
+                .map(|s| {
+                    let fs = s.attributes.get_f64(&AttributeKey::FontSize);
+                    let bold = s.attributes.get_bool(&AttributeKey::Bold);
+                    let ff = s.attributes.get_string(&AttributeKey::FontFamily).map(|v| v.to_string());
+                    (fs, bold, ff)
+                })
+                .unwrap_or((None, None, None));
+
+            if !heading_style.contains("font-size:") {
+                let size = style_font_size.unwrap_or(match l {
+                    1 => 24.0,
+                    2 => 18.0,
+                    3 => 14.0,
+                    4 => 12.0,
+                    5 => 11.0,
+                    _ => 10.0,
+                });
+                heading_style.push_str(&format!("font-size:{size}pt;"));
+            }
+            if !heading_style.contains("font-weight:") {
+                let weight = if style_bold == Some(false) { "normal" } else { "700" };
+                heading_style.push_str(&format!("font-weight:{weight};"));
+            }
+            if !heading_style.contains("font-family:") {
+                if let Some(ref ff) = style_font_family {
+                    heading_style.push_str(&format!("font-family:{ff};"));
+                }
+            }
+            // Default heading margins when not already set by paragraph attrs
+            if !heading_style.contains("margin-top:") {
+                let mt = match l {
+                    1 => 20.0,
+                    2 => 18.0,
+                    3 => 16.0,
+                    4 => 14.0,
+                    5 => 12.0,
+                    _ => 10.0,
+                };
+                heading_style.push_str(&format!("margin-top:{mt}pt;"));
+            }
+            if !heading_style.contains("margin-bottom:") {
+                let mb: f64 = if l <= 2 { 6.0 } else { 4.0 };
+                heading_style.push_str(&format!("margin-bottom:{mb}pt;"));
+            }
+
+            let h_style_attr = if heading_style.is_empty() {
+                String::new()
+            } else {
+                format!(" style=\"{heading_style}\"")
+            };
+            html.push_str(&format!("<h{l}{nid_attr}{h_style_attr}>"));
             render_inline_children(model, para_id, html);
             // Ensure empty headings are editable (non-collapsing)
             if is_empty_paragraph(model, para_id) {
@@ -4488,6 +5356,418 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
         Some("FormatChange") => html.push_str("</span>"),
         _ => {}
     }
+}
+
+// --- Clean HTML rendering (no data-node-id, no editor classes, no track changes) ---
+
+/// Render a paragraph as clean, portable HTML.
+///
+/// If `start_char` / `end_char` are `Some`, only the text within that
+/// character range is included (for partial paragraph selections).
+/// When `None`, the full paragraph content is rendered.
+fn render_paragraph_clean_partial(
+    model: &DocumentModel,
+    para_id: NodeId,
+    start_char: Option<usize>,
+    end_char: Option<usize>,
+    html: &mut String,
+) {
+    let para = match model.node(para_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    // Detect heading level from style ID
+    let style_id = para.attributes.get_string(&AttributeKey::StyleId);
+    let effective_level: Option<u8> = style_id.and_then(|sid| {
+        let sid_lower = sid.to_lowercase();
+        if sid_lower.starts_with("heading") {
+            sid_lower
+                .chars()
+                .filter(|c| c.is_ascii_digit())
+                .collect::<String>()
+                .parse()
+                .ok()
+        } else {
+            None
+        }
+    });
+
+    // Build inline style from paragraph attributes
+    let mut style = String::new();
+    if let Some(AttributeValue::Alignment(a)) = para.attributes.get(&AttributeKey::Alignment) {
+        let val = match a {
+            Alignment::Left => "left",
+            Alignment::Center => "center",
+            Alignment::Right => "right",
+            Alignment::Justify => "justify",
+            _ => "",
+        };
+        if !val.is_empty() {
+            style.push_str(&format!("text-align:{val};"));
+        }
+    }
+    if let Some(sp) = para.attributes.get_f64(&AttributeKey::SpacingBefore) {
+        if sp > 0.0 {
+            style.push_str(&format!("margin-top:{sp}pt;"));
+        }
+    }
+    if let Some(sp) = para.attributes.get_f64(&AttributeKey::SpacingAfter) {
+        if sp > 0.0 {
+            style.push_str(&format!("margin-bottom:{sp}pt;"));
+        }
+    }
+    if let Some(AttributeValue::LineSpacing(ls)) = para.attributes.get(&AttributeKey::LineSpacing) {
+        use s1_model::LineSpacing;
+        match ls {
+            LineSpacing::Single => style.push_str("line-height:1;"),
+            LineSpacing::OnePointFive => style.push_str("line-height:1.5;"),
+            LineSpacing::Double => style.push_str("line-height:2;"),
+            LineSpacing::Exact(pts) => style.push_str(&format!("line-height:{pts}pt;")),
+            LineSpacing::AtLeast(pts) => style.push_str(&format!("line-height:{pts}pt;")),
+            LineSpacing::Multiple(factor) => style.push_str(&format!("line-height:{factor};")),
+            _ => {}
+        }
+    }
+    if let Some(indent) = para.attributes.get_f64(&AttributeKey::IndentLeft) {
+        if indent > 0.0 {
+            style.push_str(&format!("margin-left:{indent}pt;"));
+        }
+    }
+    if let Some(indent) = para.attributes.get_f64(&AttributeKey::IndentRight) {
+        if indent > 0.0 {
+            style.push_str(&format!("margin-right:{indent}pt;"));
+        }
+    }
+    if let Some(indent) = para.attributes.get_f64(&AttributeKey::IndentFirstLine) {
+        if indent > 0.0 {
+            style.push_str(&format!("text-indent:{indent}pt;"));
+        }
+    }
+
+    let style_attr = if style.is_empty() {
+        String::new()
+    } else {
+        format!(" style=\"{style}\"")
+    };
+
+    let tag = match effective_level {
+        Some(l @ 1..=6) => format!("h{l}"),
+        _ => "p".to_string(),
+    };
+
+    html.push_str(&format!("<{tag}{style_attr}>"));
+
+    // Walk children (runs, images, etc.) with character offset tracking
+    let sel_start = start_char.unwrap_or(0);
+    let sel_end = end_char.unwrap_or(usize::MAX);
+    let mut char_offset = 0usize;
+
+    for &child_id in &para.children {
+        if let Some(child) = model.node(child_id) {
+            match child.node_type {
+                NodeType::Run => {
+                    let run_len = run_char_len(model, child_id);
+                    let run_start = char_offset;
+                    let run_end = char_offset + run_len;
+
+                    // Check overlap with selection
+                    if run_end > sel_start && run_start < sel_end {
+                        let local_start = sel_start.saturating_sub(run_start);
+                        let local_end = if sel_end < run_end {
+                            sel_end - run_start
+                        } else {
+                            run_len
+                        };
+                        render_run_clean_partial(
+                            model, child_id, local_start, local_end, &mut *html,
+                        );
+                    }
+
+                    char_offset += run_len;
+                }
+                NodeType::Image => {
+                    // Images count as 1 character for selection purposes
+                    if char_offset >= sel_start && char_offset < sel_end {
+                        render_image_clean(model, child_id, html);
+                    }
+                    char_offset += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    html.push_str(&format!("</{tag}>"));
+}
+
+/// Render a run as clean HTML, optionally for a sub-range of its text.
+///
+/// `local_start` / `local_end` are character offsets within the run's
+/// text content.  The full run text is sliced to
+/// `[local_start..local_end]`.
+fn render_run_clean_partial(
+    model: &DocumentModel,
+    run_id: NodeId,
+    local_start: usize,
+    local_end: usize,
+    html: &mut String,
+) {
+    let run = match model.node(run_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let bold = run.attributes.get_bool(&AttributeKey::Bold) == Some(true);
+    let italic = run.attributes.get_bool(&AttributeKey::Italic) == Some(true);
+    let underline = run.attributes.get(&AttributeKey::Underline).is_some()
+        && !matches!(
+            run.attributes.get(&AttributeKey::Underline),
+            Some(AttributeValue::UnderlineStyle(UnderlineStyle::None))
+        );
+    let strikethrough = run.attributes.get_bool(&AttributeKey::Strikethrough) == Some(true);
+    let superscript = run.attributes.get_bool(&AttributeKey::Superscript) == Some(true);
+    let subscript = run.attributes.get_bool(&AttributeKey::Subscript) == Some(true);
+    let hyperlink_url = run.attributes.get_string(&AttributeKey::HyperlinkUrl);
+
+    // Inline style for font, size, color (no track-changes styling)
+    let mut style = String::new();
+    if let Some(font) = run.attributes.get_string(&AttributeKey::FontFamily) {
+        style.push_str(&format!("font-family:'{font}';"));
+    }
+    if let Some(size) = run.attributes.get_f64(&AttributeKey::FontSize) {
+        style.push_str(&format!("font-size:{size}pt;"));
+    }
+    if let Some(AttributeValue::Color(c)) = run.attributes.get(&AttributeKey::Color) {
+        style.push_str(&format!("color:#{};", c.to_hex()));
+    }
+    if let Some(sp) = run.attributes.get_f64(&AttributeKey::FontSpacing) {
+        if sp.abs() > 0.01 {
+            style.push_str(&format!("letter-spacing:{sp}pt;"));
+        }
+    }
+
+    // Open tags (no track-changes wrappers)
+    if let Some(url) = hyperlink_url {
+        html.push_str(&format!(
+            "<a href=\"{}\">",
+            escape_html(url)
+        ));
+    }
+    if bold {
+        html.push_str("<strong>");
+    }
+    if italic {
+        html.push_str("<em>");
+    }
+    if underline {
+        html.push_str("<u>");
+    }
+    if strikethrough {
+        html.push_str("<s>");
+    }
+    if superscript {
+        html.push_str("<sup>");
+    }
+    if subscript {
+        html.push_str("<sub>");
+    }
+
+    let has_style = !style.is_empty();
+    if has_style {
+        html.push_str(&format!("<span style=\"{style}\">"));
+    }
+
+    // Collect text, then slice to [local_start..local_end]
+    let mut full_text = String::new();
+    let mut had_line_break = false;
+    for &text_id in &run.children {
+        if let Some(text_node) = model.node(text_id) {
+            if text_node.node_type == NodeType::Text {
+                if let Some(content) = text_node.text_content.as_deref() {
+                    full_text.push_str(content);
+                }
+            } else if text_node.node_type == NodeType::LineBreak {
+                // Represent line break as a single char for offset math
+                full_text.push('\n');
+                had_line_break = true;
+            } else if text_node.node_type == NodeType::Tab {
+                full_text.push('\t');
+            }
+        }
+    }
+
+    let sliced: String = full_text
+        .chars()
+        .skip(local_start)
+        .take(local_end - local_start)
+        .collect();
+
+    if had_line_break {
+        // Render with <br/> for newlines
+        for (i, segment) in sliced.split('\n').enumerate() {
+            if i > 0 {
+                html.push_str("<br/>");
+            }
+            if !segment.is_empty() {
+                let rendered = segment.replace('\t', "\u{2003}"); // em space for tabs
+                html.push_str(&escape_html(&rendered));
+            }
+        }
+    } else {
+        let rendered = sliced.replace('\t', "\u{2003}");
+        html.push_str(&escape_html(&rendered));
+    }
+
+    // Close tags (reverse order)
+    if has_style {
+        html.push_str("</span>");
+    }
+    if subscript {
+        html.push_str("</sub>");
+    }
+    if superscript {
+        html.push_str("</sup>");
+    }
+    if strikethrough {
+        html.push_str("</s>");
+    }
+    if underline {
+        html.push_str("</u>");
+    }
+    if italic {
+        html.push_str("</em>");
+    }
+    if bold {
+        html.push_str("</strong>");
+    }
+    if hyperlink_url.is_some() {
+        html.push_str("</a>");
+    }
+}
+
+/// Render an image as clean HTML (no data-node-id).
+fn render_image_clean(model: &DocumentModel, img_id: NodeId, html: &mut String) {
+    let img = match model.node(img_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    if let Some(AttributeValue::MediaId(media_id)) =
+        img.attributes.get(&AttributeKey::ImageMediaId)
+    {
+        if let Some(item) = model.media().get(*media_id) {
+            let b64 = base64_encode(&item.data);
+            let mime = &item.content_type;
+            let alt = img
+                .attributes
+                .get_string(&AttributeKey::ImageAltText)
+                .unwrap_or("image");
+            let mut img_style = String::from("max-width:100%;height:auto;");
+            if let Some(w) = img.attributes.get_f64(&AttributeKey::ImageWidth) {
+                img_style.push_str(&format!("width:{w}pt;"));
+            }
+            if let Some(h) = img.attributes.get_f64(&AttributeKey::ImageHeight) {
+                img_style.push_str(&format!("height:{h}pt;"));
+            }
+            html.push_str(&format!(
+                "<img src=\"data:{mime};base64,{b64}\" style=\"{img_style}\" alt=\"{}\"/>",
+                escape_html(alt)
+            ));
+            return;
+        }
+    }
+    html.push_str("<img src=\"\" alt=\"[Image not found]\"/>");
+}
+
+/// Render a table as clean HTML (no data-node-id).
+fn render_table_clean(model: &DocumentModel, table_id: NodeId, html: &mut String) {
+    html.push_str("<table style=\"border-collapse:collapse;width:100%\">");
+    let table = match model.node(table_id) {
+        Some(n) => n,
+        None => {
+            html.push_str("</table>");
+            return;
+        }
+    };
+    for &row_id in &table.children {
+        if let Some(row) = model.node(row_id) {
+            if row.node_type == NodeType::TableRow {
+                render_table_row_clean(model, row_id, html);
+            }
+        }
+    }
+    html.push_str("</table>");
+}
+
+/// Render a table row as clean HTML.
+fn render_table_row_clean(model: &DocumentModel, row_id: NodeId, html: &mut String) {
+    html.push_str("<tr>");
+    let row = match model.node(row_id) {
+        Some(n) => n,
+        None => {
+            html.push_str("</tr>");
+            return;
+        }
+    };
+    for &cell_id in &row.children {
+        if let Some(cell) = model.node(cell_id) {
+            if cell.node_type == NodeType::TableCell {
+                render_table_cell_clean(model, cell_id, html);
+            }
+        }
+    }
+    html.push_str("</tr>");
+}
+
+/// Render a table cell as clean HTML.
+fn render_table_cell_clean(model: &DocumentModel, cell_id: NodeId, html: &mut String) {
+    let cell = match model.node(cell_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let mut attrs = String::new();
+    let mut style = String::from("border:1px solid #999;padding:4px 8px;vertical-align:top;");
+
+    if let Some(cs) = cell.attributes.get_i64(&AttributeKey::ColSpan) {
+        if cs > 1 {
+            attrs.push_str(&format!(" colspan=\"{cs}\""));
+        }
+    }
+    if let Some(rs) = cell.attributes.get_string(&AttributeKey::RowSpan) {
+        if rs == "continue" {
+            return;
+        }
+    }
+    if let Some(AttributeValue::Color(c)) = cell.attributes.get(&AttributeKey::CellBackground) {
+        let hex = c.to_hex();
+        if hex != "FFFFFF" {
+            style.push_str(&format!("background:#{hex};"));
+        }
+    }
+
+    html.push_str(&format!("<td{attrs} style=\"{style}\">"));
+
+    // Render cell children (paragraphs, images, nested tables)
+    for &child_id in &cell.children {
+        if let Some(child) = model.node(child_id) {
+            match child.node_type {
+                NodeType::Paragraph => {
+                    render_paragraph_clean_partial(model, child_id, None, None, html);
+                }
+                NodeType::Table => {
+                    render_table_clean(model, child_id, html);
+                }
+                NodeType::Image => {
+                    render_image_clean(model, child_id, html);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    html.push_str("</td>");
 }
 
 fn render_image(model: &DocumentModel, img_id: NodeId, html: &mut String) {
@@ -5292,9 +6572,12 @@ fn to_html_from_model(model: &DocumentModel) -> String {
 fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
     match node.node_type {
         NodeType::Paragraph => {
-            let heading_level: u8 = node
+            let style_id_str = node
                 .attributes
                 .get_string(&AttributeKey::StyleId)
+                .map(|s| s.to_string());
+            let heading_level: u8 = style_id_str
+                .as_deref()
                 .and_then(|sid| {
                     let sid_lower = sid.to_lowercase();
                     if sid_lower.starts_with("heading") {
@@ -5315,7 +6598,42 @@ fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
                 "p".to_string()
             };
             let node_id = node.id;
-            let mut html = format!("<{} data-node-id=\"{}:{}\">", tag, node_id.replica, node_id.counter);
+
+            // Build inline heading typography so rendering is CSS-independent
+            let style_attr = if (1..=6).contains(&heading_level) {
+                let l = heading_level;
+                let mut hs = String::new();
+
+                let (style_font_size, style_bold, style_font_family) = style_id_str
+                    .as_deref()
+                    .and_then(|sid| model.style_by_id(sid))
+                    .map(|s| {
+                        let fs = s.attributes.get_f64(&AttributeKey::FontSize);
+                        let bold = s.attributes.get_bool(&AttributeKey::Bold);
+                        let ff = s.attributes.get_string(&AttributeKey::FontFamily).map(|v| v.to_string());
+                        (fs, bold, ff)
+                    })
+                    .unwrap_or((None, None, None));
+
+                let size = style_font_size.unwrap_or(match l {
+                    1 => 24.0, 2 => 18.0, 3 => 14.0, 4 => 12.0, 5 => 11.0, _ => 10.0,
+                });
+                hs.push_str(&format!("font-size:{}pt;", size));
+                let weight = if style_bold == Some(false) { "normal" } else { "700" };
+                hs.push_str(&format!("font-weight:{};", weight));
+                if let Some(ref ff) = style_font_family {
+                    hs.push_str(&format!("font-family:{};", ff));
+                }
+                let mt: f64 = match l { 1 => 20.0, 2 => 18.0, 3 => 16.0, 4 => 14.0, 5 => 12.0, _ => 10.0 };
+                hs.push_str(&format!("margin-top:{}pt;", mt));
+                let mb: f64 = if l <= 2 { 6.0 } else { 4.0 };
+                hs.push_str(&format!("margin-bottom:{}pt;", mb));
+                format!(" style=\"{}\"", hs)
+            } else {
+                String::new()
+            };
+
+            let mut html = format!("<{}{} data-node-id=\"{}:{}\">", tag, style_attr, node_id.replica, node_id.counter);
             let children = model.children(node_id);
             for child in &children {
                 html.push_str(&render_node_to_html(model, child));
@@ -6779,6 +8097,159 @@ mod tests {
         assert!(count >= 3, "should have at least 3 paragraphs, got {}", count);
     }
 
+    // ── Paste formatted runs tests ────────────────────────
+
+    #[test]
+    fn test_paste_formatted_runs_empty() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("Hello").unwrap();
+        // Empty paste should be a no-op
+        doc.paste_formatted_runs_json(&p, 0, "{}").unwrap();
+        doc.paste_formatted_runs_json(&p, 0, "{\"paragraphs\":[]}").unwrap();
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("Hello"));
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_single_paragraph() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("AB").unwrap();
+
+        // Paste two runs between A and B
+        let json = r#"{"paragraphs":[{"runs":[{"text":"xx","bold":true},{"text":"yy","italic":true}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 1, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("AxxyyB"), "expected 'AxxyyB' in: {}", text);
+
+        // Verify formatting: find runs, check bold on "xx" and italic on "yy"
+        let run_ids_json = doc.get_run_ids(&p).unwrap();
+        // There should be multiple runs now (after formatting split the original)
+        assert!(run_ids_json.contains(":"), "should have run IDs: {}", run_ids_json);
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_single_run_no_formatting() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("Start").unwrap();
+
+        // Paste plain text (no formatting attributes)
+        let json = r#"{"paragraphs":[{"runs":[{"text":" middle"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 5, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("Start middle"), "expected 'Start middle' in: {}", text);
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_multi_paragraph() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("AABB").unwrap();
+
+        // Paste two paragraphs between AA and BB
+        let json = r#"{"paragraphs":[{"runs":[{"text":"first"}]},{"runs":[{"text":"second"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 2, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        // Result should be: "AAfirst\nsecondBB" (spread across paragraphs)
+        assert!(text.contains("AAfirst"), "expected 'AAfirst' in: {}", text);
+        assert!(text.contains("secondBB"), "expected 'secondBB' in: {}", text);
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_with_color_and_font() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("Test").unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"colored","color":"FF0000","fontSize":18,"fontFamily":"Arial"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 4, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("Testcolored"), "expected 'Testcolored' in: {}", text);
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_at_start() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("End").unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"Begin ","bold":true}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 0, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("Begin End"), "expected 'Begin End' in: {}", text);
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_three_paragraphs() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("XY").unwrap();
+
+        // Paste three paragraphs
+        let json = r#"{"paragraphs":[{"runs":[{"text":"p1"}]},{"runs":[{"text":"p2"}]},{"runs":[{"text":"p3"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 1, json).unwrap();
+
+        let text = doc.get_document_text().unwrap();
+        assert!(text.contains("Xp1"), "expected 'Xp1' in: {}", text);
+        assert!(text.contains("p2"), "expected 'p2' in: {}", text);
+        assert!(text.contains("p3Y"), "expected 'p3Y' in: {}", text);
+    }
+
+    #[test]
+    fn test_parse_paste_json_basic() {
+        // Test the JSON parser directly
+        let json = r#"{"paragraphs":[{"runs":[{"text":"hello","bold":true,"italic":false}]}]}"#;
+        let result = parse_paste_json(json).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 1);
+        assert_eq!(result[0][0].text, "hello");
+        assert_eq!(result[0][0].bold, Some(true));
+        assert_eq!(result[0][0].italic, Some(false));
+    }
+
+    #[test]
+    fn test_parse_paste_json_multi_run() {
+        let json = r#"{"paragraphs":[{"runs":[{"text":"a","bold":true},{"text":"b","fontSize":14}]}]}"#;
+        let result = parse_paste_json(json).unwrap();
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].len(), 2);
+        assert_eq!(result[0][0].text, "a");
+        assert_eq!(result[0][0].bold, Some(true));
+        assert_eq!(result[0][1].text, "b");
+        assert_eq!(result[0][1].font_size, Some(14.0));
+    }
+
+    #[test]
+    fn test_parse_paste_json_multi_paragraph() {
+        let json = r#"{"paragraphs":[{"runs":[{"text":"first"}]},{"runs":[{"text":"second"}]}]}"#;
+        let result = parse_paste_json(json).unwrap();
+        assert_eq!(result.len(), 2);
+        assert_eq!(result[0][0].text, "first");
+        assert_eq!(result[1][0].text, "second");
+    }
+
+    #[test]
+    fn test_parse_paste_json_all_properties() {
+        let json = r#"{"paragraphs":[{"runs":[{"text":"styled","bold":true,"italic":true,"underline":true,"strikethrough":true,"fontSize":24,"fontFamily":"Courier","color":"00FF00"}]}]}"#;
+        let result = parse_paste_json(json).unwrap();
+        let run = &result[0][0];
+        assert_eq!(run.text, "styled");
+        assert_eq!(run.bold, Some(true));
+        assert_eq!(run.italic, Some(true));
+        assert_eq!(run.underline, Some(true));
+        assert_eq!(run.strikethrough, Some(true));
+        assert_eq!(run.font_size, Some(24.0));
+        assert_eq!(run.font_family, Some("Courier".to_string()));
+        assert_eq!(run.color, Some("00FF00".to_string()));
+    }
+
     // ── Multi-run paragraph tests ──────────────────────────
 
     #[test]
@@ -6857,6 +8328,122 @@ mod tests {
         doc.replace_text(&id, 6, 3, "Top").unwrap();
         let text = doc.get_paragraph_text(&id).unwrap();
         assert_eq!(text, "Start Topdle End");
+    }
+
+    // ─── Export Selection HTML Tests ─────────────────────
+
+    #[test]
+    fn test_export_selection_html_clean_output() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+
+        // Create two paragraphs with formatting
+        let id1 = doc.append_paragraph("Hello World").unwrap();
+        let id2 = doc.append_paragraph("Second paragraph").unwrap();
+
+        // Bold "World" in first paragraph (chars 6..11)
+        doc.format_selection(&id1, 6, &id1, 11, "bold", "true")
+            .unwrap();
+
+        // Italic the entire second paragraph (chars 0..16)
+        doc.format_selection(&id2, 0, &id2, 16, "italic", "true")
+            .unwrap();
+
+        // Export full selection spanning both paragraphs
+        let html = doc
+            .export_selection_html(&id1, 0, &id2, 16)
+            .unwrap();
+
+        // Must NOT contain data-node-id or editor-specific attributes
+        assert!(
+            !html.contains("data-node-id"),
+            "Clean HTML must not contain data-node-id. Got: {html}"
+        );
+        assert!(
+            !html.contains("data-tc-"),
+            "Clean HTML must not contain track-change data attributes. Got: {html}"
+        );
+
+        // Must contain proper formatting tags
+        assert!(
+            html.contains("<strong>"),
+            "Expected <strong> tag for bold. Got: {html}"
+        );
+        assert!(
+            html.contains("</strong>"),
+            "Expected </strong> close tag. Got: {html}"
+        );
+        assert!(
+            html.contains("<em>"),
+            "Expected <em> tag for italic. Got: {html}"
+        );
+        assert!(
+            html.contains("</em>"),
+            "Expected </em> close tag. Got: {html}"
+        );
+
+        // Must contain the text
+        assert!(html.contains("Hello"), "Expected 'Hello' in output. Got: {html}");
+        assert!(html.contains("World"), "Expected 'World' in output. Got: {html}");
+        assert!(
+            html.contains("Second paragraph"),
+            "Expected 'Second paragraph' in output. Got: {html}"
+        );
+
+        // Must have paragraph tags
+        assert!(html.contains("<p>") || html.contains("<p "), "Expected <p> tags. Got: {html}");
+    }
+
+    #[test]
+    fn test_export_selection_html_partial_paragraph() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+
+        let id = doc.append_paragraph("Hello Beautiful World").unwrap();
+
+        // Export only "Beautiful" (chars 6..15)
+        let html = doc.export_selection_html(&id, 6, &id, 15).unwrap();
+
+        assert!(
+            html.contains("Beautiful"),
+            "Expected 'Beautiful' in output. Got: {html}"
+        );
+        // Should NOT contain "Hello" or "World" since they're outside the range
+        assert!(
+            !html.contains("Hello"),
+            "Should not contain 'Hello' (outside range). Got: {html}"
+        );
+        assert!(
+            !html.contains("World"),
+            "Should not contain 'World' (outside range). Got: {html}"
+        );
+        assert!(
+            !html.contains("data-node-id"),
+            "Clean HTML must not contain data-node-id. Got: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_with_font_style() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+
+        let id = doc.append_paragraph("Styled text").unwrap();
+
+        // Apply font size
+        doc.format_selection(&id, 0, &id, 11, "fontSize", "18")
+            .unwrap();
+
+        let html = doc.export_selection_html(&id, 0, &id, 11).unwrap();
+
+        assert!(
+            html.contains("font-size:18pt"),
+            "Expected font-size inline style. Got: {html}"
+        );
+        assert!(
+            !html.contains("data-node-id"),
+            "Clean HTML must not contain data-node-id. Got: {html}"
+        );
     }
 
     // ─── Collaboration Tests ───────────────────────────

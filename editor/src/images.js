@@ -241,8 +241,12 @@ export function insertImage(file) {
       URL.revokeObjectURL(url);
     };
     img.onerror = () => {
-      try { doc.insert_image(nodeId, bytes, type, 300, 200); renderDocument(); updateUndoRedo(); }
-      catch (e) { console.error('insert image:', e); }
+      try {
+        doc.insert_image(nodeId, bytes, type, 300, 200);
+        broadcastOp({ action: 'insertImage', afterNodeId: nodeId });
+        renderDocument();
+        updateUndoRedo();
+      } catch (e) { console.error('insert image:', e); }
       URL.revokeObjectURL(url);
     };
     img.src = url;

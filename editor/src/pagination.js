@@ -56,10 +56,10 @@ export function updatePageBreaks() {
 
   if (pageMap && pageMap.pages && numPages > 1) {
     const pages = pageMap.pages;
-    // CSS page padding (top + bottom) — must match .doc-page padding
-    const pagePaddingPx = 96 * 2;
-    // DPI ratio: layout uses 72pt/inch, screen is 96px/inch
+    // Page padding (top + bottom) from actual WASM section margins
     const ptToPx = 96 / 72;
+    const dims = state.pageDims || { marginTopPt: 72, marginBottomPt: 72 };
+    const pagePaddingPx = (dims.marginTopPt + dims.marginBottomPt) * ptToPx;
 
     for (let i = 0; i < numPages - 1; i++) {
       const currentPage = pages[i];
@@ -75,12 +75,24 @@ export function updatePageBreaks() {
       const pageHeightPx = (currentPage.height || 792) * ptToPx;
       const contentHeightPx = pageHeightPx - pagePaddingPx;
 
-      // Measure actual content height for this page section
+      // Measure actual content height from first to last element bounding box
+      // (includes CSS margins/spacing between elements, unlike sum-of-heights)
       let sectionContentHeight = 0;
       const currentNodeIds = currentPage.nodeIds || [];
-      for (const nid of currentNodeIds) {
-        const el = page.querySelector(`[data-node-id="${nid}"]`);
-        if (el) sectionContentHeight += el.getBoundingClientRect().height;
+      if (currentNodeIds.length > 0) {
+        let firstEl = null, lastEl = null;
+        for (const nid of currentNodeIds) {
+          const el = page.querySelector(`[data-node-id="${nid}"]`);
+          if (el) {
+            if (!firstEl) firstEl = el;
+            lastEl = el;
+          }
+        }
+        if (firstEl && lastEl) {
+          const firstRect = firstEl.getBoundingClientRect();
+          const lastRect = lastEl.getBoundingClientRect();
+          sectionContentHeight = (lastRect.bottom - firstRect.top);
+        }
       }
 
       // Add spacer to fill remaining page height
@@ -130,6 +142,38 @@ export function updatePageBreaks() {
       brk.appendChild(badge);
 
       firstNextEl.before(brk);
+    }
+  }
+
+  // ── Last page spacer (fill remaining height on final page) ──
+  {
+    const pgArr = pageMap?.pages;
+    const lastPage = pgArr?.[pgArr.length - 1] || null;
+    const lastNodeIds = lastPage?.nodeIds || [];
+    if (lastNodeIds.length > 0) {
+      const ptToPxR = 96 / 72;
+      const padPx = 96 * 2;
+      const pageHPx = (lastPage.height || 792) * ptToPxR;
+      const contentHPx = pageHPx - padPx;
+      let firstEl = null, lastEl = null;
+      for (const nid of lastNodeIds) {
+        const el = page.querySelector(`[data-node-id="${nid}"]`);
+        if (el) {
+          if (!firstEl) firstEl = el;
+          lastEl = el;
+        }
+      }
+      if (firstEl && lastEl) {
+        const sectionH = lastEl.getBoundingClientRect().bottom - firstEl.getBoundingClientRect().top;
+        const remaining = contentHPx - sectionH;
+        if (remaining > 20) {
+          const spacer = document.createElement('div');
+          spacer.className = 'page-bottom-spacer';
+          spacer.style.height = remaining + 'px';
+          spacer.contentEditable = 'false';
+          page.appendChild(spacer);
+        }
+      }
     }
   }
 

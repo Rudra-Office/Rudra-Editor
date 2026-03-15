@@ -1,4 +1,4 @@
-// Folio Editor — Entry Point
+// s1 editor — Entry Point
 // Wires all modules together and initializes the WASM engine.
 
 import './styles.css';
@@ -8,7 +8,7 @@ import { initFileHandlers, newDocument, openFile, setDetectFormat, checkAutoReco
 import { initToolbar } from './toolbar-handlers.js';
 import { initFind } from './find.js';
 import { renderRuler } from './ruler.js';
-import { checkAutoJoin } from './collab.js';
+import { checkAutoJoin, initCollabUI } from './collab.js';
 import { initImageContextMenu } from './images.js';
 
 async function boot() {
@@ -32,10 +32,11 @@ async function boot() {
     initToolbar();
     initFind();
     initImageContextMenu();
+    initCollabUI();
     renderRuler();
 
     // Expose state for testing
-    window.__folio_state = state;
+    window.__s1_state = state;
 
     // Check for collaboration auto-join (?room=... URL param)
     checkAutoJoin();

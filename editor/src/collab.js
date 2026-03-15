@@ -230,6 +230,19 @@ function applyRemoteOp(dataStr, fromPeerId) {
     const op = JSON.parse(dataStr);
     applyingRemote = true;
 
+    // Show toast for remote changes (throttled)
+    if (fromPeerId && fromPeerId !== peerId) {
+      const peer = peers.get(fromPeerId);
+      const peerName = peer ? peer.userName : 'A peer';
+      showCollabToast(`Changes from ${peerName} applied`);
+
+      // Flash the affected paragraph if possible
+      const affectedNodeId = op.nodeId || op.startNode;
+      if (affectedNodeId) {
+        flashParagraph(affectedNodeId);
+      }
+    }
+
     switch (op.action) {
       case 'setText': {
         // Set paragraph text from remote
@@ -456,6 +469,14 @@ function applyRemoteOp(dataStr, fromPeerId) {
         break;
       }
 
+      case 'pasteFormattedRuns': {
+        try {
+          state.doc.paste_formatted_runs_json(op.nodeId, op.offset, op.runsJson);
+          renderDocument();
+        } catch (e) { console.error('remote pasteFormattedRuns:', e); }
+        break;
+      }
+
       case 'insertText': {
         try {
           state.doc.insert_text_in_paragraph(op.nodeId, op.offset, op.text);
@@ -509,6 +530,22 @@ function applyRemoteOp(dataStr, fromPeerId) {
           state.doc.reject_change(op.nodeId);
           renderDocument();
         } catch (e) { console.error('remote rejectChange:', e); }
+        break;
+      }
+
+      case 'acceptAllChanges': {
+        try {
+          state.doc.accept_all_changes();
+          renderDocument();
+        } catch (e) { console.error('remote acceptAllChanges:', e); }
+        break;
+      }
+
+      case 'rejectAllChanges': {
+        try {
+          state.doc.reject_all_changes();
+          renderDocument();
+        } catch (e) { console.error('remote rejectAllChanges:', e); }
         break;
       }
 
@@ -690,13 +727,29 @@ function updateCollabUI() {
   const collabStatus = $('collabStatus');
 
   if (shareBtn) {
-    shareBtn.textContent = roomId ? 'Disconnect' : 'Share';
+    if (roomId) {
+      shareBtn.innerHTML = '<span class="msi">link_off</span> Disconnect';
+    } else {
+      shareBtn.innerHTML = '<span class="msi">share</span> Share';
+    }
     shareBtn.title = roomId ? 'Leave collaboration session' : 'Start a collaboration session';
   }
 
   if (collabStatus) {
     collabStatus.style.display = roomId ? 'inline-flex' : 'none';
   }
+
+  // Update sync status in status bar
+  const syncEl = $('collabSyncStatus');
+  if (syncEl) {
+    syncEl.style.display = roomId ? 'inline-flex' : 'none';
+    if (!roomId) {
+      state.collabStatus = 'disconnected';
+    }
+  }
+
+  // Update status bar peers
+  renderStatusBarPeers();
 }
 
 function updateConnectionStatus(status) {
@@ -708,6 +761,26 @@ function updateConnectionStatus(status) {
     status === 'connected' ? 'Connected to relay server' :
     status === 'reconnecting' ? 'Reconnecting...' :
     'Disconnected';
+
+  // Update state for status bar sync indicator
+  state.collabStatus = status === 'connected' ? 'connected' :
+    status === 'reconnecting' ? 'connecting' : 'disconnected';
+
+  // Update status bar sync text
+  const syncEl = $('collabSyncStatus');
+  if (syncEl) {
+    if (status === 'connected') {
+      syncEl.textContent = 'Synced';
+      syncEl.className = 'collab-sync-status synced';
+    } else if (status === 'reconnecting') {
+      syncEl.textContent = 'Syncing...';
+      syncEl.className = 'collab-sync-status syncing';
+    } else {
+      syncEl.textContent = 'Offline';
+      syncEl.className = 'collab-sync-status offline';
+    }
+    syncEl.style.display = roomId ? 'inline-flex' : 'none';
+  }
 }
 
 function updatePeerCount() {
@@ -716,12 +789,48 @@ function updatePeerCount() {
     const count = peers.size;
     el.textContent = count > 0 ? `${count + 1} users` : '';
   }
+
+  // Sync to state
+  state.collabPeers = new Map(peers);
+
+  // Update status bar peer dots
+  renderStatusBarPeers();
+
+  // Update share modal peer list if open
+  updateSharePeerList();
+}
+
+/**
+ * Render small colored dots in the status bar for each connected peer.
+ */
+function renderStatusBarPeers() {
+  const container = $('statusBarPeers');
+  if (!container) return;
+
+  container.innerHTML = '';
+  if (!roomId || peers.size === 0) {
+    container.style.display = 'none';
+    return;
+  }
+
+  container.style.display = 'inline-flex';
+
+  for (const [pid, p] of peers) {
+    const dot = document.createElement('span');
+    dot.className = 'status-peer-dot';
+    dot.style.background = p.userColor || '#999';
+    dot.title = p.userName || 'Peer';
+    container.appendChild(dot);
+  }
 }
 
 // ─── Share Dialog ─────────────────────────────────────
 
 export function showShareDialog() {
   if (roomId) {
+    // Already in a session — confirm disconnect
+    const modal = $('shareModal');
+    if (modal) modal.classList.remove('show');
     stopCollab();
     return;
   }
@@ -731,17 +840,173 @@ export function showShareDialog() {
     return;
   }
 
-  const room = Math.random().toString(36).substring(2, 10);
-  const name = prompt('Your display name:', 'User ' + Math.floor(Math.random() * 100));
-  if (name === null) return;
+  // Generate a room ID and shareable URL
+  const generatedRoom = Math.random().toString(36).substring(2, 10);
+  const shareUrl = `${window.location.origin}${window.location.pathname}?room=${generatedRoom}&relay=${encodeURIComponent(DEFAULT_RELAY_URL)}`;
 
-  const relayUrl = prompt('Relay server URL:', DEFAULT_RELAY_URL);
-  if (relayUrl === null) return;
+  // Populate modal fields
+  const urlInput = $('shareUrlInput');
+  if (urlInput) urlInput.value = shareUrl;
 
-  startCollab(room, name, relayUrl);
+  const nameInput = $('shareNameInput');
+  if (nameInput) nameInput.value = 'User ' + Math.floor(Math.random() * 100);
 
-  const shareUrl = `${window.location.origin}${window.location.pathname}?room=${room}&relay=${encodeURIComponent(relayUrl)}`;
-  prompt('Share this link with collaborators:', shareUrl);
+  const relayInput = $('shareRelayInput');
+  if (relayInput) relayInput.value = DEFAULT_RELAY_URL;
+
+  // Update peer list display
+  updateSharePeerList();
+
+  // Show modal
+  const modal = $('shareModal');
+  if (modal) modal.classList.add('show');
+
+  // Store generated room for the Start button
+  if (modal) modal.dataset.room = generatedRoom;
+}
+
+/**
+ * Called when the user clicks "Start Session" in the share modal.
+ */
+export function startShareSession() {
+  const modal = $('shareModal');
+  if (!modal) return;
+
+  const room = modal.dataset.room;
+  const nameInput = $('shareNameInput');
+  const relayInput = $('shareRelayInput');
+
+  const name = nameInput ? nameInput.value.trim() || 'Anonymous' : 'Anonymous';
+  const relay = relayInput ? relayInput.value.trim() || DEFAULT_RELAY_URL : DEFAULT_RELAY_URL;
+
+  modal.classList.remove('show');
+  startCollab(room, name, relay);
+}
+
+/**
+ * Copy share URL to clipboard.
+ */
+export function copyShareUrl() {
+  const urlInput = $('shareUrlInput');
+  if (!urlInput) return;
+  navigator.clipboard.writeText(urlInput.value).then(() => {
+    const btn = $('shareCopyBtn');
+    if (btn) {
+      const orig = btn.textContent;
+      btn.textContent = 'Copied!';
+      setTimeout(() => { btn.textContent = orig; }, 1500);
+    }
+  }).catch(() => {
+    urlInput.select();
+    document.execCommand('copy');
+  });
+}
+
+/**
+ * Update the peer list shown in the share modal.
+ */
+function updateSharePeerList() {
+  const list = $('sharePeerList');
+  if (!list) return;
+  list.innerHTML = '';
+
+  if (peers.size === 0 && !roomId) {
+    list.innerHTML = '<div class="share-no-peers">No peers connected</div>';
+    return;
+  }
+
+  // Show self
+  if (roomId) {
+    const self = document.createElement('div');
+    self.className = 'share-peer-item';
+    self.innerHTML = `<span class="share-peer-dot" style="background:${userColor}"></span>
+      <span class="share-peer-name">${userName} (you)</span>`;
+    list.appendChild(self);
+  }
+
+  for (const [pid, p] of peers) {
+    const el = document.createElement('div');
+    el.className = 'share-peer-item';
+    el.innerHTML = `<span class="share-peer-dot" style="background:${p.userColor || '#999'}"></span>
+      <span class="share-peer-name">${p.userName || 'Anonymous'}</span>`;
+    list.appendChild(el);
+  }
+
+  if (list.children.length === 0) {
+    list.innerHTML = '<div class="share-no-peers">No peers connected</div>';
+  }
+}
+
+// ─── Toast Notifications ─────────────────────────────
+
+let toastThrottleTimer = null;
+
+/**
+ * Show a toast notification that auto-dismisses after 3 seconds.
+ * Throttled to at most one toast per second.
+ */
+function showCollabToast(message) {
+  if (toastThrottleTimer) return;
+  toastThrottleTimer = setTimeout(() => { toastThrottleTimer = null; }, 1000);
+
+  const container = $('toastContainer');
+  if (!container) return;
+
+  const toast = document.createElement('div');
+  toast.className = 'collab-toast';
+  toast.textContent = message;
+  container.appendChild(toast);
+
+  // Trigger enter animation
+  requestAnimationFrame(() => toast.classList.add('show'));
+
+  // Auto-dismiss after 3 seconds
+  setTimeout(() => {
+    toast.classList.remove('show');
+    toast.classList.add('hide');
+    setTimeout(() => toast.remove(), 300);
+  }, 3000);
+}
+
+/**
+ * Briefly flash a paragraph element to indicate a remote edit.
+ */
+function flashParagraph(nodeId) {
+  const page = $('docPage');
+  if (!page) return;
+  const el = page.querySelector(`[data-node-id="${nodeId}"]`);
+  if (!el) return;
+
+  el.classList.add('collab-flash');
+  setTimeout(() => el.classList.remove('collab-flash'), 600);
+}
+
+// ─── Init: wire up share modal buttons ───────────────
+
+export function initCollabUI() {
+  const closeBtn = $('shareModalClose');
+  if (closeBtn) closeBtn.addEventListener('click', () => {
+    const modal = $('shareModal');
+    if (modal) modal.classList.remove('show');
+  });
+
+  const cancelBtn = $('shareCancelBtn');
+  if (cancelBtn) cancelBtn.addEventListener('click', () => {
+    const modal = $('shareModal');
+    if (modal) modal.classList.remove('show');
+  });
+
+  const startBtn = $('shareStartBtn');
+  if (startBtn) startBtn.addEventListener('click', startShareSession);
+
+  const copyBtn = $('shareCopyBtn');
+  if (copyBtn) copyBtn.addEventListener('click', copyShareUrl);
+
+  // Close on overlay click
+  const modal = $('shareModal');
+  if (modal) modal.addEventListener('click', (e) => {
+    if (e.target === modal) modal.classList.remove('show');
+  });
 }
 
 /**

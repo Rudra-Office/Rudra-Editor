@@ -1,8 +1,9 @@
 // File operations: new, open, export, drag-drop
 import { state, $ } from './state.js';
-import { renderDocument, syncAllText, renderPages, renderText } from './render.js';
+import { renderDocument, syncAllText, renderPages, renderText, applyPageDimensions } from './render.js';
 import { insertImage } from './images.js';
 import { renderRuler } from './ruler.js';
+import { broadcastOp } from './collab.js';
 
 let detect_format_fn = null;
 
@@ -311,7 +312,8 @@ export function exportDoc(format) {
 function activateEditor() {
   $('welcomeScreen').style.display = 'none';
   $('toolbar').classList.add('show');
-  $('tabbar').classList.add('show');
+  const menubar = $('appMenubar');
+  if (menubar) menubar.classList.add('show');
   $('statusbar').classList.add('show');
   switchView('editor');
 }
@@ -322,7 +324,11 @@ export function switchView(view) {
   $('pagesView').classList.toggle('show', view === 'pages');
   $('textView').classList.toggle('show', view === 'text');
   $('toolbar').classList.toggle('show', view === 'editor');
+  // Update legacy tab bar (hidden) and new status bar view buttons
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.view === view));
+  document.querySelectorAll('.status-view-btn').forEach(b => b.classList.toggle('active', b.dataset.view === view));
+  // Update view menu entries
+  document.querySelectorAll('.tab-menu-entry').forEach(e => e.classList.toggle('active', e.dataset.view === view));
   if (view === 'pages') { syncAllText(); renderPages(); }
   if (view === 'text') { syncAllText(); renderText(); }
 }
@@ -383,30 +389,55 @@ export function initFileHandlers() {
     });
   });
 
-  // Export
-  $('btnExport').addEventListener('click', e => { e.stopPropagation(); $('exportMenu').classList.toggle('show'); });
-  document.addEventListener('click', e => {
-    if (!e.target.closest('.dropdown')) $('exportMenu').classList.remove('show');
-    if (!e.target.closest('.insert-dropdown')) $('insertMenu').classList.remove('show');
+  // Export — File menu entries with data-fmt attribute
+  document.querySelectorAll('.app-menu-entry[data-fmt]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      exportDoc(btn.dataset.fmt);
+      // Close the File menu after export
+      document.querySelectorAll('.app-menu-item').forEach(m => m.classList.remove('open'));
+    });
   });
-  $('exportMenu').querySelectorAll('.dropdown-item').forEach(btn => {
-    btn.addEventListener('click', e => { e.stopPropagation(); exportDoc(btn.dataset.fmt); $('exportMenu').classList.remove('show'); });
-  });
+  // Legacy export menu (hidden) — still wire for backwards compat
+  const exportMenu = $('exportMenu');
+  if (exportMenu) {
+    exportMenu.querySelectorAll('.dropdown-item').forEach(btn => {
+      btn.addEventListener('click', e => { e.stopPropagation(); exportDoc(btn.dataset.fmt); exportMenu.classList.remove('show'); });
+    });
+  }
 
-  // Tabs
+  // Tabs (legacy hidden tab bar)
   document.querySelectorAll('.tab').forEach(tab => {
     tab.addEventListener('click', () => switchView(tab.dataset.view));
+  });
+
+  // Status bar view buttons
+  document.querySelectorAll('.status-view-btn').forEach(btn => {
+    btn.addEventListener('click', () => switchView(btn.dataset.view));
+  });
+
+  // View menu entries
+  document.querySelectorAll('.tab-menu-entry').forEach(entry => {
+    entry.addEventListener('click', () => {
+      switchView(entry.dataset.view);
+      document.querySelectorAll('.app-menu-item').forEach(m => m.classList.remove('open'));
+    });
   });
 
   // Track changes
   $('btnAcceptAll').addEventListener('click', () => {
     if (!state.doc) return;
-    try { state.doc.accept_all_changes(); renderDocument(); updateTrackChanges(); }
-    catch (e) { console.error('accept:', e); }
+    try {
+      state.doc.accept_all_changes();
+      broadcastOp({ action: 'acceptAllChanges' });
+      renderDocument(); updateTrackChanges();
+    } catch (e) { console.error('accept:', e); }
   });
   $('btnRejectAll').addEventListener('click', () => {
     if (!state.doc) return;
-    try { state.doc.reject_all_changes(); renderDocument(); updateTrackChanges(); }
-    catch (e) { console.error('reject:', e); }
+    try {
+      state.doc.reject_all_changes();
+      broadcastOp({ action: 'rejectAllChanges' });
+      renderDocument(); updateTrackChanges();
+    } catch (e) { console.error('reject:', e); }
   });
 }

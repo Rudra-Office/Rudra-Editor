@@ -6,6 +6,11 @@ import { updateUndoRedo } from './toolbar.js';
 import { markDirty, updateTrackChanges, updateStatusBar } from './file.js';
 import { broadcastTextSync, broadcastOp } from './collab.js';
 
+// ═══════════════════════════════════════════════════
+// E8.4: Large-document warning threshold
+// ═══════════════════════════════════════════════════
+const LARGE_DOC_PARAGRAPH_THRESHOLD = 500;
+
 export function renderDocument() {
   const { doc } = state;
   if (!doc) return;
@@ -16,6 +21,8 @@ export function renderDocument() {
     state.ignoreInput = true;
     const page = $('docPage');
     page.innerHTML = html;
+    // E8.2: Clear the nodeIdToElement map on full re-render (DOM is rebuilt)
+    state.nodeIdToElement.clear();
     // Extract header/footer HTML from WASM output, then remove the elements.
     // The pagination system will render them per-page instead.
     const hdrEl = page.querySelector(':scope > header');
@@ -27,13 +34,19 @@ export function renderDocument() {
     fixEmptyBlocks();
     setupImages();
     cacheAllText();
+    // E8.2: Populate nodeIdToElement map from freshly rendered DOM
+    populateNodeIdMap();
     setupTrackChangeHandlers();
     state.ignoreInput = false;
     state.pagesRendered = false;
+    // Apply page dimensions from WASM before pagination
+    applyPageDimensions();
     updatePageBreaks();
     updateUndoRedo();
     updateTrackChanges();
     updateStatusBar();
+    // E8.4: Show document size warning if paragraph count exceeds threshold
+    checkLargeDocumentWarning();
     // E-19: Re-apply zoom level after full re-render (DOM is rebuilt)
     if (state.zoomLevel && state.zoomLevel !== 100) {
       page.style.transform = `scale(${state.zoomLevel / 100})`;
@@ -138,20 +151,127 @@ function showTcPopup(el) {
   setTimeout(() => document.addEventListener('click', dismiss, true), 0);
 }
 
+/**
+ * Read page dimensions from WASM sections and apply to .doc-page.
+ * Sets width, min-height, and padding (margins) from actual document properties.
+ * Falls back to CSS defaults (US Letter, 1" margins) if WASM data unavailable.
+ */
+export function applyPageDimensions() {
+  const page = $('docPage');
+  if (!page || !state.doc) return;
+
+  const ptToPx = 96 / 72; // 1pt = 1.333px
+
+  try {
+    const json = state.doc.get_sections_json();
+    const sections = JSON.parse(json);
+    if (sections.length > 0) {
+      // Use first section for the page container dimensions
+      const sec = sections[0];
+      const widthPt = sec.pageWidth || 612;
+      const heightPt = sec.pageHeight || 792;
+      const marginTopPt = sec.marginTop || 72;
+      const marginBottomPt = sec.marginBottom || 72;
+      const marginLeftPt = sec.marginLeft || 72;
+      const marginRightPt = sec.marginRight || 72;
+
+      const widthPx = Math.round(widthPt * ptToPx);
+      const heightPx = Math.round(heightPt * ptToPx);
+      const marginTopPx = Math.round(marginTopPt * ptToPx);
+      const marginBottomPx = Math.round(marginBottomPt * ptToPx);
+      const marginLeftPx = Math.round(marginLeftPt * ptToPx);
+      const marginRightPx = Math.round(marginRightPt * ptToPx);
+
+      page.style.width = widthPx + 'px';
+      page.style.minHeight = heightPx + 'px';
+      page.style.paddingTop = marginTopPx + 'px';
+      page.style.paddingBottom = marginBottomPx + 'px';
+      page.style.paddingLeft = marginLeftPx + 'px';
+      page.style.paddingRight = marginRightPx + 'px';
+
+      // Store for pagination and ruler
+      state.pageDims = {
+        widthPt, heightPt,
+        marginTopPt, marginBottomPt,
+        marginLeftPt, marginRightPt,
+      };
+    }
+  } catch (_) {
+    // CSS defaults apply (US Letter, 1" margins)
+  }
+}
+
+// ═══════════════════════════════════════════════════
+// E8.2: nodeIdToElement map — O(1) DOM lookups
+// ═══════════════════════════════════════════════════
+
+/**
+ * Populate the nodeIdToElement map by scanning all [data-node-id] elements
+ * currently in the docPage. Called after full re-render.
+ */
+function populateNodeIdMap() {
+  const map = state.nodeIdToElement;
+  map.clear();
+  const page = $('docPage');
+  if (!page) return;
+  page.querySelectorAll('[data-node-id]').forEach(el => {
+    map.set(el.dataset.nodeId, el);
+  });
+}
+
+/**
+ * E8.2: Fast lookup of a DOM element by node ID.
+ * Uses the cached map first, falls back to querySelector if not found
+ * (the map entry may be stale or the element may have been added after
+ * the last populateNodeIdMap call). Validates the cached element is still
+ * attached to the DOM before returning it.
+ */
+export function lookupNodeElement(nodeIdStr) {
+  const cached = state.nodeIdToElement.get(nodeIdStr);
+  if (cached && cached.isConnected) return cached;
+  // Fallback: querySelector and update cache
+  const page = $('docPage');
+  if (!page) return null;
+  const el = page.querySelector(`[data-node-id="${nodeIdStr}"]`);
+  if (el) state.nodeIdToElement.set(nodeIdStr, el);
+  else state.nodeIdToElement.delete(nodeIdStr);
+  return el;
+}
+
+// ═══════════════════════════════════════════════════
+// E8.2: Incremental DOM patching in renderNodeById
+// ═══════════════════════════════════════════════════
+
 export function renderNodeById(nodeIdStr) {
   const { doc } = state;
   if (!doc) return null;
   try {
     const html = doc.render_node_html(nodeIdStr);
-    // E-05: Always re-query the DOM to get the current element, avoiding stale references
-    const el = $('docPage').querySelector(`[data-node-id="${nodeIdStr}"]`);
+    // E8.2: Use lookupNodeElement for O(1) lookup, falling back to querySelector
+    const el = lookupNodeElement(nodeIdStr);
     if (!el) return null;
+
+    // E8.2: Incremental DOM patching — parse new HTML and compare before replacing
     const temp = document.createElement('div');
     temp.innerHTML = html;
     const newEl = temp.firstElementChild;
     if (!newEl) return null;
     if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
+
+    // Compare outerHTML: if identical, skip the DOM replacement entirely
+    if (el.outerHTML === newEl.outerHTML) {
+      // Content is unchanged — no DOM mutation needed
+      state.syncedTextCache.set(nodeIdStr, el.textContent || '');
+      return el;
+    }
+
     el.replaceWith(newEl);
+    // E8.2: Update the nodeIdToElement map with the new element
+    state.nodeIdToElement.set(nodeIdStr, newEl);
+    // Also register any child node IDs (e.g., runs inside a paragraph)
+    newEl.querySelectorAll('[data-node-id]').forEach(child => {
+      state.nodeIdToElement.set(child.dataset.nodeId, child);
+    });
     setupImages(newEl);
     state.syncedTextCache.set(nodeIdStr, newEl.textContent || '');
     return newEl;
@@ -292,6 +412,27 @@ export function renderText() {
 }
 
 // ═══════════════════════════════════════════════════
+// E8.4: Large-document warning in status bar
+// ═══════════════════════════════════════════════════
+
+function checkLargeDocumentWarning() {
+  const page = $('docPage');
+  if (!page) return;
+  const paraCount = page.querySelectorAll(
+    'p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]'
+  ).length;
+  const info = $('statusInfo');
+  if (paraCount > LARGE_DOC_PARAGRAPH_THRESHOLD && info) {
+    // Append warning to status bar (will be overwritten by next updateStatusBar
+    // call, so we set the _userMsg flag to keep it visible briefly)
+    info._userMsg = true;
+    info.textContent = `Large document: ${paraCount} paragraphs. Performance may be affected.`;
+    // Clear after 5 seconds so normal status resumes
+    setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 5000);
+  }
+}
+
+// ═══════════════════════════════════════════════════
 // VIRTUAL SCROLLING — for documents with 100+ blocks
 // ═══════════════════════════════════════════════════
 
@@ -310,9 +451,53 @@ function getBlockElements() {
   });
 }
 
+/**
+ * E8.1: Check whether virtual scrolling should be suppressed.
+ * Returns true if virtual scrolling must NOT run right now.
+ * Guards:
+ *   1. Find/replace bar is open — collapsing blocks breaks highlighting
+ *   2. Selection spans across many paragraphs — collapsing would disrupt it
+ */
+function isVirtualScrollSuppressed() {
+  // Guard 1: find/replace bar is open
+  const findBar = $('findBar');
+  if (findBar && findBar.classList.contains('show')) return true;
+
+  // Guard 2: selection spans multiple paragraphs
+  const sel = window.getSelection();
+  if (sel && sel.rangeCount > 0 && !sel.isCollapsed) {
+    const range = sel.getRangeAt(0);
+    const page = $('docPage');
+    if (page) {
+      // Count how many block-level [data-node-id] elements the selection spans
+      const startBlock = findAncestorBlock(range.startContainer, page);
+      const endBlock = findAncestorBlock(range.endContainer, page);
+      if (startBlock && endBlock && startBlock !== endBlock) {
+        // Selection crosses at least two blocks — suppress virtual scroll
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/** Walk up to find the nearest block-level ancestor with data-node-id under page */
+function findAncestorBlock(node, page) {
+  let n = node;
+  while (n && n !== page) {
+    if (n.nodeType === 1 && n.dataset?.nodeId) {
+      const tag = n.tagName.toLowerCase();
+      if (tag === 'p' || /^h[1-6]$/.test(tag) || tag === 'table') return n;
+    }
+    n = n.parentNode;
+  }
+  return null;
+}
+
 function maybeInitVirtualScroll() {
   const blocks = getBlockElements();
   if (blocks.length < VS_THRESHOLD) return;
+  if (isVirtualScrollSuppressed()) return;
   initVirtualScroll(blocks);
 }
 
@@ -336,8 +521,9 @@ function initVirtualScroll(blocks) {
   const bufferPx = VS_BUFFER * 30; // ~30px per block estimate for buffer
   const observer = new IntersectionObserver((ioEntries) => {
     if (!state.virtualScroll) return;
+    // E8.1: Re-check suppression on every observer callback
+    if (isVirtualScrollSuppressed()) return;
     const vs = state.virtualScroll;
-    let needsUpdate = false;
 
     for (const ioe of ioEntries) {
       const el = ioe.target;
@@ -349,11 +535,9 @@ function initVirtualScroll(blocks) {
       if (ioe.isIntersecting && !entry.visible) {
         // Coming into view — restore real content
         restoreBlock(entry, idx);
-        needsUpdate = true;
       } else if (!ioe.isIntersecting && entry.visible) {
         // Going out of view — replace with placeholder
         collapseBlock(entry, idx, vs);
-        needsUpdate = true;
       }
     }
   }, {
@@ -374,6 +558,8 @@ function initVirtualScroll(blocks) {
 
 function collapseBlock(entry, idx, vs) {
   if (!entry.visible || !entry.el || !entry.el.parentNode) return;
+  // E8.1: Don't collapse if virtual scroll is suppressed (find/replace, multi-para selection)
+  if (isVirtualScrollSuppressed()) return;
   // Don't collapse blocks that have focus or selection inside them
   const sel = window.getSelection();
   if (sel && sel.rangeCount > 0) {
@@ -406,6 +592,8 @@ function collapseBlock(entry, idx, vs) {
   placeholder.dataset.vsIndex = String(idx);
 
   entry.el.replaceWith(placeholder);
+  // E8.2: Update nodeIdToElement map — placeholder now holds the nodeId
+  if (entry.nodeId) state.nodeIdToElement.set(entry.nodeId, placeholder);
   // Unobserve old element, observe placeholder
   vs.observer.unobserve(entry.el);
   entry.el = placeholder;
@@ -451,6 +639,15 @@ function restoreBlock(entry, idx) {
   vs.indexMap.set(newEl, idx);
   vs.observer.observe(newEl);
   entry.visible = true;
+
+  // E8.2: Update nodeIdToElement map with restored real element
+  if (entry.nodeId) {
+    state.nodeIdToElement.set(entry.nodeId, newEl);
+    // Also register child node IDs
+    newEl.querySelectorAll('[data-node-id]').forEach(child => {
+      state.nodeIdToElement.set(child.dataset.nodeId, child);
+    });
+  }
 
   // Re-run fixup on restored element
   if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
