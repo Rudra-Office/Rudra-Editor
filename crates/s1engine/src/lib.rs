@@ -417,7 +417,10 @@ mod tests {
             .build();
         let font_db = s1_text::FontDatabase::empty();
         let result = doc.layout(&font_db).unwrap();
-        assert!(!result.pages.is_empty(), "layout should return at least 1 page");
+        assert!(
+            !result.pages.is_empty(),
+            "layout should return at least 1 page"
+        );
         let page = &result.pages[0];
         // Default letter size
         assert!((page.width - 612.0).abs() < 0.01);
@@ -433,10 +436,7 @@ mod tests {
 
     /// Helper: create a document with a paragraph containing a run marked
     /// with a revision attribute. Returns (doc, run_node_id).
-    fn make_tracked_doc(
-        rev_type: &str,
-        text: &str,
-    ) -> (Document, NodeId) {
+    fn make_tracked_doc(rev_type: &str, text: &str) -> (Document, NodeId) {
         let mut doc = Document::new();
         let body_id = doc.body_id().unwrap();
 
@@ -460,10 +460,8 @@ mod tests {
             AttributeKey::RevisionDate,
             AttributeValue::String("2026-03-13T10:00:00Z".to_string()),
         );
-        run.attributes.set(
-            AttributeKey::RevisionId,
-            AttributeValue::Int(42),
-        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(42));
         model.insert_node(para_id, 0, run).unwrap();
 
         let text_id = model.next_id();
@@ -488,8 +486,14 @@ mod tests {
 
         // Revision attributes should be gone
         let node = doc.node(run_id).unwrap();
-        assert!(node.attributes.get_string(&AttributeKey::RevisionType).is_none());
-        assert!(node.attributes.get_string(&AttributeKey::RevisionAuthor).is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionAuthor)
+            .is_none());
 
         // Content should still be there
         assert!(doc.to_plain_text().contains("inserted text"));
@@ -549,8 +553,14 @@ mod tests {
 
         // Node should still be there
         let node = doc.node(run_id).unwrap();
-        assert!(node.attributes.get_string(&AttributeKey::RevisionType).is_none());
-        assert!(node.attributes.get_string(&AttributeKey::RevisionAuthor).is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionAuthor)
+            .is_none());
 
         // Content should still be there (un-deleted)
         assert!(doc.to_plain_text().contains("deleted text"));
@@ -599,7 +609,10 @@ mod tests {
 
         // First run has no revision attrs but content remains
         let node1 = doc.node(run_id1).unwrap();
-        assert!(node1.attributes.get_string(&AttributeKey::RevisionType).is_none());
+        assert!(node1
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
         assert!(doc.to_plain_text().contains("first insert"));
     }
 

@@ -37,8 +37,7 @@ pub fn parse_settings_xml(xml: &str) -> Result<OdtSettings, OdtError> {
                     current_name = None;
                     for attr in e.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"name" {
-                            current_name =
-                                Some(String::from_utf8_lossy(&attr.value).to_string());
+                            current_name = Some(String::from_utf8_lossy(&attr.value).to_string());
                         }
                     }
                     in_config_item = true;

@@ -71,20 +71,33 @@ fn open_real_docx_freetestdata_100kb() {
         return;
     };
     let engine = Engine::new();
-    let doc = engine.open(&bytes).expect("should open 100kb DOCX without error");
+    let doc = engine
+        .open(&bytes)
+        .expect("should open 100kb DOCX without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "100kb DOCX should contain some text");
+    assert!(
+        !text.trim().is_empty(),
+        "100kb DOCX should contain some text"
+    );
 
     // Structure check
     let para_count = count_all_nodes_of_type(&doc, NodeType::Paragraph);
-    assert!(para_count >= 1, "should have at least 1 paragraph, got {}", para_count);
+    assert!(
+        para_count >= 1,
+        "should have at least 1 paragraph, got {}",
+        para_count
+    );
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("DOCX -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("DOCX -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 
     // Cross-format: export to ODT
-    let odt_bytes = doc.export(Format::Odt).expect("DOCX -> ODT export should succeed");
+    let odt_bytes = doc
+        .export(Format::Odt)
+        .expect("DOCX -> ODT export should succeed");
     assert!(!odt_bytes.is_empty(), "ODT export should be non-empty");
 
     // Verify ODT can be reopened
@@ -103,12 +116,19 @@ fn open_real_docx_freetestdata_500kb() {
         return;
     };
     let engine = Engine::new();
-    let doc = engine.open(&bytes).expect("should open 500kb DOCX without error");
+    let doc = engine
+        .open(&bytes)
+        .expect("should open 500kb DOCX without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "500kb DOCX should contain some text");
+    assert!(
+        !text.trim().is_empty(),
+        "500kb DOCX should contain some text"
+    );
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("DOCX -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("DOCX -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 }
 
@@ -118,12 +138,16 @@ fn open_real_docx_freetestdata_1mb() {
         return;
     };
     let engine = Engine::new();
-    let doc = engine.open(&bytes).expect("should open 1mb DOCX without error");
+    let doc = engine
+        .open(&bytes)
+        .expect("should open 1mb DOCX without error");
     let text = doc.to_plain_text();
     assert!(!text.trim().is_empty(), "1mb DOCX should contain some text");
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("DOCX -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("DOCX -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 }
 
@@ -133,12 +157,19 @@ fn open_real_docx_calibre_demo() {
         return;
     };
     let engine = Engine::new();
-    let doc = engine.open(&bytes).expect("should open calibre_demo DOCX without error");
+    let doc = engine
+        .open(&bytes)
+        .expect("should open calibre_demo DOCX without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "calibre_demo DOCX should contain some text");
+    assert!(
+        !text.trim().is_empty(),
+        "calibre_demo DOCX should contain some text"
+    );
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("DOCX -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("DOCX -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 
     // Cross-format: export to ODT (may fail for complex documents with
@@ -163,7 +194,9 @@ fn open_real_docx_demo_document() {
         return;
     };
     let engine = Engine::new();
-    let doc = engine.open(&bytes).expect("should open demo document.docx without error");
+    let doc = engine
+        .open(&bytes)
+        .expect("should open demo document.docx without error");
     let text = doc.to_plain_text();
     // The demo document may or may not have text, just verify it opens
     eprintln!(
@@ -173,7 +206,9 @@ fn open_real_docx_demo_document() {
     );
 
     // Cross-format: export to TXT should not panic
-    let _txt_bytes = doc.export(Format::Txt).expect("DOCX -> TXT export should succeed");
+    let _txt_bytes = doc
+        .export(Format::Txt)
+        .expect("DOCX -> TXT export should succeed");
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
@@ -190,14 +225,21 @@ fn open_real_odt_freetestdata_100kb() {
         .open_as(&bytes, Format::Odt)
         .expect("should open 100kb ODT without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "100kb ODT should contain some text");
+    assert!(
+        !text.trim().is_empty(),
+        "100kb ODT should contain some text"
+    );
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("ODT -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("ODT -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 
     // Cross-format: export to DOCX
-    let docx_bytes = doc.export(Format::Docx).expect("ODT -> DOCX export should succeed");
+    let docx_bytes = doc
+        .export(Format::Docx)
+        .expect("ODT -> DOCX export should succeed");
     assert!(!docx_bytes.is_empty(), "DOCX export should be non-empty");
 
     // Verify DOCX can be reopened
@@ -220,10 +262,15 @@ fn open_real_odt_freetestdata_500kb() {
         .open_as(&bytes, Format::Odt)
         .expect("should open 500kb ODT without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "500kb ODT should contain some text");
+    assert!(
+        !text.trim().is_empty(),
+        "500kb ODT should contain some text"
+    );
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("ODT -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("ODT -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 }
 
@@ -240,7 +287,9 @@ fn open_real_odt_freetestdata_1mb() {
     assert!(!text.trim().is_empty(), "1mb ODT should contain some text");
 
     // Cross-format: export to TXT
-    let txt_bytes = doc.export(Format::Txt).expect("ODT -> TXT export should succeed");
+    let txt_bytes = doc
+        .export(Format::Txt)
+        .expect("ODT -> TXT export should succeed");
     assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 }
 
@@ -305,7 +354,9 @@ fn open_real_txt_moby_dick() {
     );
 
     // Cross-format: export to DOCX
-    let docx_bytes = doc.export(Format::Docx).expect("TXT -> DOCX export should succeed");
+    let docx_bytes = doc
+        .export(Format::Docx)
+        .expect("TXT -> DOCX export should succeed");
     assert!(!docx_bytes.is_empty(), "DOCX export should be non-empty");
 
     // Verify DOCX can be reopened
@@ -332,7 +383,10 @@ fn open_real_md_markdown_here_readme() {
         .open_as(&bytes, Format::Md)
         .expect("should open markdown_here_readme.md without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "markdown_here_readme.md should contain text");
+    assert!(
+        !text.trim().is_empty(),
+        "markdown_here_readme.md should contain text"
+    );
     assert!(
         text.len() > 50,
         "expected substantial Markdown content, got {} chars",
@@ -361,7 +415,9 @@ fn open_real_md_markdown_here_readme() {
     assert!(!txt_exported.is_empty(), "TXT export should be non-empty");
 
     // Cross-format: export to DOCX
-    let docx_bytes = doc.export(Format::Docx).expect("MD -> DOCX export should succeed");
+    let docx_bytes = doc
+        .export(Format::Docx)
+        .expect("MD -> DOCX export should succeed");
     assert!(!docx_bytes.is_empty(), "DOCX export should be non-empty");
 
     // Verify DOCX can be reopened
@@ -384,7 +440,10 @@ fn open_real_md_markdown_test() {
         .open_as(&bytes, Format::Md)
         .expect("should open markdown_test.md without error");
     let text = doc.to_plain_text();
-    assert!(!text.trim().is_empty(), "markdown_test.md should contain text");
+    assert!(
+        !text.trim().is_empty(),
+        "markdown_test.md should contain text"
+    );
 
     // Export round-trip: MD -> model -> MD
     let exported = doc
@@ -393,7 +452,9 @@ fn open_real_md_markdown_test() {
     assert!(!exported.is_empty(), "MD re-export should be non-empty");
 
     // Cross-format: export to ODT
-    let odt_bytes = doc.export(Format::Odt).expect("MD -> ODT export should succeed");
+    let odt_bytes = doc
+        .export(Format::Odt)
+        .expect("MD -> ODT export should succeed");
     assert!(!odt_bytes.is_empty(), "ODT export should be non-empty");
 
     // Verify ODT can be reopened
@@ -424,7 +485,10 @@ mod doc_legacy {
             .open_as(&bytes, Format::Doc)
             .expect("should open 100kb DOC without error");
         let text = doc.to_plain_text();
-        assert!(!text.trim().is_empty(), "100kb DOC should contain some text");
+        assert!(
+            !text.trim().is_empty(),
+            "100kb DOC should contain some text"
+        );
         eprintln!(
             "DOC 100kb: {} chars, {} paragraphs",
             text.len(),
@@ -433,10 +497,16 @@ mod doc_legacy {
 
         // Structure check
         let para_count = count_all_nodes_of_type(&doc, NodeType::Paragraph);
-        assert!(para_count >= 1, "DOC should have at least 1 paragraph, got {}", para_count);
+        assert!(
+            para_count >= 1,
+            "DOC should have at least 1 paragraph, got {}",
+            para_count
+        );
 
         // Cross-format: export to TXT
-        let txt_bytes = doc.export(Format::Txt).expect("DOC -> TXT export should succeed");
+        let txt_bytes = doc
+            .export(Format::Txt)
+            .expect("DOC -> TXT export should succeed");
         assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
 
         // Cross-format: export to DOCX
@@ -465,7 +535,10 @@ mod doc_legacy {
             .open_as(&bytes, Format::Doc)
             .expect("should open 500kb DOC without error");
         let text = doc.to_plain_text();
-        assert!(!text.trim().is_empty(), "500kb DOC should contain some text");
+        assert!(
+            !text.trim().is_empty(),
+            "500kb DOC should contain some text"
+        );
         eprintln!(
             "DOC 500kb: {} chars, {} paragraphs",
             text.len(),
@@ -473,7 +546,9 @@ mod doc_legacy {
         );
 
         // Cross-format: export to TXT
-        let txt_bytes = doc.export(Format::Txt).expect("DOC -> TXT export should succeed");
+        let txt_bytes = doc
+            .export(Format::Txt)
+            .expect("DOC -> TXT export should succeed");
         assert!(!txt_bytes.is_empty(), "TXT export should be non-empty");
     }
 }
@@ -615,7 +690,11 @@ fn docx_to_odt_conversion() {
         // filenames, so treat failures as non-fatal)
         match doc.export(Format::Odt) {
             Ok(odt_bytes) => {
-                assert!(!odt_bytes.is_empty(), "{}: exported ODT bytes are empty", path);
+                assert!(
+                    !odt_bytes.is_empty(),
+                    "{}: exported ODT bytes are empty",
+                    path
+                );
 
                 // Re-open the ODT to verify validity
                 let odt_doc = engine

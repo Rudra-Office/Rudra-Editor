@@ -44,6 +44,8 @@ pub struct LayoutPage {
     pub header: Option<LayoutBlock>,
     /// Footer content (if any).
     pub footer: Option<LayoutBlock>,
+    /// Footnote blocks laid out at the bottom of the page.
+    pub footnotes: Vec<LayoutBlock>,
     /// 0-based section index this page belongs to.
     pub section_index: usize,
 }
@@ -89,6 +91,8 @@ pub enum LayoutBlockKind {
         indent_first_line: f64,
         /// Line height as a CSS-compatible value (e.g., 1.15 for 115%).
         line_height: Option<f64>,
+        /// Whether this paragraph has right-to-left (BiDi) direction.
+        bidi: bool,
     },
     /// A table with rows.
     Table {

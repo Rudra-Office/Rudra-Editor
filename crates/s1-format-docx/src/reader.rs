@@ -12,7 +12,9 @@ use zip::ZipArchive;
 
 use crate::comments_parser::parse_comments_xml;
 use crate::content_parser::parse_document_xml;
+use crate::endnotes_parser::parse_endnotes_xml;
 use crate::error::DocxError;
+use crate::footnotes_parser::parse_footnotes_xml;
 use crate::header_footer_parser::{parse_footer_xml, parse_header_xml};
 use crate::metadata_parser::parse_core_xml;
 use crate::numbering_parser::parse_numbering_xml;
@@ -120,6 +122,16 @@ pub fn read(input: &[u8]) -> Result<DocumentModel, DocxError> {
     // Parse comments (word/comments.xml)
     if let Ok(comments_xml) = read_zip_entry(&mut archive, "word/comments.xml") {
         let _ = parse_comments_xml(&comments_xml, &mut doc)?;
+    }
+
+    // Parse footnotes (word/footnotes.xml)
+    if let Ok(footnotes_xml) = read_zip_entry(&mut archive, "word/footnotes.xml") {
+        let _ = parse_footnotes_xml(&footnotes_xml, &mut doc)?;
+    }
+
+    // Parse endnotes (word/endnotes.xml)
+    if let Ok(endnotes_xml) = read_zip_entry(&mut archive, "word/endnotes.xml") {
+        let _ = parse_endnotes_xml(&endnotes_xml, &mut doc)?;
     }
 
     Ok(doc)

@@ -129,8 +129,7 @@ fn write_body(
                     }
 
                     // At the same depth, close previous list-item (sibling)
-                    if list_depth == target_depth
-                        && list_item_open.last().copied().unwrap_or(false)
+                    if list_depth == target_depth && list_item_open.last().copied().unwrap_or(false)
                     {
                         xml.push_str("</text:list-item>");
                         if let Some(last) = list_item_open.last_mut() {
@@ -1357,8 +1356,7 @@ mod tests {
         doc.insert_node(p0, 0, Node::new(r0, NodeType::Run))
             .unwrap();
         let t0 = doc.next_id();
-        doc.insert_node(r0, 0, Node::text(t0, "Level 0"))
-            .unwrap();
+        doc.insert_node(r0, 0, Node::text(t0, "Level 0")).unwrap();
 
         // Level 1 item
         let p1 = doc.next_id();
@@ -1377,8 +1375,7 @@ mod tests {
         doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
             .unwrap();
         let t1 = doc.next_id();
-        doc.insert_node(r1, 0, Node::text(t1, "Level 1"))
-            .unwrap();
+        doc.insert_node(r1, 0, Node::text(t1, "Level 1")).unwrap();
 
         // Level 2 item
         let p2 = doc.next_id();
@@ -1397,8 +1394,7 @@ mod tests {
         doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
             .unwrap();
         let t2 = doc.next_id();
-        doc.insert_node(r2, 0, Node::text(t2, "Level 2"))
-            .unwrap();
+        doc.insert_node(r2, 0, Node::text(t2, "Level 2")).unwrap();
 
         // Write to ODT and extract content.xml
         let odt_bytes = crate::write(&doc).unwrap();

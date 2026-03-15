@@ -340,6 +340,32 @@ fn parse_paragraph(
                             ctx,
                         )?;
                     }
+                    // Inline equation: <m:oMath>
+                    b"oMath" => {
+                        let raw_xml = capture_element_xml(reader, &e)?;
+                        let eq_id = doc.next_id();
+                        let mut eq_node = Node::new(eq_id, NodeType::Equation);
+                        eq_node.attributes.set(
+                            AttributeKey::EquationSource,
+                            AttributeValue::String(raw_xml),
+                        );
+                        doc.insert_node(para_id, child_index, eq_node)
+                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                        child_index += 1;
+                    }
+                    // Display (block) equation: <m:oMathPara>
+                    b"oMathPara" => {
+                        let raw_xml = capture_element_xml(reader, &e)?;
+                        let eq_id = doc.next_id();
+                        let mut eq_node = Node::new(eq_id, NodeType::Equation);
+                        eq_node.attributes.set(
+                            AttributeKey::EquationSource,
+                            AttributeValue::String(raw_xml),
+                        );
+                        doc.insert_node(para_id, child_index, eq_node)
+                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                        child_index += 1;
+                    }
                     b"ins" => {
                         let rev = extract_revision_attrs(&e, "Insert");
                         parse_tracked_inline_runs(
@@ -789,6 +815,10 @@ enum RunContent {
     Field(FieldType, String),
     /// A shape/drawing element with its raw VML/XML for round-trip preservation.
     Shape(ShapeInfo),
+    /// An inline footnote reference (w:id value).
+    FootnoteRef(String),
+    /// An inline endnote reference (w:id value).
+    EndnoteRef(String),
 }
 
 /// Information about a parsed shape.
@@ -965,6 +995,16 @@ fn parse_run(
                     b"fldChar" => {
                         handle_fld_char(&e, field_state, &mut content);
                     }
+                    b"footnoteReference" => {
+                        if let Some(id) = get_attr(&e, b"id") {
+                            content.push(RunContent::FootnoteRef(id));
+                        }
+                    }
+                    b"endnoteReference" => {
+                        if let Some(id) = get_attr(&e, b"id") {
+                            content.push(RunContent::EndnoteRef(id));
+                        }
+                    }
                     _ => {}
                 }
             }
@@ -1020,6 +1060,28 @@ fn parse_run(
             RunContent::Shape(info) => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
                 insert_shape_node(doc, para_id, child_index, &info)?;
+            }
+            RunContent::FootnoteRef(id) => {
+                flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
+                let ref_id = doc.next_id();
+                let mut ref_node = Node::new(ref_id, NodeType::FootnoteRef);
+                ref_node
+                    .attributes
+                    .set(AttributeKey::FootnoteNumber, AttributeValue::String(id));
+                doc.insert_node(para_id, *child_index, ref_node)
+                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                *child_index += 1;
+            }
+            RunContent::EndnoteRef(id) => {
+                flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
+                let ref_id = doc.next_id();
+                let mut ref_node = Node::new(ref_id, NodeType::EndnoteRef);
+                ref_node
+                    .attributes
+                    .set(AttributeKey::EndnoteNumber, AttributeValue::String(id));
+                doc.insert_node(para_id, *child_index, ref_node)
+                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                *child_index += 1;
             }
         }
     }
@@ -1185,10 +1247,18 @@ fn parse_drawing(
                     b"anchor" => {
                         is_floating = true;
                         // Extract distance attributes
-                        let dist_t = get_attr(&e, b"distT").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-                        let dist_b = get_attr(&e, b"distB").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-                        let dist_l = get_attr(&e, b"distL").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
-                        let dist_r = get_attr(&e, b"distR").and_then(|s| s.parse::<i64>().ok()).unwrap_or(0);
+                        let dist_t = get_attr(&e, b"distT")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0);
+                        let dist_b = get_attr(&e, b"distB")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0);
+                        let dist_l = get_attr(&e, b"distL")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0);
+                        let dist_r = get_attr(&e, b"distR")
+                            .and_then(|s| s.parse::<i64>().ok())
+                            .unwrap_or(0);
                         if dist_t != 0 || dist_b != 0 || dist_l != 0 || dist_r != 0 {
                             dist_from_text = Some((dist_t, dist_b, dist_l, dist_r));
                         }
@@ -1206,11 +1276,21 @@ fn parse_drawing(
                         pos_offset_text.clear();
                     }
                     // Wrap type detection
-                    b"wrapSquare" => { wrap_type = Some("square".to_string()); }
-                    b"wrapTight" => { wrap_type = Some("tight".to_string()); }
-                    b"wrapThrough" => { wrap_type = Some("through".to_string()); }
-                    b"wrapTopAndBottom" => { wrap_type = Some("topAndBottom".to_string()); }
-                    b"wrapNone" => { wrap_type = Some("none".to_string()); }
+                    b"wrapSquare" => {
+                        wrap_type = Some("square".to_string());
+                    }
+                    b"wrapTight" => {
+                        wrap_type = Some("tight".to_string());
+                    }
+                    b"wrapThrough" => {
+                        wrap_type = Some("through".to_string());
+                    }
+                    b"wrapTopAndBottom" => {
+                        wrap_type = Some("topAndBottom".to_string());
+                    }
+                    b"wrapNone" => {
+                        wrap_type = Some("none".to_string());
+                    }
                     b"extent" => {
                         if let Some(cx) = get_attr(&e, b"cx") {
                             width_pts = emu_to_points(&cx);
@@ -1244,11 +1324,21 @@ fn parse_drawing(
             Ok(Event::Empty(e)) => {
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
-                    b"wrapSquare" => { wrap_type = Some("square".to_string()); }
-                    b"wrapTight" => { wrap_type = Some("tight".to_string()); }
-                    b"wrapThrough" => { wrap_type = Some("through".to_string()); }
-                    b"wrapTopAndBottom" => { wrap_type = Some("topAndBottom".to_string()); }
-                    b"wrapNone" => { wrap_type = Some("none".to_string()); }
+                    b"wrapSquare" => {
+                        wrap_type = Some("square".to_string());
+                    }
+                    b"wrapTight" => {
+                        wrap_type = Some("tight".to_string());
+                    }
+                    b"wrapThrough" => {
+                        wrap_type = Some("through".to_string());
+                    }
+                    b"wrapTopAndBottom" => {
+                        wrap_type = Some("topAndBottom".to_string());
+                    }
+                    b"wrapNone" => {
+                        wrap_type = Some("none".to_string());
+                    }
                     b"extent" => {
                         if let Some(cx) = get_attr(&e, b"cx") {
                             width_pts = emu_to_points(&cx);
@@ -1287,8 +1377,12 @@ fn parse_drawing(
                             in_pos_offset = false;
                         }
                     }
-                    b"positionH" => { in_position_h = false; }
-                    b"positionV" => { in_position_v = false; }
+                    b"positionH" => {
+                        in_position_h = false;
+                    }
+                    b"positionV" => {
+                        in_position_v = false;
+                    }
                     _ => {}
                 }
                 depth -= 1;
@@ -1386,16 +1480,14 @@ fn insert_image_node(
             );
         }
         if let Some(ho) = info.h_offset {
-            image_node.attributes.set(
-                AttributeKey::ImageHorizontalOffset,
-                AttributeValue::Int(ho),
-            );
+            image_node
+                .attributes
+                .set(AttributeKey::ImageHorizontalOffset, AttributeValue::Int(ho));
         }
         if let Some(vo) = info.v_offset {
-            image_node.attributes.set(
-                AttributeKey::ImageVerticalOffset,
-                AttributeValue::Int(vo),
-            );
+            image_node
+                .attributes
+                .set(AttributeKey::ImageVerticalOffset, AttributeValue::Int(vo));
         }
         if let Some(ref hrf) = info.h_relative_from {
             image_node.attributes.set(
@@ -1428,9 +1520,7 @@ fn insert_image_node(
 ///
 /// Extracts shape type, dimensions, fill/stroke colors, and stores the raw XML
 /// for round-trip preservation of shapes.
-fn parse_pict(
-    reader: &mut Reader<&[u8]>,
-) -> Result<Option<ShapeInfo>, DocxError> {
+fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError> {
     let mut shape_type: Option<String> = None;
     let mut width_pts: Option<f64> = None;
     let mut height_pts: Option<f64> = None;
@@ -1447,10 +1537,14 @@ fn parse_pict(
                 depth += 1;
                 let name = e.local_name().as_ref().to_vec();
                 // Capture raw XML for round-trip
-                raw_parts.push(format!("<{}>", std::str::from_utf8(e.name().as_ref()).unwrap_or("?")));
+                raw_parts.push(format!(
+                    "<{}>",
+                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
+                ));
 
                 match name.as_slice() {
-                    b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline" | b"group" => {
+                    b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline"
+                    | b"group" => {
                         let type_name = String::from_utf8_lossy(&name).to_string();
                         shape_type = Some(type_name);
 
@@ -1471,7 +1565,10 @@ fn parse_pict(
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                raw_parts.push(format!("<{}/>", std::str::from_utf8(e.name().as_ref()).unwrap_or("?")));
+                raw_parts.push(format!(
+                    "<{}/>",
+                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
+                ));
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" => {
@@ -1496,7 +1593,10 @@ fn parse_pict(
                 }
             }
             Ok(Event::End(ref e)) => {
-                raw_parts.push(format!("</{}>", std::str::from_utf8(e.name().as_ref()).unwrap_or("?")));
+                raw_parts.push(format!(
+                    "</{}>",
+                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
+                ));
                 depth -= 1;
                 if depth == 0 {
                     break;
@@ -2197,6 +2297,64 @@ fn parse_tracked_inline_runs(
     }
 
     Ok(())
+}
+
+/// Capture an element and all its children as raw XML text.
+///
+/// The opening `<tag ...>` has already been consumed by the reader.
+/// `start` is the `BytesStart` from that event. This function reads events
+/// until the matching closing tag and returns the complete XML string
+/// (including opening and closing tags).
+fn capture_element_xml(
+    reader: &mut Reader<&[u8]>,
+    start: &quick_xml::events::BytesStart<'_>,
+) -> Result<String, DocxError> {
+    let mut xml = String::new();
+
+    // Reconstruct the opening tag: <name attrs...>
+    xml.push('<');
+    xml.push_str(std::str::from_utf8(start).unwrap_or("?"));
+    xml.push('>');
+
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                xml.push('<');
+                xml.push_str(std::str::from_utf8(e).unwrap_or("?"));
+                xml.push('>');
+            }
+            Ok(Event::Empty(ref e)) => {
+                xml.push('<');
+                xml.push_str(std::str::from_utf8(e).unwrap_or("?"));
+                xml.push_str("/>");
+            }
+            Ok(Event::Text(ref t)) => {
+                // Use the raw escaped text to preserve XML entities
+                xml.push_str(std::str::from_utf8(t.as_ref()).unwrap_or(""));
+            }
+            Ok(Event::End(ref e)) => {
+                depth -= 1;
+                xml.push_str("</");
+                xml.push_str(std::str::from_utf8(e.name().as_ref()).unwrap_or("?"));
+                xml.push('>');
+                if depth == 0 {
+                    break;
+                }
+            }
+            Ok(Event::CData(ref cd)) => {
+                xml.push_str("<![CDATA[");
+                xml.push_str(std::str::from_utf8(cd.as_ref()).unwrap_or(""));
+                xml.push_str("]]>");
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(xml)
 }
 
 /// Skip an element and all its children.
@@ -3820,7 +3978,8 @@ mod tests {
 
         // Verify horizontal positioning: column-relative, 914400 EMU offset
         assert_eq!(
-            img.attributes.get_string(&AttributeKey::ImageHorizontalRelativeFrom),
+            img.attributes
+                .get_string(&AttributeKey::ImageHorizontalRelativeFrom),
             Some("column")
         );
         assert_eq!(
@@ -3830,7 +3989,8 @@ mod tests {
 
         // Verify vertical positioning: paragraph-relative, 457200 EMU offset
         assert_eq!(
-            img.attributes.get_string(&AttributeKey::ImageVerticalRelativeFrom),
+            img.attributes
+                .get_string(&AttributeKey::ImageVerticalRelativeFrom),
             Some("paragraph")
         );
         assert_eq!(
@@ -3844,7 +4004,8 @@ mod tests {
 
         // Verify distance from text
         assert_eq!(
-            img.attributes.get_string(&AttributeKey::ImageDistanceFromText),
+            img.attributes
+                .get_string(&AttributeKey::ImageDistanceFromText),
             Some("45720,45720,114300,114300")
         );
 
@@ -3865,22 +4026,55 @@ mod tests {
         let rels = HashMap::new();
         let media = HashMap::new();
         let mut doc = DocumentModel::new();
-        parse_document_xml(&xml, &mut doc, &rels, &media, &s1_model::NumberingDefinitions::default()).unwrap();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
 
         let body_id = doc.body_id().unwrap();
         let body = doc.node(body_id).unwrap();
         let para = doc.node(body.children[0]).unwrap();
-        assert!(!para.children.is_empty(), "paragraph should have a drawing child");
+        assert!(
+            !para.children.is_empty(),
+            "paragraph should have a drawing child"
+        );
 
         let shape = doc.node(para.children[0]).unwrap();
         assert_eq!(shape.node_type, NodeType::Drawing);
-        assert_eq!(shape.attributes.get_string(&AttributeKey::ShapeType), Some("rect"));
-        assert!((shape.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap() - 200.0).abs() < 0.01);
-        assert!((shape.attributes.get_f64(&AttributeKey::ShapeHeight).unwrap() - 100.0).abs() < 0.01);
-        assert_eq!(shape.attributes.get_string(&AttributeKey::ShapeFillColor), Some("FF0000"));
-        assert_eq!(shape.attributes.get_string(&AttributeKey::ShapeStrokeColor), Some("0000FF"));
+        assert_eq!(
+            shape.attributes.get_string(&AttributeKey::ShapeType),
+            Some("rect")
+        );
+        assert!(
+            (shape.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap() - 200.0).abs() < 0.01
+        );
+        assert!(
+            (shape
+                .attributes
+                .get_f64(&AttributeKey::ShapeHeight)
+                .unwrap()
+                - 100.0)
+                .abs()
+                < 0.01
+        );
+        assert_eq!(
+            shape.attributes.get_string(&AttributeKey::ShapeFillColor),
+            Some("FF0000")
+        );
+        assert_eq!(
+            shape.attributes.get_string(&AttributeKey::ShapeStrokeColor),
+            Some("0000FF")
+        );
         // Raw XML should be preserved
-        assert!(shape.attributes.get_string(&AttributeKey::ShapeRawXml).unwrap().contains("w:pict"));
+        assert!(shape
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .unwrap()
+            .contains("w:pict"));
     }
 
     #[test]
@@ -3895,33 +4089,62 @@ mod tests {
         let rels = HashMap::new();
         let media = HashMap::new();
         let mut doc = DocumentModel::new();
-        parse_document_xml(&xml, &mut doc, &rels, &media, &s1_model::NumberingDefinitions::default()).unwrap();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
 
         let body_id = doc.body_id().unwrap();
         let body = doc.node(body_id).unwrap();
         let para = doc.node(body.children[0]).unwrap();
         let shape = doc.node(para.children[0]).unwrap();
         assert_eq!(shape.node_type, NodeType::Drawing);
-        assert_eq!(shape.attributes.get_string(&AttributeKey::ShapeType), Some("shape"));
+        assert_eq!(
+            shape.attributes.get_string(&AttributeKey::ShapeType),
+            Some("shape")
+        );
         // 2in = 144pt, 1in = 72pt
-        assert!((shape.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap() - 144.0).abs() < 0.01);
-        assert!((shape.attributes.get_f64(&AttributeKey::ShapeHeight).unwrap() - 72.0).abs() < 0.01);
+        assert!(
+            (shape.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap() - 144.0).abs() < 0.01
+        );
+        assert!(
+            (shape
+                .attributes
+                .get_f64(&AttributeKey::ShapeHeight)
+                .unwrap()
+                - 72.0)
+                .abs()
+                < 0.01
+        );
     }
 
     #[test]
     fn parse_empty_pict_no_shape() {
         // <w:pict> with no recognized shape element should produce no Drawing node
-        let xml = wrap_doc(
-            r#"<w:p><w:r><w:pict><o:OLEObject/></w:pict></w:r></w:p>"#,
-        );
+        let xml = wrap_doc(r#"<w:p><w:r><w:pict><o:OLEObject/></w:pict></w:r></w:p>"#);
         let rels = HashMap::new();
         let media = HashMap::new();
         let mut doc = DocumentModel::new();
-        parse_document_xml(&xml, &mut doc, &rels, &media, &s1_model::NumberingDefinitions::default()).unwrap();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
 
         let body_id = doc.body_id().unwrap();
         let body = doc.node(body_id).unwrap();
         let para = doc.node(body.children[0]).unwrap();
-        assert_eq!(para.children.len(), 0, "no shape should be created for OLE-only pict");
+        assert_eq!(
+            para.children.len(),
+            0,
+            "no shape should be created for OLE-only pict"
+        );
     }
 }

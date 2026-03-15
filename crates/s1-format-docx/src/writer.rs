@@ -10,7 +10,9 @@ use zip::ZipWriter;
 
 use crate::comments_writer::write_comments_xml;
 use crate::content_writer::{write_document_xml, HyperlinkRelEntry, ImageRelEntry};
+use crate::endnotes_writer::write_endnotes_xml;
 use crate::error::DocxError;
+use crate::footnotes_writer::write_footnotes_xml;
 use crate::header_footer_writer::{write_footer_xml, write_header_xml};
 use crate::metadata_writer::write_core_xml;
 use crate::numbering_writer::write_numbering_xml;
@@ -38,6 +40,10 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
     let has_numbering = numbering_xml.is_some();
     let comments_xml = write_comments_xml(doc);
     let has_comments = comments_xml.is_some();
+    let footnotes_xml = write_footnotes_xml(doc);
+    let has_footnotes = footnotes_xml.is_some();
+    let endnotes_xml = write_endnotes_xml(doc);
+    let has_endnotes = endnotes_xml.is_some();
 
     // Generate header/footer XML files and collect relationship info
     let mut hf_parts: Vec<HfPartEntry> = Vec::new();
@@ -100,6 +106,8 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
             has_core,
             has_numbering,
             has_comments,
+            has_footnotes,
+            has_endnotes,
             &image_extensions,
             &hf_parts,
         )
@@ -117,6 +125,8 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
             has_styles,
             has_numbering,
             has_comments,
+            has_footnotes,
+            has_endnotes,
             &image_rels,
             &hf_parts,
             &hyperlink_rels,
@@ -169,6 +179,18 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
     if let Some(ref cxml) = comments_xml {
         zip.start_file("word/comments.xml", options)?;
         zip.write_all(cxml.as_bytes())?;
+    }
+
+    // word/footnotes.xml (optional)
+    if let Some(ref fxml) = footnotes_xml {
+        zip.start_file("word/footnotes.xml", options)?;
+        zip.write_all(fxml.as_bytes())?;
+    }
+
+    // word/endnotes.xml (optional)
+    if let Some(ref exml) = endnotes_xml {
+        zip.start_file("word/endnotes.xml", options)?;
+        zip.write_all(exml.as_bytes())?;
     }
 
     // docProps/core.xml (optional)
@@ -482,6 +504,24 @@ fn write_paragraph_with_section(
                 }
                 i += 1;
             }
+            NodeType::FootnoteRef => {
+                if let Some(fid) = child.attributes.get_string(&AttributeKey::FootnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{}"/></w:r>"#,
+                        crate::xml_writer::escape_xml(fid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::EndnoteRef => {
+                if let Some(eid) = child.attributes.get_string(&AttributeKey::EndnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:endnoteReference w:id="{}"/></w:r>"#,
+                        crate::xml_writer::escape_xml(eid)
+                    ));
+                }
+                i += 1;
+            }
             _ => {
                 i += 1;
             }
@@ -510,11 +550,14 @@ fn build_hf_rel_entries(
 }
 
 /// Generate `[Content_Types].xml`.
+#[allow(clippy::too_many_arguments)]
 fn content_types_xml(
     has_styles: bool,
     has_core: bool,
     has_numbering: bool,
     has_comments: bool,
+    has_footnotes: bool,
+    has_endnotes: bool,
     image_extensions: &std::collections::HashSet<&str>,
     hf_parts: &[HfPartEntry],
 ) -> String {
@@ -558,6 +601,20 @@ fn content_types_xml(
         xml.push_str(
             r#"
   <Override PartName="/word/comments.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.comments+xml"/>"#,
+        );
+    }
+
+    if has_footnotes {
+        xml.push_str(
+            r#"
+  <Override PartName="/word/footnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.footnotes+xml"/>"#,
+        );
+    }
+
+    if has_endnotes {
+        xml.push_str(
+            r#"
+  <Override PartName="/word/endnotes.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.endnotes+xml"/>"#,
         );
     }
 
@@ -605,10 +662,13 @@ fn rels_xml(has_core: bool) -> String {
 }
 
 /// Generate `word/_rels/document.xml.rels`.
+#[allow(clippy::too_many_arguments)]
 fn document_rels_xml(
     has_styles: bool,
     has_numbering: bool,
     has_comments: bool,
+    has_footnotes: bool,
+    has_endnotes: bool,
     image_rels: &[ImageRelEntry],
     hf_parts: &[HfPartEntry],
     hyperlink_rels: &[HyperlinkRelEntry],
@@ -636,6 +696,20 @@ fn document_rels_xml(
         xml.push_str(
             r#"
   <Relationship Id="rIdComments" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/comments" Target="comments.xml"/>"#,
+        );
+    }
+
+    if has_footnotes {
+        xml.push_str(
+            r#"
+  <Relationship Id="rIdFootnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/footnotes" Target="footnotes.xml"/>"#,
+        );
+    }
+
+    if has_endnotes {
+        xml.push_str(
+            r#"
+  <Relationship Id="rIdEndnotes" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/endnotes" Target="endnotes.xml"/>"#,
         );
     }
 

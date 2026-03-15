@@ -190,12 +190,12 @@ fn write_hf_content(doc: &DocumentModel, hf_id: s1_model::NodeId, xml: &mut Stri
                         child.attributes.get(&AttributeKey::FieldType)
                     {
                         match ft {
-                            FieldType::PageNumber => xml.push_str(
-                                r#"<text:page-number text:select-page="current"/>"#,
-                            ),
-                            FieldType::PageCount => xml.push_str(
-                                r#"<text:page-count text:select-page="current"/>"#,
-                            ),
+                            FieldType::PageNumber => {
+                                xml.push_str(r#"<text:page-number text:select-page="current"/>"#)
+                            }
+                            FieldType::PageCount => {
+                                xml.push_str(r#"<text:page-count text:select-page="current"/>"#)
+                            }
                             _ => {}
                         }
                     }

@@ -5,22 +5,39 @@ import { updateUndoRedo } from './toolbar.js';
 import { getActiveNodeId } from './selection.js';
 import { broadcastOp } from './collab.js';
 
+let _imgDelegationSetup = false;
 export function setupImages(scope) {
+  // Mark all images as draggable (no per-element event listeners)
   const root = scope || $('pageContainer');
   const imgs = root.tagName === 'IMG' ? [root] : root.querySelectorAll('img');
   imgs.forEach(img => {
-    img.addEventListener('click', e => { e.preventDefault(); e.stopPropagation(); selectImage(img); });
-    // Enable drag to move images between paragraphs
     img.setAttribute('draggable', 'true');
-    img.addEventListener('dragstart', onImageDragStart);
   });
-  // Set up drop targets on the page
-  if (!root._dropSetup) {
-    const page = $('pageContainer');
-    page.addEventListener('dragover', onDragOver);
-    page.addEventListener('drop', onDrop);
-    page._dropSetup = true;
-  }
+
+  // Set up event delegation ONCE on pageContainer — no listener accumulation
+  if (_imgDelegationSetup) return;
+  const page = $('pageContainer');
+  if (!page) return;
+  _imgDelegationSetup = true;
+
+  // Delegated click for image selection
+  page.addEventListener('click', e => {
+    const img = e.target.closest('img');
+    if (img && !e.target.closest('.img-handle')) {
+      e.preventDefault();
+      e.stopPropagation();
+      selectImage(img);
+    }
+  });
+
+  // Delegated dragstart for image drag
+  page.addEventListener('dragstart', e => {
+    const img = e.target.closest('img');
+    if (img) onImageDragStart(e);
+  });
+
+  page.addEventListener('dragover', onDragOver);
+  page.addEventListener('drop', onDrop);
 }
 
 // ─── Image Drag & Drop ─────────────────────

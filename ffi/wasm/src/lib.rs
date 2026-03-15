@@ -5,11 +5,11 @@
 
 use wasm_bindgen::prelude::*;
 
+use s1_layout::{layout_to_html, LayoutConfig, PageLayout};
 use s1_model::{
     Alignment, AttributeKey, AttributeValue, Color, DocumentModel, ListFormat, Node, NodeId,
     NodeType, UnderlineStyle,
 };
-use s1_layout::{layout_to_html, LayoutConfig, PageLayout};
 use s1engine::{Operation, Transaction};
 
 // --- WasmEngine ---
@@ -318,23 +318,29 @@ impl WasmDocument {
                 }
             }
 
-            let footer_text = page.footer.as_ref().map(|f| {
-                match &f.kind {
-                    s1_layout::LayoutBlockKind::Paragraph { lines, .. } => {
-                        lines.iter().flat_map(|l| l.runs.iter().map(|r| r.text.as_str())).collect::<String>()
-                    }
+            let footer_text = page
+                .footer
+                .as_ref()
+                .map(|f| match &f.kind {
+                    s1_layout::LayoutBlockKind::Paragraph { lines, .. } => lines
+                        .iter()
+                        .flat_map(|l| l.runs.iter().map(|r| r.text.as_str()))
+                        .collect::<String>(),
                     _ => String::new(),
-                }
-            }).unwrap_or_default();
+                })
+                .unwrap_or_default();
 
-            let header_text = page.header.as_ref().map(|h| {
-                match &h.kind {
-                    s1_layout::LayoutBlockKind::Paragraph { lines, .. } => {
-                        lines.iter().flat_map(|l| l.runs.iter().map(|r| r.text.as_str())).collect::<String>()
-                    }
+            let header_text = page
+                .header
+                .as_ref()
+                .map(|h| match &h.kind {
+                    s1_layout::LayoutBlockKind::Paragraph { lines, .. } => lines
+                        .iter()
+                        .flat_map(|l| l.runs.iter().map(|r| r.text.as_str()))
+                        .collect::<String>(),
                     _ => String::new(),
-                }
-            }).unwrap_or_default();
+                })
+                .unwrap_or_default();
 
             // Compute margins from page size and content area
             let margin_top = page.content_area.y;
@@ -420,11 +426,15 @@ impl WasmDocument {
         // For single-section documents this behaves identically to before.
         for (sec_idx, sec) in sections.iter().enumerate() {
             // Prefer Default; fall back to First if title_page is set; else any.
-            let header_ref = sec.headers.iter()
+            let header_ref = sec
+                .headers
+                .iter()
                 .find(|h| h.hf_type == HeaderFooterType::Default)
                 .or_else(|| {
                     if sec.title_page {
-                        sec.headers.iter().find(|h| h.hf_type == HeaderFooterType::First)
+                        sec.headers
+                            .iter()
+                            .find(|h| h.hf_type == HeaderFooterType::First)
                     } else {
                         sec.headers.first()
                     }
@@ -432,7 +442,9 @@ impl WasmDocument {
             if let Some(hf) = header_ref {
                 // First-page header (if title_page is set and a First header exists)
                 let first_hf = if sec.title_page {
-                    sec.headers.iter().find(|h| h.hf_type == HeaderFooterType::First)
+                    sec.headers
+                        .iter()
+                        .find(|h| h.hf_type == HeaderFooterType::First)
                 } else {
                     None
                 };
@@ -464,11 +476,15 @@ impl WasmDocument {
 
         // Render footers from ALL sections, tagged with data-section-index
         for (sec_idx, sec) in sections.iter().enumerate() {
-            let footer_ref = sec.footers.iter()
+            let footer_ref = sec
+                .footers
+                .iter()
                 .find(|f| f.hf_type == HeaderFooterType::Default)
                 .or_else(|| {
                     if sec.title_page {
-                        sec.footers.iter().find(|f| f.hf_type == HeaderFooterType::First)
+                        sec.footers
+                            .iter()
+                            .find(|f| f.hf_type == HeaderFooterType::First)
                     } else {
                         sec.footers.first()
                     }
@@ -476,7 +492,9 @@ impl WasmDocument {
             if let Some(hf) = footer_ref {
                 // First-page footer
                 let first_hf = if sec.title_page {
-                    sec.footers.iter().find(|h| h.hf_type == HeaderFooterType::First)
+                    sec.footers
+                        .iter()
+                        .find(|h| h.hf_type == HeaderFooterType::First)
                 } else {
                     None
                 };
@@ -572,7 +590,9 @@ impl WasmDocument {
     /// Get the body node ID as "replica:counter" string.
     pub fn body_id(&self) -> Result<Option<String>, JsError> {
         let doc = self.doc()?;
-        Ok(doc.body_id().map(|id| format!("{}:{}", id.replica, id.counter)))
+        Ok(doc
+            .body_id()
+            .map(|id| format!("{}:{}", id.replica, id.counter)))
     }
 
     /// Get top-level paragraph IDs as a JSON array of "replica:counter" strings.
@@ -591,9 +611,7 @@ impl WasmDocument {
     /// Returns `[{"id":"0:5","type":"Paragraph"},{"id":"0:12","type":"Table"},...]`
     pub fn body_children_json(&self) -> Result<String, JsError> {
         let doc = self.doc()?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body node not found"))?;
@@ -636,13 +654,8 @@ impl WasmDocument {
     /// Returns the new paragraph's node ID as "replica:counter".
     pub fn append_paragraph(&mut self, text: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
-        let index = doc
-            .node(body_id)
-            .map(|n| n.children.len())
-            .unwrap_or(0);
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
+        let index = doc.node(body_id).map(|n| n.children.len()).unwrap_or(0);
 
         let para_id = doc.next_id();
         let run_id = doc.next_id();
@@ -659,11 +672,7 @@ impl WasmDocument {
             0,
             Node::new(run_id, NodeType::Run),
         ));
-        txn.push(Operation::insert_node(
-            run_id,
-            0,
-            Node::text(text_id, text),
-        ));
+        txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, text)));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(format!("{}:{}", para_id.replica, para_id.counter))
@@ -679,9 +688,7 @@ impl WasmDocument {
     ) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_id_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -707,11 +714,7 @@ impl WasmDocument {
             0,
             Node::new(run_id, NodeType::Run),
         ));
-        txn.push(Operation::insert_node(
-            run_id,
-            0,
-            Node::text(text_id, text),
-        ));
+        txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, text)));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(format!("{}:{}", para_id.replica, para_id.counter))
@@ -722,21 +725,14 @@ impl WasmDocument {
     /// Returns the heading paragraph's node ID.
     pub fn append_heading(&mut self, level: u8, text: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
-        let index = doc
-            .node(body_id)
-            .map(|n| n.children.len())
-            .unwrap_or(0);
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
+        let index = doc.node(body_id).map(|n| n.children.len()).unwrap_or(0);
 
         let para_id = doc.next_id();
         let mut para = Node::new(para_id, NodeType::Paragraph);
         let style_id = format!("Heading{}", level.clamp(1, 6));
-        para.attributes.set(
-            AttributeKey::StyleId,
-            AttributeValue::String(style_id),
-        );
+        para.attributes
+            .set(AttributeKey::StyleId, AttributeValue::String(style_id));
 
         let run_id = doc.next_id();
         let text_id = doc.next_id();
@@ -748,11 +744,7 @@ impl WasmDocument {
             0,
             Node::new(run_id, NodeType::Run),
         ));
-        txn.push(Operation::insert_node(
-            run_id,
-            0,
-            Node::text(text_id, text),
-        ));
+        txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, text)));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(format!("{}:{}", para_id.replica, para_id.counter))
@@ -828,11 +820,7 @@ impl WasmDocument {
     }
 
     /// Replace the text content of a paragraph's first run.
-    pub fn set_paragraph_text(
-        &mut self,
-        node_id_str: &str,
-        new_text: &str,
-    ) -> Result<(), JsError> {
+    pub fn set_paragraph_text(&mut self, node_id_str: &str, new_text: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
 
@@ -861,10 +849,9 @@ impl WasmDocument {
         let para_id = parse_node_id(node_id_str)?;
         // Try to find the correct text node for the offset across all runs
         match find_text_node_at_char_offset(doc.model(), para_id, offset) {
-            Ok((text_node_id, local_offset, _)) => {
-                doc.apply(Operation::insert_text(text_node_id, local_offset, text))
-                    .map_err(|e| JsError::new(&e.to_string()))
-            }
+            Ok((text_node_id, local_offset, _)) => doc
+                .apply(Operation::insert_text(text_node_id, local_offset, text))
+                .map_err(|e| JsError::new(&e.to_string())),
             Err(_) => {
                 // No text nodes exist — create run + text
                 let (text_node_id, _) = ensure_run_and_text(doc, para_id)?;
@@ -891,7 +878,8 @@ impl WasmDocument {
             Ok((text_node_id, local_offset, text_len)) => {
                 if local_offset + length <= text_len {
                     // Fits within one text node
-                    return doc.apply(Operation::delete_text(text_node_id, local_offset, length))
+                    return doc
+                        .apply(Operation::delete_text(text_node_id, local_offset, length))
                         .map_err(|e| JsError::new(&e.to_string()));
                 }
             }
@@ -1015,16 +1003,39 @@ impl WasmDocument {
     ///
     /// `indent_type` is one of: "left", "right", "firstLine".
     /// `value_pt` is the indent value in points.
-    pub fn set_indent(&mut self, node_id_str: &str, indent_type: &str, value_pt: f64) -> Result<(), JsError> {
+    pub fn set_indent(
+        &mut self,
+        node_id_str: &str,
+        indent_type: &str,
+        value_pt: f64,
+    ) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
         let mut attrs = s1_model::AttributeMap::new();
-        let clamped = if indent_type == "firstLine" { value_pt } else { value_pt.max(0.0) };
+        let clamped = if indent_type == "firstLine" {
+            value_pt
+        } else {
+            value_pt.max(0.0)
+        };
         match indent_type {
-            "left" => { attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(clamped)); }
-            "right" => { attrs.set(AttributeKey::IndentRight, AttributeValue::Float(clamped)); }
-            "firstLine" => { attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(clamped)); }
-            _ => return Err(JsError::new(&format!("Unknown indent type: {}", indent_type))),
+            "left" => {
+                attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(clamped));
+            }
+            "right" => {
+                attrs.set(AttributeKey::IndentRight, AttributeValue::Float(clamped));
+            }
+            "firstLine" => {
+                attrs.set(
+                    AttributeKey::IndentFirstLine,
+                    AttributeValue::Float(clamped),
+                );
+            }
+            _ => {
+                return Err(JsError::new(&format!(
+                    "Unknown indent type: {}",
+                    indent_type
+                )))
+            }
         }
         doc.apply(Operation::set_attributes(para_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))
@@ -1073,7 +1084,11 @@ impl WasmDocument {
         let run_children: Vec<NodeId> = para
             .children
             .iter()
-            .filter(|&&c| doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false))
+            .filter(|&&c| {
+                doc.node(c)
+                    .map(|n| n.node_type == NodeType::Run)
+                    .unwrap_or(false)
+            })
             .copied()
             .collect();
 
@@ -1157,11 +1172,7 @@ impl WasmDocument {
             let text_node_id = run_children_ids[target_text_idx];
             if let Some(text_node) = doc.node(text_node_id) {
                 if text_node.node_type == NodeType::Text {
-                    let content = text_node
-                        .text_content
-                        .as_ref()
-                        .map(|t| t.clone())
-                        .unwrap_or_default();
+                    let content = text_node.text_content.clone().unwrap_or_default();
                     let char_len = content.chars().count();
                     let tail: String = content.chars().skip(text_local_offset).collect();
                     let tail_len = char_len - text_local_offset;
@@ -1322,11 +1333,17 @@ impl WasmDocument {
         // Collect runs that need tail deletion (from split point onward)
         // We need to: delete text from the run containing the offset, then delete
         // all subsequent runs entirely.
-        let para = doc.node(para_id).ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
         let run_children: Vec<NodeId> = para
             .children
             .iter()
-            .filter(|&&c| doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false))
+            .filter(|&&c| {
+                doc.node(c)
+                    .map(|n| n.node_type == NodeType::Run)
+                    .unwrap_or(false)
+            })
             .copied()
             .collect();
 
@@ -1373,10 +1390,9 @@ impl WasmDocument {
         // Create new paragraph with tail text, copying paragraph-level attributes
         let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
         if let Some(sid) = &style_id {
-            new_para.attributes.set(
-                AttributeKey::StyleId,
-                AttributeValue::String(sid.clone()),
-            );
+            new_para
+                .attributes
+                .set(AttributeKey::StyleId, AttributeValue::String(sid.clone()));
         }
         // Copy paragraph-level formatting: list info, alignment, line spacing, heading level
         if let Some(para_node_ref) = doc.node(para_id) {
@@ -1486,17 +1502,14 @@ impl WasmDocument {
         // Find the text node at the start offset for the first paragraph
         let start_full_text = extract_paragraph_text(doc.model(), start_para);
         let start_total_chars = start_full_text.chars().count();
-        let (start_text_id, start_local_offset, _) = match find_text_node_at_char_offset(
-            doc.model(),
-            start_para,
-            start_offset,
-        ) {
-            Ok(v) => v,
-            Err(_) => {
-                let (tid, _) = ensure_run_and_text(doc, start_para)?;
-                (tid, 0, 0)
-            }
-        };
+        let (start_text_id, start_local_offset, _) =
+            match find_text_node_at_char_offset(doc.model(), start_para, start_offset) {
+                Ok(v) => v,
+                Err(_) => {
+                    let (tid, _) = ensure_run_and_text(doc, start_para)?;
+                    (tid, 0, 0)
+                }
+            };
 
         // Get end paragraph text and body children (immutable borrows)
         let end_text = extract_paragraph_text(doc.model(), end_para);
@@ -1506,11 +1519,12 @@ impl WasmDocument {
             String::new()
         };
 
-        let body_id = doc.body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
-        let children: Vec<NodeId> = doc.node(body_id)
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
+        let children: Vec<NodeId> = doc
+            .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?
-            .children.clone();
+            .children
+            .clone();
 
         // Find intermediate paragraph IDs
         let mut in_range = false;
@@ -1535,8 +1549,11 @@ impl WasmDocument {
         let del_from_start = start_total_chars.saturating_sub(start_offset);
         if del_from_start > 0 {
             // Delete remaining text from the start offset's text node
-            txn.push(Operation::delete_text(start_text_id, start_local_offset,
-                del_from_start.min(start_total_chars - start_offset)));
+            txn.push(Operation::delete_text(
+                start_text_id,
+                start_local_offset,
+                del_from_start.min(start_total_chars - start_offset),
+            ));
         }
 
         // Delete any runs after the start run in the first paragraph
@@ -1552,7 +1569,9 @@ impl WasmDocument {
                             let rlen = run_char_len(doc.model(), child_id);
                             if past_split {
                                 runs_to_delete.push(child_id);
-                            } else if accumulated + rlen >= start_offset && start_offset > accumulated {
+                            } else if accumulated + rlen >= start_offset
+                                && start_offset > accumulated
+                            {
                                 past_split = true;
                             } else if accumulated >= start_offset {
                                 runs_to_delete.push(child_id);
@@ -1578,7 +1597,11 @@ impl WasmDocument {
 
         // 4. Append remaining text from last paragraph to first
         if !remaining_text.is_empty() {
-            txn.push(Operation::insert_text(start_text_id, start_local_offset, &remaining_text));
+            txn.push(Operation::insert_text(
+                start_text_id,
+                start_local_offset,
+                &remaining_text,
+            ));
         }
 
         doc.apply_transaction(&txn)
@@ -1639,8 +1662,7 @@ impl WasmDocument {
                             run.attributes.get(&AttributeKey::Underline),
                             Some(AttributeValue::UnderlineStyle(UnderlineStyle::None))
                         );
-                    let s =
-                        run.attributes.get_bool(&AttributeKey::Strikethrough) == Some(true);
+                    let s = run.attributes.get_bool(&AttributeKey::Strikethrough) == Some(true);
                     let fs = run.attributes.get_f64(&AttributeKey::FontSize);
                     let ff = run
                         .attributes
@@ -1679,26 +1701,16 @@ impl WasmDocument {
     ///
     /// Level 0 removes the heading style (converts to normal paragraph).
     /// Level 1-6 sets the corresponding heading style.
-    pub fn set_heading_level(
-        &mut self,
-        node_id_str: &str,
-        level: u8,
-    ) -> Result<(), JsError> {
+    pub fn set_heading_level(&mut self, node_id_str: &str, level: u8) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
         let mut attrs = s1_model::AttributeMap::new();
         if level == 0 {
             // Remove StyleId by setting to empty string
-            attrs.set(
-                AttributeKey::StyleId,
-                AttributeValue::String(String::new()),
-            );
+            attrs.set(AttributeKey::StyleId, AttributeValue::String(String::new()));
         } else {
             let style_id = format!("Heading{}", level.clamp(1, 6));
-            attrs.set(
-                AttributeKey::StyleId,
-                AttributeValue::String(style_id),
-            );
+            attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
         }
         doc.apply(Operation::set_attributes(para_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))
@@ -1710,11 +1722,7 @@ impl WasmDocument {
     ///
     /// Creates a new Run after the original with the tail text, preserving
     /// all formatting attributes. Returns the new run's node ID.
-    pub fn split_run(
-        &mut self,
-        run_id_str: &str,
-        char_offset: usize,
-    ) -> Result<String, JsError> {
+    pub fn split_run(&mut self, run_id_str: &str, char_offset: usize) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let run_id = parse_node_id(run_id_str)?;
 
@@ -1746,10 +1754,7 @@ impl WasmDocument {
         let text_node = doc
             .node(text_node_id)
             .ok_or_else(|| JsError::new("Text node not found"))?;
-        let full_text = text_node
-            .text_content
-            .as_deref()
-            .unwrap_or("");
+        let full_text = text_node.text_content.as_deref().unwrap_or("");
         let tail_text: String = full_text.chars().skip(char_offset).collect();
 
         if char_offset > text_char_len {
@@ -1791,12 +1796,7 @@ impl WasmDocument {
     /// key/value are string representations parsed to AttributeKey/AttributeValue.
     /// Supported keys: "bold", "italic", "underline", "strikethrough",
     /// "fontSize", "fontFamily", "color", "highlightColor", "superscript", "subscript".
-    pub fn format_run(
-        &mut self,
-        run_id_str: &str,
-        key: &str,
-        value: &str,
-    ) -> Result<(), JsError> {
+    pub fn format_run(&mut self, run_id_str: &str, key: &str, value: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let run_id = parse_node_id(run_id_str)?;
         let attrs = parse_format_kv(key, value)?;
@@ -1829,9 +1829,7 @@ impl WasmDocument {
             format_range_in_paragraph(doc, start_para, start_offset, end_offset, &attrs)?;
         } else {
             // Cross-paragraph selection
-            let body_id = doc
-                .body_id()
-                .ok_or_else(|| JsError::new("No body node"))?;
+            let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
             let body = doc
                 .node(body_id)
                 .ok_or_else(|| JsError::new("Body not found"))?;
@@ -1847,14 +1845,18 @@ impl WasmDocument {
                 .ok_or_else(|| JsError::new("End paragraph not in body"))?;
 
             // Format tail of start paragraph
-            let start_text_len = extract_paragraph_text(doc.model(), start_para).chars().count();
+            let start_text_len = extract_paragraph_text(doc.model(), start_para)
+                .chars()
+                .count();
             format_range_in_paragraph(doc, start_para, start_offset, start_text_len, &attrs)?;
 
             // Format all intermediate paragraphs fully
             for &child_id in &children[start_idx + 1..end_idx] {
                 if let Some(child) = doc.node(child_id) {
                     if child.node_type == NodeType::Paragraph {
-                        let len = extract_paragraph_text(doc.model(), child_id).chars().count();
+                        let len = extract_paragraph_text(doc.model(), child_id)
+                            .chars()
+                            .count();
                         if len > 0 {
                             format_range_in_paragraph(doc, child_id, 0, len, &attrs)?;
                         }
@@ -1884,10 +1886,7 @@ impl WasmDocument {
         for &child_id in &para.children {
             if let Some(child) = doc.node(child_id) {
                 if child.node_type == NodeType::Run {
-                    ids.push(format!(
-                        "\"{}:{}\"",
-                        child_id.replica, child_id.counter
-                    ));
+                    ids.push(format!("\"{}:{}\"", child_id.replica, child_id.counter));
                 }
             }
         }
@@ -1945,30 +1944,41 @@ impl WasmDocument {
         // Collect all runs in the selection
         let mut run_ids = Vec::new();
         if start_para == end_para {
-            collect_runs_in_range(doc.model(), start_para, start_offset, end_offset, &mut run_ids);
+            collect_runs_in_range(
+                doc.model(),
+                start_para,
+                start_offset,
+                end_offset,
+                &mut run_ids,
+            );
         } else {
-            let body_id = doc
-                .body_id()
-                .ok_or_else(|| JsError::new("No body node"))?;
+            let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
             let body = doc
                 .node(body_id)
                 .ok_or_else(|| JsError::new("Body not found"))?;
             let children = body.children.clone();
-            let start_idx = children
-                .iter()
-                .position(|&c| c == start_para)
-                .unwrap_or(0);
+            let start_idx = children.iter().position(|&c| c == start_para).unwrap_or(0);
             let end_idx = children
                 .iter()
                 .position(|&c| c == end_para)
                 .unwrap_or(children.len());
 
-            let start_len = extract_paragraph_text(doc.model(), start_para).chars().count();
-            collect_runs_in_range(doc.model(), start_para, start_offset, start_len, &mut run_ids);
+            let start_len = extract_paragraph_text(doc.model(), start_para)
+                .chars()
+                .count();
+            collect_runs_in_range(
+                doc.model(),
+                start_para,
+                start_offset,
+                start_len,
+                &mut run_ids,
+            );
             for &child_id in &children[start_idx + 1..end_idx] {
                 if let Some(child) = doc.node(child_id) {
                     if child.node_type == NodeType::Paragraph {
-                        let len = extract_paragraph_text(doc.model(), child_id).chars().count();
+                        let len = extract_paragraph_text(doc.model(), child_id)
+                            .chars()
+                            .count();
                         collect_runs_in_range(doc.model(), child_id, 0, len, &mut run_ids);
                     }
                 }
@@ -1998,19 +2008,27 @@ impl WasmDocument {
                 let s = run.attributes.get_bool(&AttributeKey::Strikethrough) == Some(true);
 
                 if let Some(prev) = bold_state {
-                    if prev != b { mixed_bold = true; }
+                    if prev != b {
+                        mixed_bold = true;
+                    }
                 }
                 bold_state = Some(b);
                 if let Some(prev) = italic_state {
-                    if prev != i { mixed_italic = true; }
+                    if prev != i {
+                        mixed_italic = true;
+                    }
                 }
                 italic_state = Some(i);
                 if let Some(prev) = underline_state {
-                    if prev != u { mixed_underline = true; }
+                    if prev != u {
+                        mixed_underline = true;
+                    }
                 }
                 underline_state = Some(u);
                 if let Some(prev) = strike_state {
-                    if prev != s { mixed_strike = true; }
+                    if prev != s {
+                        mixed_strike = true;
+                    }
                 }
                 strike_state = Some(s);
             }
@@ -2047,9 +2065,7 @@ impl WasmDocument {
     ) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_node_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -2095,11 +2111,7 @@ impl WasmDocument {
                     0,
                     Node::new(run_id, NodeType::Run),
                 ));
-                txn.push(Operation::insert_node(
-                    run_id,
-                    0,
-                    Node::text(text_id, ""),
-                ));
+                txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, "")));
             }
         }
 
@@ -2150,11 +2162,7 @@ impl WasmDocument {
                 0,
                 Node::new(run_id, NodeType::Run),
             ));
-            txn.push(Operation::insert_node(
-                run_id,
-                0,
-                Node::text(text_id, ""),
-            ));
+            txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, "")));
         }
 
         doc.apply_transaction(&txn)
@@ -2163,11 +2171,7 @@ impl WasmDocument {
     }
 
     /// Delete a row at the given index in a table.
-    pub fn delete_table_row(
-        &mut self,
-        table_id_str: &str,
-        row_index: u32,
-    ) -> Result<(), JsError> {
+    pub fn delete_table_row(&mut self, table_id_str: &str, row_index: u32) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let table_id = parse_node_id(table_id_str)?;
         let table = doc
@@ -2215,11 +2219,7 @@ impl WasmDocument {
                 0,
                 Node::new(run_id, NodeType::Run),
             ));
-            txn.push(Operation::insert_node(
-                run_id,
-                0,
-                Node::text(text_id, ""),
-            ));
+            txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, "")));
         }
 
         doc.apply_transaction(&txn)
@@ -2256,11 +2256,7 @@ impl WasmDocument {
     ///
     /// Replaces the entire cell content with the given text. Sets text in
     /// the first paragraph and deletes any extra paragraphs.
-    pub fn set_cell_text(
-        &mut self,
-        cell_id_str: &str,
-        text: &str,
-    ) -> Result<(), JsError> {
+    pub fn set_cell_text(&mut self, cell_id_str: &str, text: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let cell_id = parse_node_id(cell_id_str)?;
         let cell = doc
@@ -2319,7 +2315,9 @@ impl WasmDocument {
             .ok_or_else(|| JsError::new("Table not found"))?;
         let rows = table.children.len();
         let cols = if let Some(&first_row_id) = table.children.first() {
-            doc.node(first_row_id).map(|r| r.children.len()).unwrap_or(0)
+            doc.node(first_row_id)
+                .map(|r| r.children.len())
+                .unwrap_or(0)
         } else {
             0
         };
@@ -2402,15 +2400,11 @@ impl WasmDocument {
     }
 
     /// Set the background color of a table cell.
-    pub fn set_cell_background(
-        &mut self,
-        cell_id_str: &str,
-        hex: &str,
-    ) -> Result<(), JsError> {
+    pub fn set_cell_background(&mut self, cell_id_str: &str, hex: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let cell_id = parse_node_id(cell_id_str)?;
-        let color = Color::from_hex(hex)
-            .ok_or_else(|| JsError::new(&format!("Invalid color: {}", hex)))?;
+        let color =
+            Color::from_hex(hex).ok_or_else(|| JsError::new(&format!("Invalid color: {}", hex)))?;
         let mut attrs = s1_model::AttributeMap::new();
         attrs.set(AttributeKey::CellBackground, AttributeValue::Color(color));
         doc.apply(Operation::set_attributes(cell_id, attrs))
@@ -2433,9 +2427,7 @@ impl WasmDocument {
     ) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_node_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -2454,10 +2446,11 @@ impl WasmDocument {
             "image/webp" => "webp",
             _ => "bin",
         };
-        let media_id = doc
-            .model_mut()
-            .media_mut()
-            .insert(content_type, data.to_vec(), Some(format!("image.{}", ext)));
+        let media_id = doc.model_mut().media_mut().insert(
+            content_type,
+            data.to_vec(),
+            Some(format!("image.{}", ext)),
+        );
 
         let para_id = doc.next_id();
         let img_id = doc.next_id();
@@ -2551,11 +2544,7 @@ impl WasmDocument {
     }
 
     /// Set alt text on an image.
-    pub fn set_image_alt_text(
-        &mut self,
-        image_id_str: &str,
-        alt: &str,
-    ) -> Result<(), JsError> {
+    pub fn set_image_alt_text(&mut self, image_id_str: &str, alt: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let img_id = parse_node_id(image_id_str)?;
         let mut attrs = s1_model::AttributeMap::new();
@@ -2614,11 +2603,7 @@ impl WasmDocument {
     /// Insert bookmark start/end around a paragraph.
     ///
     /// Returns the bookmark start node ID.
-    pub fn insert_bookmark(
-        &mut self,
-        para_id_str: &str,
-        name: &str,
-    ) -> Result<String, JsError> {
+    pub fn insert_bookmark(&mut self, para_id_str: &str, name: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(para_id_str)?;
 
@@ -2694,15 +2679,10 @@ impl WasmDocument {
     /// Insert a paragraph with PageBreakBefore after the given node.
     ///
     /// Returns the new paragraph node ID.
-    pub fn insert_page_break(
-        &mut self,
-        after_node_str: &str,
-    ) -> Result<String, JsError> {
+    pub fn insert_page_break(&mut self, after_node_str: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_node_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -2718,10 +2698,8 @@ impl WasmDocument {
         let text_id = doc.next_id();
 
         let mut para = Node::new(para_id, NodeType::Paragraph);
-        para.attributes.set(
-            AttributeKey::PageBreakBefore,
-            AttributeValue::Bool(true),
-        );
+        para.attributes
+            .set(AttributeKey::PageBreakBefore, AttributeValue::Bool(true));
 
         let mut txn = Transaction::with_label("Insert page break");
         txn.push(Operation::insert_node(body_id, index, para));
@@ -2730,11 +2708,7 @@ impl WasmDocument {
             0,
             Node::new(run_id, NodeType::Run),
         ));
-        txn.push(Operation::insert_node(
-            run_id,
-            0,
-            Node::text(text_id, ""),
-        ));
+        txn.push(Operation::insert_node(run_id, 0, Node::text(text_id, "")));
 
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
@@ -2744,15 +2718,10 @@ impl WasmDocument {
     /// Insert a horizontal rule (thematic break) after the given node.
     ///
     /// Returns the new node ID.
-    pub fn insert_horizontal_rule(
-        &mut self,
-        after_node_str: &str,
-    ) -> Result<String, JsError> {
+    pub fn insert_horizontal_rule(&mut self, after_node_str: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_node_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -2871,10 +2840,7 @@ impl WasmDocument {
 
         // Create CommentBody on root
         let root_id = doc.model().root_id();
-        let root_children = doc
-            .node(root_id)
-            .map(|n| n.children.len())
-            .unwrap_or(0);
+        let root_children = doc.node(root_id).map(|n| n.children.len()).unwrap_or(0);
         let cb_id = doc.next_id();
         let mut cb_node = Node::new(cb_id, NodeType::CommentBody);
         cb_node.attributes.set(
@@ -2901,7 +2867,11 @@ impl WasmDocument {
             .node(end_id)
             .ok_or_else(|| JsError::new("End node not found"))?;
         let end_child_count = end_para.children.len();
-        txn.push(Operation::insert_node(end_id, end_child_count + if start_id == end_id { 1 } else { 0 }, ce_node));
+        txn.push(Operation::insert_node(
+            end_id,
+            end_child_count + if start_id == end_id { 1 } else { 0 },
+            ce_node,
+        ));
 
         // Insert body
         txn.push(Operation::insert_node(root_id, root_children, cb_node));
@@ -2939,10 +2909,7 @@ impl WasmDocument {
             if matches!(
                 node.node_type,
                 NodeType::CommentStart | NodeType::CommentEnd | NodeType::CommentBody
-            ) && node
-                .attributes
-                .get_string(&AttributeKey::CommentId)
-                == Some(comment_id)
+            ) && node.attributes.get_string(&AttributeKey::CommentId) == Some(comment_id)
             {
                 to_delete.push(node.id);
             }
@@ -2980,11 +2947,7 @@ impl WasmDocument {
     /// Find all occurrences of text in the document.
     ///
     /// Returns JSON array of `{"nodeId":"0:5","offset":3,"length":5}`.
-    pub fn find_text(
-        &self,
-        query: &str,
-        case_sensitive: bool,
-    ) -> Result<String, JsError> {
+    pub fn find_text(&self, query: &str, case_sensitive: bool) -> Result<String, JsError> {
         let doc = self.doc()?;
         let model = doc.model();
         let body_id = model.body_id().ok_or_else(|| JsError::new("No body"))?;
@@ -2999,7 +2962,13 @@ impl WasmDocument {
         };
 
         let mut results = Vec::new();
-        collect_find_results(model, &body.children, &query_lower, case_sensitive, &mut results);
+        collect_find_results(
+            model,
+            &body.children,
+            &query_lower,
+            case_sensitive,
+            &mut results,
+        );
         Ok(format!("[{}]", results.join(",")))
     }
 
@@ -3018,7 +2987,11 @@ impl WasmDocument {
 
         let mut txn = Transaction::with_label("Replace text");
         txn.push(Operation::delete_text(text_node_id, local_offset, length));
-        txn.push(Operation::insert_text(text_node_id, local_offset, replacement));
+        txn.push(Operation::insert_text(
+            text_node_id,
+            local_offset,
+            replacement,
+        ));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))
     }
@@ -3049,7 +3022,14 @@ impl WasmDocument {
         // Collect all matches first
         let mut matches: Vec<(NodeId, usize, usize)> = Vec::new(); // (text_node_id, offset, length)
         for &child_id in &children {
-            collect_replace_matches(model, child_id, &query_lower, case_sensitive, query.chars().count(), &mut matches);
+            collect_replace_matches(
+                model,
+                child_id,
+                &query_lower,
+                case_sensitive,
+                query.chars().count(),
+                &mut matches,
+            );
         }
 
         if matches.is_empty() {
@@ -3349,9 +3329,7 @@ impl WasmDocument {
         let start_para = parse_node_id(start_node_str)?;
         let end_para = parse_node_id(end_node_str)?;
 
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -3439,9 +3417,7 @@ impl WasmDocument {
                     }
                 }
                 _ => {
-                    return Err(JsError::new(
-                        "Start or end paragraph not found in body",
-                    ));
+                    return Err(JsError::new("Start or end paragraph not found in body"));
                 }
             }
         }
@@ -3464,9 +3440,7 @@ impl WasmDocument {
     ) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let after_id = parse_node_id(after_node_str)?;
-        let body_id = doc
-            .body_id()
-            .ok_or_else(|| JsError::new("No body node"))?;
+        let body_id = doc.body_id().ok_or_else(|| JsError::new("No body node"))?;
         let body = doc
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -3480,10 +3454,9 @@ impl WasmDocument {
         let level = max_level.clamp(1, 9);
         let toc_id = doc.next_id();
         let mut toc_node = Node::new(toc_id, NodeType::TableOfContents);
-        toc_node.attributes.set(
-            AttributeKey::TocMaxLevel,
-            AttributeValue::Int(level as i64),
-        );
+        toc_node
+            .attributes
+            .set(AttributeKey::TocMaxLevel, AttributeValue::Int(level as i64));
         if !title.is_empty() {
             toc_node.attributes.set(
                 AttributeKey::TocTitle,
@@ -3524,10 +3497,7 @@ impl WasmDocument {
     ) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let root_id = doc.model().root_id();
-        let root_children = doc
-            .node(root_id)
-            .map(|n| n.children.len())
-            .unwrap_or(0);
+        let root_children = doc.node(root_id).map(|n| n.children.len()).unwrap_or(0);
 
         let reply_id_val = format!("{}:{}", doc.next_id().replica, doc.next_id().counter);
 
@@ -3632,11 +3602,7 @@ impl WasmDocument {
     ///
     /// Creates a footnote reference in the paragraph and a footnote body
     /// at the document root. Returns the footnote body node ID.
-    pub fn insert_footnote(
-        &mut self,
-        node_id_str: &str,
-        text: &str,
-    ) -> Result<String, JsError> {
+    pub fn insert_footnote(&mut self, node_id_str: &str, text: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
         let para = doc
@@ -3707,11 +3673,7 @@ impl WasmDocument {
     ///
     /// Creates an endnote reference in the paragraph and an endnote body
     /// at the document root. Returns the endnote body node ID.
-    pub fn insert_endnote(
-        &mut self,
-        node_id_str: &str,
-        text: &str,
-    ) -> Result<String, JsError> {
+    pub fn insert_endnote(&mut self, node_id_str: &str, text: &str) -> Result<String, JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
         let para = doc
@@ -3836,10 +3798,7 @@ impl WasmDocument {
         for &child_id in &root_node.children {
             if let Some(child) = model.node(child_id) {
                 if child.node_type == body_type {
-                    let number = child
-                        .attributes
-                        .get_i64(number_key)
-                        .unwrap_or(0);
+                    let number = child.attributes.get_i64(number_key).unwrap_or(0);
 
                     let mut text = String::new();
                     for &para_id in &child.children {
@@ -4013,10 +3972,7 @@ impl PasteRun {
             attrs.set(AttributeKey::FontSize, AttributeValue::Float(fs));
         }
         if let Some(ref ff) = self.font_family {
-            attrs.set(
-                AttributeKey::FontFamily,
-                AttributeValue::String(ff.clone()),
-            );
+            attrs.set(AttributeKey::FontFamily, AttributeValue::String(ff.clone()));
         }
         if let Some(ref c) = self.color {
             if let Some(color) = Color::from_hex(c) {
@@ -4137,7 +4093,13 @@ fn split_json_array_objects(arr_content: &str) -> Result<Vec<String>, JsError> {
     let mut i = 0;
     while i < bytes.len() {
         // Skip whitespace and commas
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\n' || bytes[i] == b'\r' || bytes[i] == b'\t' || bytes[i] == b',') {
+        while i < bytes.len()
+            && (bytes[i] == b' '
+                || bytes[i] == b'\n'
+                || bytes[i] == b'\r'
+                || bytes[i] == b'\t'
+                || bytes[i] == b',')
+        {
             i += 1;
         }
         if i >= bytes.len() {
@@ -4223,12 +4185,30 @@ fn extract_json_string_opt(obj: &str, key: &str) -> Option<String> {
         while i < bytes.len() {
             if bytes[i] == b'\\' && i + 1 < bytes.len() {
                 match bytes[i + 1] {
-                    b'"' => { result.push('"'); i += 2; }
-                    b'\\' => { result.push('\\'); i += 2; }
-                    b'n' => { result.push('\n'); i += 2; }
-                    b'r' => { result.push('\r'); i += 2; }
-                    b't' => { result.push('\t'); i += 2; }
-                    _ => { result.push(after_colon.as_bytes()[i] as char); i += 1; }
+                    b'"' => {
+                        result.push('"');
+                        i += 2;
+                    }
+                    b'\\' => {
+                        result.push('\\');
+                        i += 2;
+                    }
+                    b'n' => {
+                        result.push('\n');
+                        i += 2;
+                    }
+                    b'r' => {
+                        result.push('\r');
+                        i += 2;
+                    }
+                    b't' => {
+                        result.push('\t');
+                        i += 2;
+                    }
+                    _ => {
+                        result.push(after_colon.as_bytes()[i] as char);
+                        i += 1;
+                    }
                 }
             } else if bytes[i] == b'"' {
                 return Some(result);
@@ -4321,15 +4301,25 @@ fn find_first_run(model: &DocumentModel, para_id: NodeId) -> Result<NodeId, JsEr
 
 /// Ensure a paragraph has at least one Run→Text child, creating them if absent.
 /// Returns the text node ID and its char length.
-fn ensure_run_and_text(doc: &mut s1engine::Document, para_id: NodeId) -> Result<(NodeId, usize), JsError> {
+fn ensure_run_and_text(
+    doc: &mut s1engine::Document,
+    para_id: NodeId,
+) -> Result<(NodeId, usize), JsError> {
     // Check if run already exists
     if let Ok(run_id) = find_first_run(doc.model(), para_id) {
         // Run exists — find or create text node
-        let run = doc.model().node(run_id).ok_or_else(|| JsError::new("Run not found"))?;
+        let run = doc
+            .model()
+            .node(run_id)
+            .ok_or_else(|| JsError::new("Run not found"))?;
         for &child_id in &run.children {
             if let Some(child) = doc.model().node(child_id) {
                 if child.node_type == NodeType::Text {
-                    let len = child.text_content.as_ref().map(|t| t.chars().count()).unwrap_or(0);
+                    let len = child
+                        .text_content
+                        .as_ref()
+                        .map(|t| t.chars().count())
+                        .unwrap_or(0);
                     return Ok((child_id, len));
                 }
             }
@@ -4368,7 +4358,11 @@ fn find_first_text_node(
     for &child_id in &run.children {
         if let Some(child) = model.node(child_id) {
             if child.node_type == NodeType::Text {
-                let len = child.text_content.as_ref().map(|t| t.chars().count()).unwrap_or(0);
+                let len = child
+                    .text_content
+                    .as_ref()
+                    .map(|t| t.chars().count())
+                    .unwrap_or(0);
                 return Ok((child_id, len));
             }
         }
@@ -4474,7 +4468,9 @@ fn delete_text_range_in_paragraph(
     for &child_id in &para.children {
         if let Some(child) = doc.node(child_id) {
             if child.node_type == NodeType::Run {
-                if let Ok((text_id, _, _)) = find_text_node_at_char_offset_in_run(doc.model(), child_id, 0) {
+                if let Ok((text_id, _, _)) =
+                    find_text_node_at_char_offset_in_run(doc.model(), child_id, 0)
+                {
                     let len = run_char_len(doc.model(), child_id);
                     runs_info.push((child_id, text_id, offset, offset + len));
                     offset += len;
@@ -4668,16 +4664,10 @@ fn parse_format_kv(key: &str, value: &str) -> Result<s1_model::AttributeMap, JsE
     let mut attrs = s1_model::AttributeMap::new();
     match key {
         "bold" => {
-            attrs.set(
-                AttributeKey::Bold,
-                AttributeValue::Bool(value == "true"),
-            );
+            attrs.set(AttributeKey::Bold, AttributeValue::Bool(value == "true"));
         }
         "italic" => {
-            attrs.set(
-                AttributeKey::Italic,
-                AttributeValue::Bool(value == "true"),
-            );
+            attrs.set(AttributeKey::Italic, AttributeValue::Bool(value == "true"));
         }
         "underline" => {
             let style = if value == "true" {
@@ -4709,13 +4699,11 @@ fn parse_format_kv(key: &str, value: &str) -> Result<s1_model::AttributeMap, JsE
             );
         }
         "color" => {
-            let color = Color::from_hex(value)
-                .ok_or_else(|| JsError::new("Invalid color hex"))?;
+            let color = Color::from_hex(value).ok_or_else(|| JsError::new("Invalid color hex"))?;
             attrs.set(AttributeKey::Color, AttributeValue::Color(color));
         }
         "highlightColor" => {
-            let color = Color::from_hex(value)
-                .ok_or_else(|| JsError::new("Invalid color hex"))?;
+            let color = Color::from_hex(value).ok_or_else(|| JsError::new("Invalid color hex"))?;
             attrs.set(AttributeKey::HighlightColor, AttributeValue::Color(color));
         }
         "superscript" => {
@@ -4731,15 +4719,21 @@ fn parse_format_kv(key: &str, value: &str) -> Result<s1_model::AttributeMap, JsE
             );
         }
         "indentLeft" => {
-            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            let v: f64 = value
+                .parse()
+                .map_err(|_| JsError::new("Invalid indent value"))?;
             attrs.set(AttributeKey::IndentLeft, AttributeValue::Float(v));
         }
         "indentRight" => {
-            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            let v: f64 = value
+                .parse()
+                .map_err(|_| JsError::new("Invalid indent value"))?;
             attrs.set(AttributeKey::IndentRight, AttributeValue::Float(v));
         }
         "indentFirstLine" => {
-            let v: f64 = value.parse().map_err(|_| JsError::new("Invalid indent value"))?;
+            let v: f64 = value
+                .parse()
+                .map_err(|_| JsError::new("Invalid indent value"))?;
             attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(v));
         }
         "hyperlinkUrl" => {
@@ -4944,10 +4938,7 @@ fn split_run_internal(
     let text_node = doc
         .node(text_node_id)
         .ok_or_else(|| JsError::new("Text node not found"))?;
-    let full_text = text_node
-        .text_content
-        .as_deref()
-        .unwrap_or("");
+    let full_text = text_node.text_content.as_deref().unwrap_or("");
     let tail_text: String = full_text.chars().skip(char_offset).collect();
 
     let new_run_id = doc.next_id();
@@ -5008,10 +4999,7 @@ fn collect_runs_in_range(
 ///
 /// Checks every row and returns the maximum cell count, which handles
 /// tables with inconsistent column counts (e.g., due to merged cells).
-fn get_table_col_count(
-    model: &DocumentModel,
-    table_id: NodeId,
-) -> Result<usize, JsError> {
+fn get_table_col_count(model: &DocumentModel, table_id: NodeId) -> Result<usize, JsError> {
     let table = model
         .node(table_id)
         .ok_or_else(|| JsError::new("Table not found"))?;
@@ -5081,7 +5069,8 @@ fn collect_find_results(
                     while byte_pos < search_text.len() {
                         if let Some(rel_byte) = search_text[byte_pos..].find(query) {
                             // Count chars from byte_pos to byte_pos + rel_byte
-                            let chars_skipped = search_text[byte_pos..byte_pos + rel_byte].chars().count();
+                            let chars_skipped =
+                                search_text[byte_pos..byte_pos + rel_byte].chars().count();
                             let char_offset = char_pos + chars_skipped;
                             results.push(format!(
                                 "{{\"nodeId\":\"{}:{}\",\"offset\":{},\"length\":{}}}",
@@ -5141,11 +5130,19 @@ fn collect_replace_matches(
                                         let mut char_pos = 0usize;
                                         while byte_pos < search.len() {
                                             if let Some(rel_byte) = search[byte_pos..].find(query) {
-                                                let chars_skipped = search[byte_pos..byte_pos + rel_byte].chars().count();
+                                                let chars_skipped = search
+                                                    [byte_pos..byte_pos + rel_byte]
+                                                    .chars()
+                                                    .count();
                                                 let char_offset = char_pos + chars_skipped;
-                                                matches.push((text_id, char_offset, query_char_len));
+                                                matches.push((
+                                                    text_id,
+                                                    char_offset,
+                                                    query_char_len,
+                                                ));
                                                 // Advance past match using char-aware byte length
-                                                let match_byte_len: usize = search[byte_pos + rel_byte..]
+                                                let match_byte_len: usize = search
+                                                    [byte_pos + rel_byte..]
                                                     .chars()
                                                     .take(query_char_len)
                                                     .map(|c| c.len_utf8())
@@ -5164,10 +5161,20 @@ fn collect_replace_matches(
                 }
             }
         }
-        NodeType::Table | NodeType::TableRow | NodeType::TableCell
-        | NodeType::Body | NodeType::Section => {
+        NodeType::Table
+        | NodeType::TableRow
+        | NodeType::TableCell
+        | NodeType::Body
+        | NodeType::Section => {
             for &child_id in &node.children {
-                collect_replace_matches(model, child_id, query, case_sensitive, query_char_len, matches);
+                collect_replace_matches(
+                    model,
+                    child_id,
+                    query,
+                    case_sensitive,
+                    query_char_len,
+                    matches,
+                );
             }
         }
         _ => {}
@@ -5387,7 +5394,9 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
     }
 
     // Borders
-    if let Some(AttributeValue::Borders(borders)) = para.attributes.get(&AttributeKey::ParagraphBorders) {
+    if let Some(AttributeValue::Borders(borders)) =
+        para.attributes.get(&AttributeKey::ParagraphBorders)
+    {
         let render_border = |side: &s1_model::BorderSide| -> String {
             if side.width > 0.0 {
                 let color_hex = side.color.to_hex();
@@ -5398,19 +5407,27 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
         };
         if let Some(ref top) = borders.top {
             let b = render_border(top);
-            if !b.is_empty() { style.push_str(&format!("border-top:{b};")); }
+            if !b.is_empty() {
+                style.push_str(&format!("border-top:{b};"));
+            }
         }
         if let Some(ref bottom) = borders.bottom {
             let b = render_border(bottom);
-            if !b.is_empty() { style.push_str(&format!("border-bottom:{b};")); }
+            if !b.is_empty() {
+                style.push_str(&format!("border-bottom:{b};"));
+            }
         }
         if let Some(ref left) = borders.left {
             let b = render_border(left);
-            if !b.is_empty() { style.push_str(&format!("border-left:{b};")); }
+            if !b.is_empty() {
+                style.push_str(&format!("border-left:{b};"));
+            }
         }
         if let Some(ref right) = borders.right {
             let b = render_border(right);
-            if !b.is_empty() { style.push_str(&format!("border-right:{b};")); }
+            if !b.is_empty() {
+                style.push_str(&format!("border-right:{b};"));
+            }
         }
     }
 
@@ -5425,10 +5442,7 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
         format!(" style=\"{style}\"")
     };
 
-    let nid_attr = format!(
-        " data-node-id=\"{}:{}\"",
-        para_id.replica, para_id.counter
-    );
+    let nid_attr = format!(" data-node-id=\"{}:{}\"", para_id.replica, para_id.counter);
 
     // List marker prefix
     let list_marker = list_info.as_ref().map(|li| {
@@ -5466,7 +5480,10 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
                 .map(|s| {
                     let fs = s.attributes.get_f64(&AttributeKey::FontSize);
                     let bold = s.attributes.get_bool(&AttributeKey::Bold);
-                    let ff = s.attributes.get_string(&AttributeKey::FontFamily).map(|v| v.to_string());
+                    let ff = s
+                        .attributes
+                        .get_string(&AttributeKey::FontFamily)
+                        .map(|v| v.to_string());
                     (fs, bold, ff)
                 })
                 .unwrap_or((None, None, None));
@@ -5483,7 +5500,11 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
                 heading_style.push_str(&format!("font-size:{size}pt;"));
             }
             if !heading_style.contains("font-weight:") {
-                let weight = if style_bold == Some(false) { "normal" } else { "700" };
+                let weight = if style_bold == Some(false) {
+                    "normal"
+                } else {
+                    "700"
+                };
                 heading_style.push_str(&format!("font-weight:{weight};"));
             }
             if !heading_style.contains("font-family:") {
@@ -5524,7 +5545,9 @@ fn render_paragraph(model: &DocumentModel, para_id: NodeId, html: &mut String) {
         _ => {
             html.push_str(&format!("<p{nid_attr}{style_attr}>"));
             if let Some(marker) = list_marker {
-                html.push_str(&format!("<span style=\"user-select:none\" contenteditable=\"false\">{marker}</span>"));
+                html.push_str(&format!(
+                    "<span style=\"user-select:none\" contenteditable=\"false\">{marker}</span>"
+                ));
             }
             render_inline_children(model, para_id, html);
             // Ensure empty paragraphs are editable (non-collapsing)
@@ -5552,7 +5575,9 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
             NodeType::Run => render_run(model, child_id, html),
             NodeType::Image => render_image(model, child_id, html),
             NodeType::LineBreak => html.push_str("<br/>"),
-            NodeType::ColumnBreak => html.push_str("<hr class=\"column-break\" style=\"border-style:dashed\" />"),
+            NodeType::ColumnBreak => {
+                html.push_str("<hr class=\"column-break\" style=\"border-style:dashed\" />")
+            }
             NodeType::Tab => html.push_str("&emsp;"),
             NodeType::Field => {
                 render_field_html(child, html);
@@ -5645,16 +5670,28 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
     // Track changes: wrap in <ins>/<del> tags with node ID for individual accept/reject
     let tc_open = match revision_type {
         Some("Insert") => {
-            style.push_str("color:#22863a;text-decoration:underline;text-decoration-color:#22863a;");
-            Some(format!("<ins data-tc-node-id=\"{}:{}\" data-tc-type=\"insert\">", run_id.replica, run_id.counter))
+            style
+                .push_str("color:#22863a;text-decoration:underline;text-decoration-color:#22863a;");
+            Some(format!(
+                "<ins data-tc-node-id=\"{}:{}\" data-tc-type=\"insert\">",
+                run_id.replica, run_id.counter
+            ))
         }
         Some("Delete") => {
-            style.push_str("color:#cb2431;text-decoration:line-through;text-decoration-color:#cb2431;");
-            Some(format!("<del data-tc-node-id=\"{}:{}\" data-tc-type=\"delete\">", run_id.replica, run_id.counter))
+            style.push_str(
+                "color:#cb2431;text-decoration:line-through;text-decoration-color:#cb2431;",
+            );
+            Some(format!(
+                "<del data-tc-node-id=\"{}:{}\" data-tc-type=\"delete\">",
+                run_id.replica, run_id.counter
+            ))
         }
         Some("FormatChange") => {
             style.push_str("border-bottom:2px dotted #b08800;");
-            Some(format!("<span data-tc-node-id=\"{}:{}\" data-tc-type=\"format\" class=\"tc-format\">", run_id.replica, run_id.counter))
+            Some(format!(
+                "<span data-tc-node-id=\"{}:{}\" data-tc-type=\"format\" class=\"tc-format\">",
+                run_id.replica, run_id.counter
+            ))
         }
         _ => None,
     };
@@ -5699,27 +5736,56 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
     // malformed HTML like <strong><br/></strong>
     let close_tags = {
         let mut t = String::new();
-        if has_style { t.push_str("</span>"); }
-        if subscript { t.push_str("</sub>"); }
-        if superscript { t.push_str("</sup>"); }
-        if strikethrough { t.push_str("</s>"); }
-        if underline { t.push_str("</u>"); }
-        if italic { t.push_str("</em>"); }
-        if bold { t.push_str("</strong>"); }
+        if has_style {
+            t.push_str("</span>");
+        }
+        if subscript {
+            t.push_str("</sub>");
+        }
+        if superscript {
+            t.push_str("</sup>");
+        }
+        if strikethrough {
+            t.push_str("</s>");
+        }
+        if underline {
+            t.push_str("</u>");
+        }
+        if italic {
+            t.push_str("</em>");
+        }
+        if bold {
+            t.push_str("</strong>");
+        }
         t
     };
     let open_tags = {
         let mut t = String::new();
-        if bold { t.push_str("<strong>"); }
-        if italic { t.push_str("<em>"); }
-        if underline { t.push_str("<u>"); }
-        if strikethrough { t.push_str("<s>"); }
-        if superscript { t.push_str("<sup>"); }
-        if subscript { t.push_str("<sub>"); }
-        if has_style { t.push_str(&format!("<span style=\"{style}\">")); }
+        if bold {
+            t.push_str("<strong>");
+        }
+        if italic {
+            t.push_str("<em>");
+        }
+        if underline {
+            t.push_str("<u>");
+        }
+        if strikethrough {
+            t.push_str("<s>");
+        }
+        if superscript {
+            t.push_str("<sup>");
+        }
+        if subscript {
+            t.push_str("<sub>");
+        }
+        if has_style {
+            t.push_str(&format!("<span style=\"{style}\">"));
+        }
         t
     };
-    let has_formatting = bold || italic || underline || strikethrough || superscript || subscript || has_style;
+    let has_formatting =
+        bold || italic || underline || strikethrough || superscript || subscript || has_style;
 
     // Text content
     for &text_id in &run.children {
@@ -5900,7 +5966,11 @@ fn render_paragraph_clean_partial(
                             run_len
                         };
                         render_run_clean_partial(
-                            model, child_id, local_start, local_end, &mut *html,
+                            model,
+                            child_id,
+                            local_start,
+                            local_end,
+                            &mut *html,
                         );
                     }
 
@@ -5969,10 +6039,7 @@ fn render_run_clean_partial(
 
     // Open tags (no track-changes wrappers)
     if let Some(url) = hyperlink_url {
-        html.push_str(&format!(
-            "<a href=\"{}\">",
-            escape_html(url)
-        ));
+        html.push_str(&format!("<a href=\"{}\">", escape_html(url)));
     }
     if bold {
         html.push_str("<strong>");
@@ -6073,8 +6140,7 @@ fn render_image_clean(model: &DocumentModel, img_id: NodeId, html: &mut String) 
         None => return,
     };
 
-    if let Some(AttributeValue::MediaId(media_id)) =
-        img.attributes.get(&AttributeKey::ImageMediaId)
+    if let Some(AttributeValue::MediaId(media_id)) = img.attributes.get(&AttributeKey::ImageMediaId)
     {
         if let Some(item) = model.media().get(*media_id) {
             let b64 = base64_encode(&item.data);
@@ -6196,8 +6262,7 @@ fn render_image(model: &DocumentModel, img_id: NodeId, html: &mut String) {
         None => return,
     };
 
-    if let Some(AttributeValue::MediaId(media_id)) =
-        img.attributes.get(&AttributeKey::ImageMediaId)
+    if let Some(AttributeValue::MediaId(media_id)) = img.attributes.get(&AttributeKey::ImageMediaId)
     {
         if let Some(item) = model.media().get(*media_id) {
             let b64 = base64_encode(&item.data);
@@ -6234,8 +6299,14 @@ fn render_drawing(model: &DocumentModel, drawing_id: NodeId, html: &mut String) 
         None => return,
     };
 
-    let width = node.attributes.get_f64(&AttributeKey::ShapeWidth).unwrap_or(100.0);
-    let height = node.attributes.get_f64(&AttributeKey::ShapeHeight).unwrap_or(100.0);
+    let width = node
+        .attributes
+        .get_f64(&AttributeKey::ShapeWidth)
+        .unwrap_or(100.0);
+    let height = node
+        .attributes
+        .get_f64(&AttributeKey::ShapeHeight)
+        .unwrap_or(100.0);
     let shape_type = node
         .attributes
         .get_string(&AttributeKey::ShapeType)
@@ -6315,7 +6386,9 @@ fn render_table_cell(model: &DocumentModel, cell_id: NodeId, html: &mut String) 
         }
     }
     // Vertical alignment
-    if let Some(AttributeValue::VerticalAlignment(va)) = cell.attributes.get(&AttributeKey::VerticalAlign) {
+    if let Some(AttributeValue::VerticalAlignment(va)) =
+        cell.attributes.get(&AttributeKey::VerticalAlign)
+    {
         let val = match va {
             s1_model::VerticalAlignment::Top => "top",
             s1_model::VerticalAlignment::Center => "middle",
@@ -6437,20 +6510,29 @@ pub struct WasmCollabDocument {
 impl WasmCollabDocument {
     /// Get the replica ID of this collaborative document.
     pub fn replica_id(&self) -> Result<u64, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         Ok(doc.replica_id())
     }
 
     /// Get the document content as HTML.
     pub fn to_html(&self) -> Result<String, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let model = doc.model();
         Ok(to_html_from_model(model))
     }
 
     /// Get the document content as plain text.
     pub fn to_plain_text(&self) -> Result<String, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         Ok(doc.to_plain_text())
     }
 
@@ -6463,7 +6545,10 @@ impl WasmCollabDocument {
         offset: usize,
         text: &str,
     ) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let node_id = parse_node_id(target_id)?;
 
         // Find the first text node under this target
@@ -6485,7 +6570,10 @@ impl WasmCollabDocument {
         offset: usize,
         length: usize,
     ) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let node_id = parse_node_id(target_id)?;
         let (text_node_id, _len) = find_first_text_node(doc.model(), node_id)?;
 
@@ -6504,7 +6592,10 @@ impl WasmCollabDocument {
         key: &str,
         value: &str,
     ) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let node_id = parse_node_id(target_id)?;
         let attrs = parse_format_kv(key, value)?;
 
@@ -6520,7 +6611,10 @@ impl WasmCollabDocument {
     ///
     /// Accepts a JSON string of a CRDT operation (as produced by apply_local_* methods).
     pub fn apply_remote_ops(&mut self, ops_json: &str) -> Result<(), JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let crdt_op = deserialize_crdt_op_from_json(ops_json)?;
         doc.apply_remote(crdt_op)
             .map_err(|e| JsError::new(&e.to_string()))
@@ -6531,12 +6625,17 @@ impl WasmCollabDocument {
     /// Used for delta synchronization — send your state vector to a peer
     /// to find out what operations you're missing.
     pub fn get_state_vector(&self) -> Result<String, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let sv = doc.state_vector();
         let entries: Vec<(u64, u64)> = sv.entries().iter().map(|(&r, &l)| (r, l)).collect();
         let mut result = String::from("{");
         for (i, (replica, lamport)) in entries.iter().enumerate() {
-            if i > 0 { result.push(','); }
+            if i > 0 {
+                result.push(',');
+            }
             result.push_str(&format!("\"{}\":{}", replica, lamport));
         }
         result.push('}');
@@ -6548,7 +6647,10 @@ impl WasmCollabDocument {
     /// Used for delta sync: peer sends their state vector, you return
     /// the operations they're missing.
     pub fn get_changes_since(&self, state_vector_json: &str) -> Result<String, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let remote_sv = parse_state_vector_json(state_vector_json)?;
         let changes = doc.changes_since(&remote_sv);
         let json_ops: Vec<String> = changes.iter().map(serialize_crdt_op_to_json).collect();
@@ -6563,7 +6665,10 @@ impl WasmCollabDocument {
         user_name: &str,
         user_color: &str,
     ) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let nid = parse_node_id(node_id)?;
         let selection = s1_ops::Selection::collapsed(s1_ops::Position::new(nid, offset));
         let update = doc.set_cursor(selection, user_name, user_color);
@@ -6572,7 +6677,10 @@ impl WasmCollabDocument {
 
     /// Apply a remote awareness (cursor) update from another replica.
     pub fn apply_awareness_update(&mut self, update_json: &str) -> Result<(), JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let update = deserialize_awareness_update(update_json)?;
         doc.apply_awareness_update(&update);
         Ok(())
@@ -6583,7 +6691,10 @@ impl WasmCollabDocument {
     /// Returns a JSON array of cursor states:
     /// `[{"replicaId":2,"nodeId":"1:5","offset":3,"userName":"Alice","userColor":"#ff0000"},...]`
     pub fn get_peers_json(&self) -> Result<String, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let cursors = doc.awareness().remote_cursors();
         let mut items = Vec::new();
         for cursor in &cursors {
@@ -6604,7 +6715,10 @@ impl WasmCollabDocument {
     ///
     /// Returns JSON of the undo operation for broadcast, or null if nothing to undo.
     pub fn undo(&mut self) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         match doc.undo().map_err(|e| JsError::new(&e.to_string()))? {
             Some(crdt_op) => Ok(serialize_crdt_op_to_json(&crdt_op)),
             None => Ok("null".to_string()),
@@ -6613,7 +6727,10 @@ impl WasmCollabDocument {
 
     /// Redo the last undone operation.
     pub fn redo(&mut self) -> Result<String, JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         match doc.redo().map_err(|e| JsError::new(&e.to_string()))? {
             Some(crdt_op) => Ok(serialize_crdt_op_to_json(&crdt_op)),
             None => Ok("null".to_string()),
@@ -6632,29 +6749,43 @@ impl WasmCollabDocument {
 
     /// Get the size of the operation log.
     pub fn op_log_size(&self) -> Result<usize, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         Ok(doc.op_log_size())
     }
 
     /// Get the number of tombstones.
     pub fn tombstone_count(&self) -> Result<usize, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         Ok(doc.tombstone_count())
     }
 
     /// Compact the operation log (merge consecutive single-char inserts).
     pub fn compact_op_log(&mut self) -> Result<(), JsError> {
-        let doc = self.inner.as_mut().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         doc.compact_op_log();
         Ok(())
     }
 
     /// Export the collaborative document to a format (docx, odt, txt, md).
     pub fn export(&self, format: &str) -> Result<Vec<u8>, JsError> {
-        let doc = self.inner.as_ref().ok_or_else(|| JsError::new("Document freed"))?;
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
         let fmt = parse_format(format)?;
         let temp_doc = s1engine::Document::from_model(doc.model().clone());
-        temp_doc.export(fmt).map_err(|e| JsError::new(&e.to_string()))
+        temp_doc
+            .export(fmt)
+            .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Free the document (for manual memory management from JS).
@@ -6680,7 +6811,10 @@ impl WasmEngine {
     ///
     /// The document is loaded and wrapped in a CRDT-aware container.
     pub fn open_collab(&self, data: &[u8], replica_id: u64) -> Result<WasmCollabDocument, JsError> {
-        let doc = self.inner.open(data).map_err(|e| JsError::new(&e.to_string()))?;
+        let doc = self
+            .inner
+            .open(data)
+            .map_err(|e| JsError::new(&e.to_string()))?;
         let collab = s1_crdt::CollabDocument::from_model(doc.into_model(), replica_id);
         Ok(WasmCollabDocument {
             inner: Some(collab),
@@ -6693,20 +6827,38 @@ impl WasmEngine {
 fn serialize_crdt_op_to_json(op: &s1_crdt::CrdtOperation) -> String {
     // Serialize the essential fields for network transport
     let op_type = match &op.operation {
-        Operation::InsertText { target_id, offset, text, .. } => {
+        Operation::InsertText {
+            target_id,
+            offset,
+            text,
+            ..
+        } => {
             format!(
                 "\"type\":\"InsertText\",\"target\":\"{}:{}\",\"offset\":{},\"text\":{}",
-                target_id.replica, target_id.counter, offset, json_escape_string(text)
+                target_id.replica,
+                target_id.counter,
+                offset,
+                json_escape_string(text)
             )
         }
-        Operation::DeleteText { target_id, offset, length, deleted_text, .. } => {
+        Operation::DeleteText {
+            target_id,
+            offset,
+            length,
+            deleted_text,
+            ..
+        } => {
             let text_str = deleted_text.as_deref().unwrap_or("");
             format!(
                 "\"type\":\"DeleteText\",\"target\":\"{}:{}\",\"offset\":{},\"length\":{},\"text\":{}",
                 target_id.replica, target_id.counter, offset, length, json_escape_string(text_str)
             )
         }
-        Operation::SetAttributes { target_id, attributes, previous } => {
+        Operation::SetAttributes {
+            target_id,
+            attributes,
+            previous,
+        } => {
             let prev = previous.as_ref().cloned().unwrap_or_default();
             format!(
                 "\"type\":\"SetAttributes\",\"target\":\"{}:{}\",\"attributes\":{},\"oldAttributes\":{}",
@@ -6715,7 +6867,12 @@ fn serialize_crdt_op_to_json(op: &s1_crdt::CrdtOperation) -> String {
                 attrs_to_json(&prev),
             )
         }
-        Operation::InsertNode { parent_id, index, node, .. } => {
+        Operation::InsertNode {
+            parent_id,
+            index,
+            node,
+            ..
+        } => {
             format!(
                 "\"type\":\"InsertNode\",\"nodeType\":\"{:?}\",\"parent\":\"{}:{}\",\"index\":{},\"nodeId\":\"{}:{}\"",
                 node.node_type, parent_id.replica, parent_id.counter, index, node.id.replica, node.id.counter
@@ -6727,7 +6884,12 @@ fn serialize_crdt_op_to_json(op: &s1_crdt::CrdtOperation) -> String {
                 target_id.replica, target_id.counter
             )
         }
-        Operation::MoveNode { target_id, new_parent_id, new_index, .. } => {
+        Operation::MoveNode {
+            target_id,
+            new_parent_id,
+            new_index,
+            ..
+        } => {
             format!(
                 "\"type\":\"MoveNode\",\"target\":\"{}:{}\",\"newParent\":\"{}:{}\",\"newIndex\":{}",
                 target_id.replica, target_id.counter, new_parent_id.replica, new_parent_id.counter, new_index
@@ -6738,14 +6900,17 @@ fn serialize_crdt_op_to_json(op: &s1_crdt::CrdtOperation) -> String {
 
     format!(
         "{{\"id\":{{\"replica\":{},\"lamport\":{}}},{},\"deps\":{}}}",
-        op.id.replica, op.id.lamport,
+        op.id.replica,
+        op.id.lamport,
         op_type,
         state_vector_to_json(&op.deps),
     )
 }
 
 fn state_vector_to_json(sv: &s1_crdt::StateVector) -> String {
-    let entries: Vec<String> = sv.entries().iter()
+    let entries: Vec<String> = sv
+        .entries()
+        .iter()
         .map(|(r, l)| format!("\"{}\":{}", r, l))
         .collect();
     format!("{{{}}}", entries.join(","))
@@ -6769,15 +6934,18 @@ fn attrs_to_json(attrs: &s1_model::AttributeMap) -> String {
 }
 
 fn json_escape_string(s: &str) -> String {
-    let escaped: String = s.chars().map(|c| match c {
-        '"' => "\\\"".to_string(),
-        '\\' => "\\\\".to_string(),
-        '\n' => "\\n".to_string(),
-        '\r' => "\\r".to_string(),
-        '\t' => "\\t".to_string(),
-        c if c < '\x20' => format!("\\u{:04x}", c as u32),
-        c => c.to_string(),
-    }).collect();
+    let escaped: String = s
+        .chars()
+        .map(|c| match c {
+            '"' => "\\\"".to_string(),
+            '\\' => "\\\\".to_string(),
+            '\n' => "\\n".to_string(),
+            '\r' => "\\r".to_string(),
+            '\t' => "\\t".to_string(),
+            c if c < '\x20' => format!("\\u{:04x}", c as u32),
+            c => c.to_string(),
+        })
+        .collect();
     format!("\"{}\"", escaped)
 }
 
@@ -6800,7 +6968,9 @@ fn deserialize_crdt_op_from_json(json: &str) -> Result<s1_crdt::CrdtOperation, J
 
 fn extract_crdt_op_id(json: &str) -> Result<s1_crdt::OpId, JsError> {
     // Find "id":{"replica":N,"lamport":N}
-    let id_start = json.find("\"id\"").ok_or_else(|| JsError::new("Missing id in CRDT op"))?;
+    let id_start = json
+        .find("\"id\"")
+        .ok_or_else(|| JsError::new("Missing id in CRDT op"))?;
     let rest = &json[id_start..];
     let replica = extract_json_number(rest, "replica")?;
     let lamport = extract_json_number(rest, "lamport")?;
@@ -6817,7 +6987,9 @@ fn extract_crdt_deps(json: &str) -> Result<s1_crdt::StateVector, JsError> {
             // Parse "replica":lamport pairs
             for pair in deps_str.split(',') {
                 let pair = pair.trim();
-                if pair.is_empty() { continue; }
+                if pair.is_empty() {
+                    continue;
+                }
                 let parts: Vec<&str> = pair.split(':').collect();
                 if parts.len() == 2 {
                     let r: u64 = parts[0].trim().trim_matches('"').parse().unwrap_or(0);
@@ -6848,7 +7020,10 @@ fn extract_crdt_operation(json: &str) -> Result<Operation, JsError> {
         "SetAttributes" => {
             let target = extract_json_node_id(json, "target")?;
             // For attributes, we'd need full parsing — simplified for now
-            Ok(Operation::set_attributes(target, s1_model::AttributeMap::new()))
+            Ok(Operation::set_attributes(
+                target,
+                s1_model::AttributeMap::new(),
+            ))
         }
         "InsertNode" => {
             let parent = extract_json_node_id(json, "parent")?;
@@ -6861,23 +7036,38 @@ fn extract_crdt_operation(json: &str) -> Result<Operation, JsError> {
             let target = extract_json_node_id(json, "target")?;
             Ok(Operation::delete_node(target))
         }
-        _ => Err(JsError::new(&format!("Unknown operation type: {}", op_type))),
+        _ => Err(JsError::new(&format!(
+            "Unknown operation type: {}",
+            op_type
+        ))),
     }
 }
 
 fn extract_json_number(json: &str, key: &str) -> Result<u64, JsError> {
     let search = format!("\"{}\"", key);
-    let pos = json.find(&search).ok_or_else(|| JsError::new(&format!("Missing key: {}", key)))?;
+    let pos = json
+        .find(&search)
+        .ok_or_else(|| JsError::new(&format!("Missing key: {}", key)))?;
     let rest = &json[pos + search.len()..];
     let colon = rest.find(':').ok_or_else(|| JsError::new("Invalid JSON"))? + 1;
-    let num_start = rest[colon..].find(|c: char| c.is_ascii_digit()).ok_or_else(|| JsError::new("No number"))? + colon;
-    let num_end = rest[num_start..].find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len() - num_start) + num_start;
-    rest[num_start..num_end].parse().map_err(|_| JsError::new("Invalid number"))
+    let num_start = rest[colon..]
+        .find(|c: char| c.is_ascii_digit())
+        .ok_or_else(|| JsError::new("No number"))?
+        + colon;
+    let num_end = rest[num_start..]
+        .find(|c: char| !c.is_ascii_digit())
+        .unwrap_or(rest.len() - num_start)
+        + num_start;
+    rest[num_start..num_end]
+        .parse()
+        .map_err(|_| JsError::new("Invalid number"))
 }
 
 fn extract_json_string(json: &str, key: &str) -> Result<String, JsError> {
     let search = format!("\"{}\"", key);
-    let pos = json.find(&search).ok_or_else(|| JsError::new(&format!("Missing key: {}", key)))?;
+    let pos = json
+        .find(&search)
+        .ok_or_else(|| JsError::new(&format!("Missing key: {}", key)))?;
     let rest = &json[pos + search.len()..];
     // Find the value string after the colon
     let colon = rest.find(':').ok_or_else(|| JsError::new("Invalid JSON"))? + 1;
@@ -6886,15 +7076,30 @@ fn extract_json_string(json: &str, key: &str) -> Result<String, JsError> {
         let mut end = 0;
         let mut escaped = false;
         for ch in str_content.chars() {
-            if escaped { escaped = false; end += ch.len_utf8(); continue; }
-            if ch == '\\' { escaped = true; end += 1; continue; }
-            if ch == '"' { break; }
+            if escaped {
+                escaped = false;
+                end += ch.len_utf8();
+                continue;
+            }
+            if ch == '\\' {
+                escaped = true;
+                end += 1;
+                continue;
+            }
+            if ch == '"' {
+                break;
+            }
             end += ch.len_utf8();
         }
-        Ok(str_content[..end].replace("\\\"", "\"").replace("\\\\", "\\").replace("\\n", "\n"))
+        Ok(str_content[..end]
+            .replace("\\\"", "\"")
+            .replace("\\\\", "\\")
+            .replace("\\n", "\n"))
     } else {
         // Not a string value — take until comma or brace
-        let end = after_colon.find([',', '}', ']']).unwrap_or(after_colon.len());
+        let end = after_colon
+            .find([',', '}', ']'])
+            .unwrap_or(after_colon.len());
         Ok(after_colon[..end].trim().to_string())
     }
 }
@@ -6918,7 +7123,10 @@ fn serialize_awareness_update(update: &s1_crdt::AwarenessUpdate) -> String {
             )
         }
         None => {
-            format!("{{\"replicaId\":{},\"connected\":false}}", update.replica_id)
+            format!(
+                "{{\"replicaId\":{},\"connected\":false}}",
+                update.replica_id
+            )
         }
     }
 }
@@ -6957,7 +7165,9 @@ fn parse_state_vector_json(json: &str) -> Result<s1_crdt::StateVector, JsError> 
     let trimmed = json.trim().trim_start_matches('{').trim_end_matches('}');
     for pair in trimmed.split(',') {
         let pair = pair.trim();
-        if pair.is_empty() { continue; }
+        if pair.is_empty() {
+            continue;
+        }
         let parts: Vec<&str> = pair.split(':').collect();
         if parts.len() == 2 {
             let r: u64 = parts[0].trim().trim_matches('"').parse().unwrap_or(0);
@@ -7030,21 +7240,40 @@ fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
                     .map(|s| {
                         let fs = s.attributes.get_f64(&AttributeKey::FontSize);
                         let bold = s.attributes.get_bool(&AttributeKey::Bold);
-                        let ff = s.attributes.get_string(&AttributeKey::FontFamily).map(|v| v.to_string());
+                        let ff = s
+                            .attributes
+                            .get_string(&AttributeKey::FontFamily)
+                            .map(|v| v.to_string());
                         (fs, bold, ff)
                     })
                     .unwrap_or((None, None, None));
 
                 let size = style_font_size.unwrap_or(match l {
-                    1 => 24.0, 2 => 18.0, 3 => 14.0, 4 => 12.0, 5 => 11.0, _ => 10.0,
+                    1 => 24.0,
+                    2 => 18.0,
+                    3 => 14.0,
+                    4 => 12.0,
+                    5 => 11.0,
+                    _ => 10.0,
                 });
                 hs.push_str(&format!("font-size:{}pt;", size));
-                let weight = if style_bold == Some(false) { "normal" } else { "700" };
+                let weight = if style_bold == Some(false) {
+                    "normal"
+                } else {
+                    "700"
+                };
                 hs.push_str(&format!("font-weight:{};", weight));
                 if let Some(ref ff) = style_font_family {
                     hs.push_str(&format!("font-family:{};", ff));
                 }
-                let mt: f64 = match l { 1 => 20.0, 2 => 18.0, 3 => 16.0, 4 => 14.0, 5 => 12.0, _ => 10.0 };
+                let mt: f64 = match l {
+                    1 => 20.0,
+                    2 => 18.0,
+                    3 => 16.0,
+                    4 => 14.0,
+                    5 => 12.0,
+                    _ => 10.0,
+                };
                 hs.push_str(&format!("margin-top:{}pt;", mt));
                 let mb: f64 = if l <= 2 { 6.0 } else { 4.0 };
                 hs.push_str(&format!("margin-bottom:{}pt;", mb));
@@ -7053,7 +7282,10 @@ fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
                 String::new()
             };
 
-            let mut html = format!("<{}{} data-node-id=\"{}:{}\">", tag, style_attr, node_id.replica, node_id.counter);
+            let mut html = format!(
+                "<{}{} data-node-id=\"{}:{}\">",
+                tag, style_attr, node_id.replica, node_id.counter
+            );
             let children = model.children(node_id);
             for child in &children {
                 html.push_str(&render_node_to_html(model, child));
@@ -7063,9 +7295,15 @@ fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
         }
         NodeType::Run => {
             let mut style = String::new();
-            if node.attributes.get_bool(&AttributeKey::Bold) == Some(true) { style.push_str("font-weight:bold;"); }
-            if node.attributes.get_bool(&AttributeKey::Italic) == Some(true) { style.push_str("font-style:italic;"); }
-            if node.attributes.get_bool(&AttributeKey::Underline) == Some(true) { style.push_str("text-decoration:underline;"); }
+            if node.attributes.get_bool(&AttributeKey::Bold) == Some(true) {
+                style.push_str("font-weight:bold;");
+            }
+            if node.attributes.get_bool(&AttributeKey::Italic) == Some(true) {
+                style.push_str("font-style:italic;");
+            }
+            if node.attributes.get_bool(&AttributeKey::Underline) == Some(true) {
+                style.push_str("text-decoration:underline;");
+            }
 
             let node_id = node.id;
             let children = model.children(node_id);
@@ -7082,15 +7320,15 @@ fn render_node_to_html(model: &DocumentModel, node: &Node) -> String {
                 format!("<span style=\"{}\">{}</span>", style, inner)
             }
         }
-        NodeType::Text => {
-            html_escape(node.text_content.as_deref().unwrap_or(""))
-        }
+        NodeType::Text => html_escape(node.text_content.as_deref().unwrap_or("")),
         _ => String::new(),
     }
 }
 
 fn html_escape(s: &str) -> String {
-    s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
+    s.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
 }
 
 #[cfg(test)]
@@ -7304,12 +7542,30 @@ mod tests {
     #[test]
     fn test_layout_config_defaults() {
         let config = WasmLayoutConfig::new();
-        assert!((config.page_width() - 612.0).abs() < 0.01, "default width should be US Letter");
-        assert!((config.page_height() - 792.0).abs() < 0.01, "default height should be US Letter");
-        assert!((config.margin_top() - 72.0).abs() < 0.01, "default top margin should be 1 inch");
-        assert!((config.margin_bottom() - 72.0).abs() < 0.01, "default bottom margin should be 1 inch");
-        assert!((config.margin_left() - 72.0).abs() < 0.01, "default left margin should be 1 inch");
-        assert!((config.margin_right() - 72.0).abs() < 0.01, "default right margin should be 1 inch");
+        assert!(
+            (config.page_width() - 612.0).abs() < 0.01,
+            "default width should be US Letter"
+        );
+        assert!(
+            (config.page_height() - 792.0).abs() < 0.01,
+            "default height should be US Letter"
+        );
+        assert!(
+            (config.margin_top() - 72.0).abs() < 0.01,
+            "default top margin should be 1 inch"
+        );
+        assert!(
+            (config.margin_bottom() - 72.0).abs() < 0.01,
+            "default bottom margin should be 1 inch"
+        );
+        assert!(
+            (config.margin_left() - 72.0).abs() < 0.01,
+            "default left margin should be 1 inch"
+        );
+        assert!(
+            (config.margin_right() - 72.0).abs() < 0.01,
+            "default right margin should be 1 inch"
+        );
     }
 
     #[test]
@@ -7775,7 +8031,11 @@ mod tests {
         // Both should render as h2
         let html1 = doc.render_node_html(&id).unwrap();
         let html2 = doc.render_node_html(&new_id).unwrap();
-        assert!(html1.starts_with("<h2 "), "original should be h2: {}", html1);
+        assert!(
+            html1.starts_with("<h2 "),
+            "original should be h2: {}",
+            html1
+        );
         assert!(html2.starts_with("<h2 "), "new should be h2: {}", html2);
     }
 
@@ -7861,11 +8121,7 @@ mod tests {
         let id = doc.append_paragraph("Normal text").unwrap();
         doc.set_heading_level(&id, 2).unwrap();
         let html = doc.render_node_html(&id).unwrap();
-        assert!(
-            html.starts_with("<h2 "),
-            "should now be h2: {}",
-            html
-        );
+        assert!(html.starts_with("<h2 "), "should now be h2: {}", html);
     }
 
     #[test]
@@ -7903,7 +8159,9 @@ mod tests {
         let mut doc = engine.create();
         let para_id = doc.append_paragraph("Hello World").unwrap();
         let runs_before = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs_before.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs_before
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
         let new_run_id = doc.split_run(&run_id, 5).unwrap();
         let text1 = doc.get_run_text(&run_id).unwrap();
@@ -7920,13 +8178,23 @@ mod tests {
         doc.set_bold(&para_id, true).unwrap();
 
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
         let new_run_id = doc.split_run(&run_id, 4).unwrap();
         let fmt1 = doc.get_run_formatting_json(&run_id).unwrap();
         let fmt2 = doc.get_run_formatting_json(&new_run_id).unwrap();
-        assert!(fmt1.contains("\"bold\":true"), "original should be bold: {}", fmt1);
-        assert!(fmt2.contains("\"bold\":true"), "new should be bold: {}", fmt2);
+        assert!(
+            fmt1.contains("\"bold\":true"),
+            "original should be bold: {}",
+            fmt1
+        );
+        assert!(
+            fmt2.contains("\"bold\":true"),
+            "new should be bold: {}",
+            fmt2
+        );
     }
 
     #[test]
@@ -7935,7 +8203,9 @@ mod tests {
         let mut doc = engine.create();
         let para_id = doc.append_paragraph("Some text").unwrap();
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
         doc.format_run(&run_id, "bold", "true").unwrap();
         let fmt = doc.get_run_formatting_json(&run_id).unwrap();
@@ -7949,7 +8219,8 @@ mod tests {
         let para_id = doc.append_paragraph("Hello World").unwrap();
 
         // Bold characters 2-7 ("llo W")
-        doc.format_selection(&para_id, 2, &para_id, 7, "bold", "true").unwrap();
+        doc.format_selection(&para_id, 2, &para_id, 7, "bold", "true")
+            .unwrap();
 
         let runs = doc.get_run_ids(&para_id).unwrap();
         // Should have 3 runs now: "He" (not bold), "llo W" (bold), "orld" (not bold)
@@ -7958,7 +8229,11 @@ mod tests {
             .split(',')
             .map(|s| s.trim_matches('"').to_string())
             .collect();
-        assert!(run_ids.len() >= 3, "should have at least 3 runs: {:?}", run_ids);
+        assert!(
+            run_ids.len() >= 3,
+            "should have at least 3 runs: {:?}",
+            run_ids
+        );
     }
 
     #[test]
@@ -7968,9 +8243,11 @@ mod tests {
         let para_id = doc.append_paragraph("Hello World").unwrap();
 
         // First make part italic
-        doc.format_selection(&para_id, 0, &para_id, 5, "italic", "true").unwrap();
+        doc.format_selection(&para_id, 0, &para_id, 5, "italic", "true")
+            .unwrap();
         // Then bold across runs
-        doc.format_selection(&para_id, 3, &para_id, 8, "bold", "true").unwrap();
+        doc.format_selection(&para_id, 3, &para_id, 8, "bold", "true")
+            .unwrap();
 
         let text = doc.get_paragraph_text(&para_id).unwrap();
         assert_eq!(text, "Hello World");
@@ -7984,7 +8261,8 @@ mod tests {
         let p2 = doc.append_paragraph("Second paragraph").unwrap();
 
         // Bold from offset 5 in p1 to offset 6 in p2
-        doc.format_selection(&p1, 5, &p2, 6, "bold", "true").unwrap();
+        doc.format_selection(&p1, 5, &p2, 6, "bold", "true")
+            .unwrap();
 
         // Both paragraphs should still have their text
         let t1 = doc.get_paragraph_text(&p1).unwrap();
@@ -8002,7 +8280,8 @@ mod tests {
         doc.clear_history().unwrap();
 
         // Bold the middle
-        doc.format_selection(&para_id, 2, &para_id, 7, "bold", "true").unwrap();
+        doc.format_selection(&para_id, 2, &para_id, 7, "bold", "true")
+            .unwrap();
 
         // Undo all format operations
         while doc.can_undo().unwrap() {
@@ -8033,7 +8312,9 @@ mod tests {
         let mut doc = engine.create();
         let para_id = doc.append_paragraph("Hello").unwrap();
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
         let text = doc.get_run_text(&run_id).unwrap();
         assert_eq!(text, "Hello");
     }
@@ -8046,7 +8327,9 @@ mod tests {
         doc.set_bold(&para_id, true).unwrap();
         doc.set_italic(&para_id, true).unwrap();
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
         let fmt = doc.get_run_formatting_json(&run_id).unwrap();
         assert!(fmt.contains("\"bold\":true"), "fmt: {}", fmt);
@@ -8060,7 +8343,9 @@ mod tests {
         let para_id = doc.append_paragraph("All bold").unwrap();
         doc.set_bold(&para_id, true).unwrap();
 
-        let fmt = doc.get_selection_formatting_json(&para_id, 0, &para_id, 8).unwrap();
+        let fmt = doc
+            .get_selection_formatting_json(&para_id, 0, &para_id, 8)
+            .unwrap();
         assert!(fmt.contains("\"bold\":true"), "fmt: {}", fmt);
     }
 
@@ -8071,9 +8356,12 @@ mod tests {
         let para_id = doc.append_paragraph("Hello World").unwrap();
 
         // Bold first half
-        doc.format_selection(&para_id, 0, &para_id, 5, "bold", "true").unwrap();
+        doc.format_selection(&para_id, 0, &para_id, 5, "bold", "true")
+            .unwrap();
 
-        let fmt = doc.get_selection_formatting_json(&para_id, 0, &para_id, 11).unwrap();
+        let fmt = doc
+            .get_selection_formatting_json(&para_id, 0, &para_id, 11)
+            .unwrap();
         assert!(fmt.contains("\"mixed\""), "should have mixed bold: {}", fmt);
     }
 
@@ -8143,7 +8431,13 @@ mod tests {
 
         // Get first cell: table -> row0 -> cell0
         let _children_json = doc.body_children_json().unwrap();
-        let table_node = doc.inner.as_ref().unwrap().model().node(parse_node_id(&table_id).unwrap()).unwrap();
+        let table_node = doc
+            .inner
+            .as_ref()
+            .unwrap()
+            .model()
+            .node(parse_node_id(&table_id).unwrap())
+            .unwrap();
         let row_id = table_node.children[0];
         let row_node = doc.inner.as_ref().unwrap().model().node(row_id).unwrap();
         let cell_id = row_node.children[0];
@@ -8175,8 +8469,20 @@ mod tests {
         // Verify the top-left cell has colspan
         let table_nid = parse_node_id(&table_id).unwrap();
         let table = doc.inner.as_ref().unwrap().model().node(table_nid).unwrap();
-        let row0 = doc.inner.as_ref().unwrap().model().node(table.children[0]).unwrap();
-        let cell00 = doc.inner.as_ref().unwrap().model().node(row0.children[0]).unwrap();
+        let row0 = doc
+            .inner
+            .as_ref()
+            .unwrap()
+            .model()
+            .node(table.children[0])
+            .unwrap();
+        let cell00 = doc
+            .inner
+            .as_ref()
+            .unwrap()
+            .model()
+            .node(row0.children[0])
+            .unwrap();
         assert!(cell00.attributes.get_i64(&AttributeKey::ColSpan) == Some(2));
     }
 
@@ -8189,7 +8495,13 @@ mod tests {
 
         let table_nid = parse_node_id(&table_id).unwrap();
         let table = doc.inner.as_ref().unwrap().model().node(table_nid).unwrap();
-        let row0 = doc.inner.as_ref().unwrap().model().node(table.children[0]).unwrap();
+        let row0 = doc
+            .inner
+            .as_ref()
+            .unwrap()
+            .model()
+            .node(table.children[0])
+            .unwrap();
         let cell_id = row0.children[0];
         let cell_id_str = format!("{}:{}", cell_id.replica, cell_id.counter);
 
@@ -8236,12 +8548,23 @@ mod tests {
         let img_id = d.next_id();
 
         let mut img_node = Node::new(img_id, NodeType::Image);
-        img_node.attributes.set(AttributeKey::ImageMediaId, AttributeValue::MediaId(media_id));
-        img_node.attributes.set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
-        img_node.attributes.set(AttributeKey::ImageHeight, AttributeValue::Float(80.0));
+        img_node.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(80.0));
 
         let mut txn = Transaction::with_label("Insert image test");
-        txn.push(Operation::insert_node(body_id, index, Node::new(para_id, NodeType::Paragraph)));
+        txn.push(Operation::insert_node(
+            body_id,
+            index,
+            Node::new(para_id, NodeType::Paragraph),
+        ));
         txn.push(Operation::insert_node(para_id, 0, img_node));
         d.apply_transaction(&txn).unwrap();
 
@@ -8279,8 +8602,14 @@ mod tests {
         doc.resize_image(&img_id_str, 200.0, 150.0).unwrap();
 
         let img = doc.inner.as_ref().unwrap().model().node(img_id).unwrap();
-        assert_eq!(img.attributes.get_f64(&AttributeKey::ImageWidth), Some(200.0));
-        assert_eq!(img.attributes.get_f64(&AttributeKey::ImageHeight), Some(150.0));
+        assert_eq!(
+            img.attributes.get_f64(&AttributeKey::ImageWidth),
+            Some(200.0)
+        );
+        assert_eq!(
+            img.attributes.get_f64(&AttributeKey::ImageHeight),
+            Some(150.0)
+        );
     }
 
     #[test]
@@ -8292,7 +8621,11 @@ mod tests {
         let img_id_str = format!("{}:{}", img_id.replica, img_id.counter);
 
         let data_url = doc.get_image_data_url(&img_id_str).unwrap();
-        assert!(data_url.starts_with("data:image/png;base64,"), "data_url: {}", data_url);
+        assert!(
+            data_url.starts_with("data:image/png;base64,"),
+            "data_url: {}",
+            data_url
+        );
     }
 
     #[test]
@@ -8306,7 +8639,10 @@ mod tests {
         doc.set_image_alt_text(&img_id_str, "A photo").unwrap();
 
         let img = doc.inner.as_ref().unwrap().model().node(img_id).unwrap();
-        assert_eq!(img.attributes.get_string(&AttributeKey::ImageAltText), Some("A photo"));
+        assert_eq!(
+            img.attributes.get_string(&AttributeKey::ImageAltText),
+            Some("A photo")
+        );
     }
 
     #[test]
@@ -8329,13 +8665,19 @@ mod tests {
         let mut doc = engine.create();
         let para_id = doc.append_paragraph("Click here").unwrap();
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
-        doc.insert_hyperlink(&run_id, "https://example.com", "").unwrap();
+        doc.insert_hyperlink(&run_id, "https://example.com", "")
+            .unwrap();
 
         let run_nid = parse_node_id(&run_id).unwrap();
         let run = doc.inner.as_ref().unwrap().model().node(run_nid).unwrap();
-        assert_eq!(run.attributes.get_string(&AttributeKey::HyperlinkUrl), Some("https://example.com"));
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::HyperlinkUrl),
+            Some("https://example.com")
+        );
     }
 
     #[test]
@@ -8344,14 +8686,20 @@ mod tests {
         let mut doc = engine.create();
         let para_id = doc.append_paragraph("Link text").unwrap();
         let runs = doc.get_run_ids(&para_id).unwrap();
-        let run_id: String = runs.trim_matches(|c| c == '[' || c == ']' || c == '"').to_string();
+        let run_id: String = runs
+            .trim_matches(|c| c == '[' || c == ']' || c == '"')
+            .to_string();
 
-        doc.insert_hyperlink(&run_id, "https://example.com", "").unwrap();
+        doc.insert_hyperlink(&run_id, "https://example.com", "")
+            .unwrap();
         doc.remove_hyperlink(&run_id).unwrap();
 
         let run_nid = parse_node_id(&run_id).unwrap();
         let run = doc.inner.as_ref().unwrap().model().node(run_nid).unwrap();
-        assert!(run.attributes.get_string(&AttributeKey::HyperlinkUrl).is_none());
+        assert!(run
+            .attributes
+            .get_string(&AttributeKey::HyperlinkUrl)
+            .is_none());
     }
 
     #[test]
@@ -8371,7 +8719,11 @@ mod tests {
         doc.set_list_format(&para_id, "bullet", 0).unwrap();
 
         let html = doc.render_node_html(&para_id).unwrap();
-        assert!(html.contains("\u{2022}"), "should have bullet marker: {}", html);
+        assert!(
+            html.contains("\u{2022}"),
+            "should have bullet marker: {}",
+            html
+        );
     }
 
     #[test]
@@ -8409,7 +8761,10 @@ mod tests {
 
         let pb_nid = parse_node_id(&pb_id).unwrap();
         let pb = doc.inner.as_ref().unwrap().model().node(pb_nid).unwrap();
-        assert_eq!(pb.attributes.get_bool(&AttributeKey::PageBreakBefore), Some(true));
+        assert_eq!(
+            pb.attributes.get_bool(&AttributeKey::PageBreakBefore),
+            Some(true)
+        );
     }
 
     #[test]
@@ -8425,7 +8780,9 @@ mod tests {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
         let p1 = doc.append_paragraph("Commented text").unwrap();
-        let cid = doc.insert_comment(&p1, &p1, "Alice", "Great point!").unwrap();
+        let cid = doc
+            .insert_comment(&p1, &p1, "Alice", "Great point!")
+            .unwrap();
         assert!(!cid.is_empty());
 
         let json = doc.get_comments_json().unwrap();
@@ -8514,7 +8871,11 @@ mod tests {
 
         // Should have created additional paragraphs
         let count = doc.paragraph_count().unwrap();
-        assert!(count >= 3, "should have at least 3 paragraphs, got {}", count);
+        assert!(
+            count >= 3,
+            "should have at least 3 paragraphs, got {}",
+            count
+        );
     }
 
     // ── Paste formatted runs tests ────────────────────────
@@ -8526,7 +8887,8 @@ mod tests {
         let p = doc.append_paragraph("Hello").unwrap();
         // Empty paste should be a no-op
         doc.paste_formatted_runs_json(&p, 0, "{}").unwrap();
-        doc.paste_formatted_runs_json(&p, 0, "{\"paragraphs\":[]}").unwrap();
+        doc.paste_formatted_runs_json(&p, 0, "{\"paragraphs\":[]}")
+            .unwrap();
         let text = doc.get_document_text().unwrap();
         assert!(text.contains("Hello"));
     }
@@ -8538,7 +8900,8 @@ mod tests {
         let p = doc.append_paragraph("AB").unwrap();
 
         // Paste two runs between A and B
-        let json = r#"{"paragraphs":[{"runs":[{"text":"xx","bold":true},{"text":"yy","italic":true}]}]}"#;
+        let json =
+            r#"{"paragraphs":[{"runs":[{"text":"xx","bold":true},{"text":"yy","italic":true}]}]}"#;
         doc.paste_formatted_runs_json(&p, 1, json).unwrap();
 
         let text = doc.get_document_text().unwrap();
@@ -8547,7 +8910,11 @@ mod tests {
         // Verify formatting: find runs, check bold on "xx" and italic on "yy"
         let run_ids_json = doc.get_run_ids(&p).unwrap();
         // There should be multiple runs now (after formatting split the original)
-        assert!(run_ids_json.contains(":"), "should have run IDs: {}", run_ids_json);
+        assert!(
+            run_ids_json.contains(":"),
+            "should have run IDs: {}",
+            run_ids_json
+        );
     }
 
     #[test]
@@ -8561,7 +8928,11 @@ mod tests {
         doc.paste_formatted_runs_json(&p, 5, json).unwrap();
 
         let text = doc.get_document_text().unwrap();
-        assert!(text.contains("Start middle"), "expected 'Start middle' in: {}", text);
+        assert!(
+            text.contains("Start middle"),
+            "expected 'Start middle' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -8577,7 +8948,11 @@ mod tests {
         let text = doc.get_document_text().unwrap();
         // Result should be: "AAfirst\nsecondBB" (spread across paragraphs)
         assert!(text.contains("AAfirst"), "expected 'AAfirst' in: {}", text);
-        assert!(text.contains("secondBB"), "expected 'secondBB' in: {}", text);
+        assert!(
+            text.contains("secondBB"),
+            "expected 'secondBB' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -8590,7 +8965,11 @@ mod tests {
         doc.paste_formatted_runs_json(&p, 4, json).unwrap();
 
         let text = doc.get_document_text().unwrap();
-        assert!(text.contains("Testcolored"), "expected 'Testcolored' in: {}", text);
+        assert!(
+            text.contains("Testcolored"),
+            "expected 'Testcolored' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -8603,7 +8982,11 @@ mod tests {
         doc.paste_formatted_runs_json(&p, 0, json).unwrap();
 
         let text = doc.get_document_text().unwrap();
-        assert!(text.contains("Begin End"), "expected 'Begin End' in: {}", text);
+        assert!(
+            text.contains("Begin End"),
+            "expected 'Begin End' in: {}",
+            text
+        );
     }
 
     #[test]
@@ -8636,7 +9019,8 @@ mod tests {
 
     #[test]
     fn test_parse_paste_json_multi_run() {
-        let json = r#"{"paragraphs":[{"runs":[{"text":"a","bold":true},{"text":"b","fontSize":14}]}]}"#;
+        let json =
+            r#"{"paragraphs":[{"runs":[{"text":"a","bold":true},{"text":"b","fontSize":14}]}]}"#;
         let result = parse_paste_json(json).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].len(), 2);
@@ -8680,7 +9064,8 @@ mod tests {
         let id = doc.append_paragraph("Hello World Test").unwrap();
 
         // Bold "World" (chars 6..11) — creates 3 runs
-        doc.format_selection(&id, 6, &id, 11, "bold", "true").unwrap();
+        doc.format_selection(&id, 6, &id, 11, "bold", "true")
+            .unwrap();
 
         // Split at offset 8 (inside "World" → "Wo" | "rld Test")
         let new_id = doc.split_paragraph(&id, 8).unwrap();
@@ -8697,7 +9082,8 @@ mod tests {
         let id = doc.append_paragraph("AB CD EF").unwrap();
 
         // Bold "CD" (chars 3..5) — creates 3 runs: "AB " | "CD" | " EF"
-        doc.format_selection(&id, 3, &id, 5, "bold", "true").unwrap();
+        doc.format_selection(&id, 3, &id, 5, "bold", "true")
+            .unwrap();
 
         // Insert "X" at offset 4 (inside bold "CD")
         doc.insert_text_in_paragraph(&id, 4, "X").unwrap();
@@ -8712,7 +9098,8 @@ mod tests {
         let id = doc.append_paragraph("AB CD EF").unwrap();
 
         // Bold "CD" (chars 3..5) — creates 3 runs
-        doc.format_selection(&id, 3, &id, 5, "bold", "true").unwrap();
+        doc.format_selection(&id, 3, &id, 5, "bold", "true")
+            .unwrap();
 
         // Delete 1 char at offset 4 (the "D" inside bold run)
         doc.delete_text_in_paragraph(&id, 4, 1).unwrap();
@@ -8727,7 +9114,8 @@ mod tests {
         let id = doc.append_paragraph("Hello World End").unwrap();
 
         // Bold "World" (chars 6..11)
-        doc.format_selection(&id, 6, &id, 11, "bold", "true").unwrap();
+        doc.format_selection(&id, 6, &id, 11, "bold", "true")
+            .unwrap();
 
         // Delete selection spanning from offset 4 to 13 (crossing run boundaries)
         doc.delete_selection(&id, 4, &id, 13).unwrap();
@@ -8742,7 +9130,8 @@ mod tests {
         let id = doc.append_paragraph("Start Middle End").unwrap();
 
         // Bold "Middle" (chars 6..12) — creates 3 runs
-        doc.format_selection(&id, 6, &id, 12, "bold", "true").unwrap();
+        doc.format_selection(&id, 6, &id, 12, "bold", "true")
+            .unwrap();
 
         // Replace "Mid" (offset 6, length 3) with "Top"
         doc.replace_text(&id, 6, 3, "Top").unwrap();
@@ -8770,9 +9159,7 @@ mod tests {
             .unwrap();
 
         // Export full selection spanning both paragraphs
-        let html = doc
-            .export_selection_html(&id1, 0, &id2, 16)
-            .unwrap();
+        let html = doc.export_selection_html(&id1, 0, &id2, 16).unwrap();
 
         // Must NOT contain data-node-id or editor-specific attributes
         assert!(
@@ -8803,15 +9190,24 @@ mod tests {
         );
 
         // Must contain the text
-        assert!(html.contains("Hello"), "Expected 'Hello' in output. Got: {html}");
-        assert!(html.contains("World"), "Expected 'World' in output. Got: {html}");
+        assert!(
+            html.contains("Hello"),
+            "Expected 'Hello' in output. Got: {html}"
+        );
+        assert!(
+            html.contains("World"),
+            "Expected 'World' in output. Got: {html}"
+        );
         assert!(
             html.contains("Second paragraph"),
             "Expected 'Second paragraph' in output. Got: {html}"
         );
 
         // Must have paragraph tags
-        assert!(html.contains("<p>") || html.contains("<p "), "Expected <p> tags. Got: {html}");
+        assert!(
+            html.contains("<p>") || html.contains("<p "),
+            "Expected <p> tags. Got: {html}"
+        );
     }
 
     #[test]

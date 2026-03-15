@@ -150,17 +150,25 @@ export function renderDocument() {
   } catch (e) { console.error('Render error:', e); }
 }
 
-// ─── Per-change Track Changes popup ─────────────────
+// ─── Per-change Track Changes popup (event delegation) ─────────────────
+let _tcDelegationSetup = false;
 function setupTrackChangeHandlers() {
-  const tcElements = queryAllNodes('[data-tc-node-id]');
-  if (tcElements.length === 0) return;
-
-  tcElements.forEach(el => {
+  // Style all tc elements with pointer cursor
+  queryAllNodes('[data-tc-node-id]').forEach(el => {
     el.style.cursor = 'pointer';
-    el.addEventListener('click', e => {
+  });
+
+  // Only set up delegation once — no listener accumulation
+  if (_tcDelegationSetup) return;
+  const container = $('pageContainer');
+  if (!container) return;
+  _tcDelegationSetup = true;
+  container.addEventListener('click', e => {
+    const tcEl = e.target.closest?.('[data-tc-node-id]');
+    if (tcEl) {
       e.stopPropagation();
-      showTcPopup(el);
-    });
+      showTcPopup(tcEl);
+    }
   });
 }
 
@@ -265,12 +273,15 @@ export function applyPageDimensions() {
  * Apply zoom level to all page elements.
  */
 function applyZoom() {
-  if (!state.zoomLevel || state.zoomLevel === 100) return;
-  const scale = state.zoomLevel / 100;
-  for (const pageEl of state.pageElements) {
-    pageEl.style.transform = `scale(${scale})`;
-    pageEl.style.transformOrigin = 'top center';
+  const container = $('pageContainer');
+  if (!container) return;
+  if (!state.zoomLevel || state.zoomLevel === 100) {
+    container.style.zoom = '';
+    return;
   }
+  // Use CSS zoom instead of transform:scale — zoom adjusts layout coordinates
+  // so click handlers, selection, and resize all work correctly at any zoom level.
+  container.style.zoom = (state.zoomLevel / 100);
 }
 
 // ═══════════════════════════════════════════════════
@@ -315,7 +326,10 @@ export function renderNodeById(nodeIdStr) {
     if (!newEl) return null;
     if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
 
-    if (el.outerHTML === newEl.outerHTML) {
+    // Skip DOM replacement if innerHTML matches (cheaper than outerHTML —
+    // avoids serializing the wrapper element's tag and attributes).
+    const newInner = newEl.innerHTML;
+    if (el.innerHTML === newInner) {
       state.syncedTextCache.set(nodeIdStr, el.textContent || '');
       return el;
     }
@@ -347,13 +361,20 @@ export function fixEmptyBlocks() {
 
 export function cacheAllText() {
   state.syncedTextCache.clear();
-  queryAllNodes('[data-node-id]').forEach(el => {
-    if (el.classList.contains('vs-placeholder')) return;
-    const tag = el.tagName.toLowerCase();
-    if (tag === 'p' || /^h[1-6]$/.test(tag)) {
-      state.syncedTextCache.set(el.dataset.nodeId, el.textContent || '');
+  // Use pageElements for faster traversal (skip non-page DOM)
+  for (const pageEl of state.pageElements) {
+    const contentEl = pageEl.querySelector('.page-content');
+    if (!contentEl) continue;
+    const children = contentEl.children;
+    for (let i = 0; i < children.length; i++) {
+      const el = children[i];
+      if (!el.dataset?.nodeId || el.classList.contains('vs-placeholder')) continue;
+      const tag = el.tagName.toLowerCase();
+      if (tag === 'p' || /^h[1-6]$/.test(tag)) {
+        state.syncedTextCache.set(el.dataset.nodeId, el.textContent || '');
+      }
     }
-  });
+  }
 }
 
 export function syncParagraphText(el) {
@@ -648,6 +669,24 @@ function restoreBlock(entry, idx) {
 
 function teardownVirtualScroll() {
   if (!state.virtualScroll) return;
-  state.virtualScroll.observer.disconnect();
+  const vs = state.virtualScroll;
+  // Disconnect the IntersectionObserver to release all observed element references
+  vs.observer.disconnect();
+  // Restore any collapsed blocks so they aren't lost
+  for (const entry of vs.entries) {
+    if (!entry.visible && entry.html && entry.el?.parentNode) {
+      try {
+        const temp = document.createElement('div');
+        temp.innerHTML = entry.html;
+        const restored = temp.firstElementChild;
+        if (restored) {
+          entry.el.replaceWith(restored);
+          if (entry.nodeId) state.nodeIdToElement.set(entry.nodeId, restored);
+        }
+      } catch (_) {}
+    }
+  }
+  // Clear all references so entries + indexMap can be GC'd
+  vs.entries.length = 0;
   state.virtualScroll = null;
 }

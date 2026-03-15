@@ -97,9 +97,7 @@ impl DocumentBuilder {
         let _ = self.model.insert_node(para_id, 0, run);
 
         let text_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(run_id, 0, Node::text(text_id, text));
+        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
@@ -186,9 +184,7 @@ impl DocumentBuilder {
             .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(run_id, 0, Node::text(text_id, text));
+        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
@@ -438,9 +434,7 @@ impl DocumentBuilder {
             .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(run_id, 0, Node::text(text_id, text));
+        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
 
         hf_id
     }
@@ -591,9 +585,7 @@ impl<'a> ParagraphBuilder<'a> {
         let _ = self.model.insert_node(self.para_id, child_count, run);
 
         let text_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(run_id, 0, Node::text(text_id, text));
+        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
 
         self
     }
@@ -675,9 +667,7 @@ impl<'a> RowBuilder<'a> {
             .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
 
         let text_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(run_id, 0, Node::text(text_id, text));
+        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
 
         Self {
             model: self.model,

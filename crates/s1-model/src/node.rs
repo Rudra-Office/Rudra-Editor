@@ -192,9 +192,9 @@ impl NodeType {
             NodeType::TableRow => &[NodeType::TableCell],
             NodeType::TableCell => &[NodeType::Paragraph, NodeType::Table],
             NodeType::Header | NodeType::Footer => &[NodeType::Paragraph, NodeType::Table],
-            NodeType::CommentBody
-            | NodeType::FootnoteBody
-            | NodeType::EndnoteBody => &[NodeType::Paragraph],
+            NodeType::CommentBody | NodeType::FootnoteBody | NodeType::EndnoteBody => {
+                &[NodeType::Paragraph]
+            }
             // Leaf nodes
             _ => &[],
         }

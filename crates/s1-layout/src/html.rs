@@ -79,7 +79,12 @@ pub fn layout_to_html_with_options(doc: &LayoutDocument, options: &HtmlOptions) 
 }
 
 /// Render a single page.
-fn render_page(html: &mut String, page: &LayoutPage, options: &HtmlOptions, bookmarks: &[LayoutBookmark]) {
+fn render_page(
+    html: &mut String,
+    page: &LayoutPage,
+    options: &HtmlOptions,
+    bookmarks: &[LayoutBookmark],
+) {
     let shadow = if options.page_shadows {
         "box-shadow:0 2px 8px rgba(0,0,0,0.3);"
     } else {
@@ -116,6 +121,26 @@ fn render_page(html: &mut String, page: &LayoutPage, options: &HtmlOptions, book
         render_block(html, block);
     }
 
+    // Render footnotes if present
+    if !page.footnotes.is_empty() {
+        // Position footnotes at the bottom of the content area
+        let footnote_y = page.content_area.y + page.content_area.height
+            - page.footnotes.iter().map(|b| b.bounds.height).sum::<f64>()
+            - 8.0; // space for separator
+        html.push_str(&format!(
+            "<div class=\"s1-footnotes\" style=\"position:absolute;left:{}pt;top:{}pt;width:{}pt\">",
+            page.content_area.x, footnote_y, page.content_area.width
+        ));
+        // Separator line
+        html.push_str(
+            "<hr style=\"width:33%;margin:0 0 4pt 0;border:none;border-top:0.5pt solid #000\"/>",
+        );
+        for fn_block in &page.footnotes {
+            render_block_with_offset(html, fn_block, 0.0, fn_block.bounds.y);
+        }
+        html.push_str("</div>");
+    }
+
     // Render footer if present
     if let Some(footer) = &page.footer {
         render_block(html, footer);
@@ -137,8 +162,40 @@ fn render_block(html: &mut String, block: &LayoutBlock) {
 /// table-relative to cell-relative coordinates.
 fn render_block_with_offset(html: &mut String, block: &LayoutBlock, x_offset: f64, y_offset: f64) {
     match &block.kind {
-        LayoutBlockKind::Paragraph { lines, text_align, background_color, border, list_marker, list_level, space_before, space_after, indent_left, indent_right, indent_first_line, line_height } => {
-            render_paragraph(html, block, lines, text_align.as_deref(), background_color.as_ref(), border.as_deref(), list_marker.as_deref(), *list_level, *space_before, *space_after, *indent_left, *indent_right, *indent_first_line, *line_height, x_offset, y_offset);
+        LayoutBlockKind::Paragraph {
+            lines,
+            text_align,
+            background_color,
+            border,
+            list_marker,
+            list_level,
+            space_before,
+            space_after,
+            indent_left,
+            indent_right,
+            indent_first_line,
+            line_height,
+            bidi,
+        } => {
+            render_paragraph(
+                html,
+                block,
+                lines,
+                text_align.as_deref(),
+                background_color.as_ref(),
+                border.as_deref(),
+                list_marker.as_deref(),
+                *list_level,
+                *space_before,
+                *space_after,
+                *indent_left,
+                *indent_right,
+                *indent_first_line,
+                *line_height,
+                *bidi,
+                x_offset,
+                y_offset,
+            );
         }
         LayoutBlockKind::Table { rows, .. } => {
             render_table(html, block, rows);
@@ -149,22 +206,42 @@ fn render_block_with_offset(html: &mut String, block: &LayoutBlock, x_offset: f6
             ..
         } => {
             render_image(html, block, image_data, content_type, x_offset, y_offset);
-        }
-        // Note: all current LayoutBlockKind variants are handled above.
-        // If new variants are added, they will produce a compile error here.
+        } // Note: all current LayoutBlockKind variants are handled above.
+          // If new variants are added, they will produce a compile error here.
     }
 }
 
 /// Render a paragraph block with lines and glyph runs.
 #[allow(clippy::too_many_arguments)]
-fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine], text_align: Option<&str>, background_color: Option<&Color>, border: Option<&str>, list_marker: Option<&str>, list_level: u8, space_before: f64, space_after: f64, indent_left: f64, indent_right: f64, indent_first_line: f64, line_height: Option<f64>, x_offset: f64, y_offset: f64) {
+fn render_paragraph(
+    html: &mut String,
+    block: &LayoutBlock,
+    lines: &[LayoutLine],
+    text_align: Option<&str>,
+    background_color: Option<&Color>,
+    border: Option<&str>,
+    list_marker: Option<&str>,
+    list_level: u8,
+    space_before: f64,
+    space_after: f64,
+    indent_left: f64,
+    indent_right: f64,
+    indent_first_line: f64,
+    line_height: Option<f64>,
+    bidi: bool,
+    x_offset: f64,
+    y_offset: f64,
+) {
     let b = &block.bounds;
     let mut extra_style = String::new();
     if let Some(align) = text_align {
         extra_style.push_str(&format!(";text-align:{align}"));
     }
     if let Some(bg) = background_color {
-        extra_style.push_str(&format!(";background-color:#{:02x}{:02x}{:02x}", bg.r, bg.g, bg.b));
+        extra_style.push_str(&format!(
+            ";background-color:#{:02x}{:02x}{:02x}",
+            bg.r, bg.g, bg.b
+        ));
     }
     if let Some(bdr) = border {
         extra_style.push_str(&format!(";border:{bdr}"));
@@ -197,8 +274,9 @@ fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine]
             extra_style.push_str(&format!(";line-height:{}", fmt_pt(lh)));
         }
     }
+    let dir_attr = if bidi { " dir=\"rtl\"" } else { "" };
     html.push_str(&format!(
-        "<div class=\"s1-block\" style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt{extra}\">",
+        "<div class=\"s1-block\"{dir_attr} style=\"position:absolute;left:{x}pt;top:{y}pt;width:{w}pt{extra}\">",
         x = fmt_pt(b.x - x_offset),
         y = fmt_pt(b.y - y_offset),
         w = fmt_pt(b.width),
@@ -208,11 +286,16 @@ fn render_paragraph(html: &mut String, block: &LayoutBlock, lines: &[LayoutLine]
     // Add list marker if present
     if let Some(marker) = list_marker {
         // Use document's indent or fall back to 18pt per level
-        let effective_indent = if indent_left > 0.1 { indent_left } else { (list_level as f64) * 18.0 };
+        let effective_indent = if indent_left > 0.1 {
+            indent_left
+        } else {
+            (list_level as f64) * 18.0
+        };
         let marker_offset = effective_indent.max(12.0); // At least 12pt for marker
         html.push_str(&format!(
             "<span class=\"s1-list-marker\" style=\"position:absolute;left:-{}pt\">{}</span>",
-            fmt_pt(marker_offset), escape_html(marker)
+            fmt_pt(marker_offset),
+            escape_html(marker)
         ));
     }
 
@@ -606,7 +689,21 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
 
         let page = LayoutPage {
@@ -617,6 +714,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -637,6 +735,7 @@ mod tests {
                 blocks: Vec::new(),
                 header: None,
                 footer: None,
+                footnotes: vec![],
                 section_index: 0,
             }],
             bookmarks: Vec::new(),
@@ -668,6 +767,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
         let page2 = LayoutPage {
@@ -678,6 +778,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -723,7 +824,21 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 16.8),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
 
         let page = LayoutPage {
@@ -734,6 +849,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -766,6 +882,7 @@ mod tests {
                 indent_right: 0.0,
                 indent_first_line: 0.0,
                 line_height: None,
+                bidi: false,
                 lines: vec![LayoutLine {
                     baseline_y: 10.0,
                     height: 14.4,
@@ -814,7 +931,10 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 400.0, 20.0),
-            kind: LayoutBlockKind::Table { rows: vec![row], is_continuation: false },
+            kind: LayoutBlockKind::Table {
+                rows: vec![row],
+                is_continuation: false,
+            },
         };
 
         let page = LayoutPage {
@@ -825,6 +945,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -862,6 +983,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -871,7 +993,10 @@ mod tests {
         };
 
         let html = layout_to_html(&doc);
-        assert!(html.contains("data:image/png;base64,"), "missing base64 image: {html}");
+        assert!(
+            html.contains("data:image/png;base64,"),
+            "missing base64 image: {html}"
+        );
         assert!(html.contains("s1-image"), "missing image class: {html}");
         assert!(html.contains("width:200pt"), "missing width: {html}");
         assert!(html.contains("height:150pt"), "missing height: {html}");
@@ -945,6 +1070,7 @@ mod tests {
                 indent_right: 0.0,
                 indent_first_line: 0.0,
                 line_height: None,
+                bidi: false,
             },
         };
 
@@ -968,6 +1094,7 @@ mod tests {
                 indent_right: 0.0,
                 indent_first_line: 0.0,
                 line_height: None,
+                bidi: false,
             },
         };
 
@@ -979,6 +1106,7 @@ mod tests {
             blocks: Vec::new(),
             header: Some(header_block),
             footer: Some(footer_block),
+            footnotes: Vec::new(),
             section_index: 0,
         };
 
@@ -1030,7 +1158,21 @@ mod tests {
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
 
         let page = LayoutPage {
@@ -1041,6 +1183,7 @@ mod tests {
             blocks: vec![block],
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -1068,6 +1211,7 @@ mod tests {
             blocks: Vec::new(),
             header: None,
             footer: None,
+            footnotes: vec![],
             section_index: 0,
         };
 
@@ -1097,7 +1241,10 @@ mod tests {
             "special chars not escaped: {html}"
         );
         // Must NOT contain raw angle brackets in text
-        assert!(!html.contains("<World>"), "raw angle brackets in output: {html}");
+        assert!(
+            !html.contains("<World>"),
+            "raw angle brackets in output: {html}"
+        );
     }
 
     #[test]
@@ -1125,20 +1272,50 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
-        assert!(html.contains("vertical-align:super"), "missing superscript: {html}");
+        assert!(
+            html.contains("vertical-align:super"),
+            "missing superscript: {html}"
+        );
     }
 
     #[test]
@@ -1166,20 +1343,50 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
-        assert!(html.contains("vertical-align:sub"), "missing subscript: {html}");
+        assert!(
+            html.contains("vertical-align:sub"),
+            "missing subscript: {html}"
+        );
     }
 
     #[test]
@@ -1207,20 +1414,50 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
-        assert!(html.contains("background-color:#ffff00"), "missing highlight: {html}");
+        assert!(
+            html.contains("background-color:#ffff00"),
+            "missing highlight: {html}"
+        );
     }
 
     #[test]
@@ -1248,18 +1485,45 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
         assert!(html.contains("<ins"), "missing <ins> tag: {html}");
         assert!(html.contains("color:green"), "missing green color: {html}");
@@ -1292,18 +1556,45 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
         assert!(html.contains("<del"), "missing <del> tag: {html}");
         assert!(html.contains("color:red"), "missing red color: {html}");
@@ -1336,19 +1627,49 @@ mod tests {
             inline_image: None,
         };
 
-        let line = LayoutLine { baseline_y: 10.0, height: 14.4, runs: vec![run] };
+        let line = LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![run],
+        };
         let block = LayoutBlock {
             source_id: dummy_node_id(),
             bounds: Rect::new(72.0, 72.0, 468.0, 14.4),
-            kind: LayoutBlockKind::Paragraph { lines: vec![line], text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+            kind: LayoutBlockKind::Paragraph {
+                lines: vec![line],
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+            },
         };
         let page = LayoutPage {
-            index: 0, width: 612.0, height: 792.0,
+            index: 0,
+            width: 612.0,
+            height: 792.0,
             content_area: Rect::new(72.0, 72.0, 468.0, 648.0),
-            blocks: vec![block], header: None, footer: None, section_index: 0,
+            blocks: vec![block],
+            header: None,
+            footer: None,
+            footnotes: vec![],
+            section_index: 0,
         };
-        let doc = LayoutDocument { pages: vec![page], bookmarks: Vec::new() };
+        let doc = LayoutDocument {
+            pages: vec![page],
+            bookmarks: Vec::new(),
+        };
         let html = layout_to_html(&doc);
-        assert!(html.contains("letter-spacing:2.5pt"), "missing letter-spacing: {html}");
+        assert!(
+            html.contains("letter-spacing:2.5pt"),
+            "missing letter-spacing: {html}"
+        );
     }
 }

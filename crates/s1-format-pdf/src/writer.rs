@@ -919,7 +919,10 @@ fn write_pdfa_output_intent(pdf: &mut Pdf, alloc: &mut RefAllocator) -> Ref {
     let mut oi = pdf.indirect(oi_ref).dict();
     oi.pair(Name(b"Type"), Name(b"OutputIntent"));
     oi.pair(Name(b"S"), Name(b"GTS_PDFA1"));
-    oi.pair(Name(b"OutputConditionIdentifier"), TextStr("sRGB IEC61966-2.1"));
+    oi.pair(
+        Name(b"OutputConditionIdentifier"),
+        TextStr("sRGB IEC61966-2.1"),
+    );
     oi.pair(Name(b"RegistryName"), TextStr("http://www.color.org"));
     oi.pair(Name(b"Info"), TextStr("sRGB IEC61966-2.1"));
     oi.pair(Name(b"DestOutputProfile"), icc_ref);
@@ -958,8 +961,8 @@ fn build_minimal_srgb_icc_profile() -> Vec<u8> {
 
     // Date/time: 2024-01-01
     profile[24..26].copy_from_slice(&2024u16.to_be_bytes()); // year
-    profile[26..28].copy_from_slice(&1u16.to_be_bytes());    // month
-    profile[28..30].copy_from_slice(&1u16.to_be_bytes());    // day
+    profile[26..28].copy_from_slice(&1u16.to_be_bytes()); // month
+    profile[28..30].copy_from_slice(&1u16.to_be_bytes()); // day
 
     // Profile file signature: 'acsp'
     profile[36..40].copy_from_slice(b"acsp");
@@ -1857,11 +1860,17 @@ mod tests {
         assert!(bytes.starts_with(b"%PDF"));
         // Should contain OutputIntent
         let pdf_str = String::from_utf8_lossy(&bytes);
-        assert!(pdf_str.contains("OutputIntent"), "should contain OutputIntent");
+        assert!(
+            pdf_str.contains("OutputIntent"),
+            "should contain OutputIntent"
+        );
         assert!(pdf_str.contains("GTS_PDFA1"), "should reference PDF/A-1");
         // Should contain XMP metadata
         assert!(pdf_str.contains("pdfaid:part"), "should contain PDF/A id");
-        assert!(pdf_str.contains("pdfaid:conformance"), "should contain conformance level");
+        assert!(
+            pdf_str.contains("pdfaid:conformance"),
+            "should contain conformance level"
+        );
         // Should have ICC profile reference
         assert!(pdf_str.contains("sRGB"), "should reference sRGB");
     }

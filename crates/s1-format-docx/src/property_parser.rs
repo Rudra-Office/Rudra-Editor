@@ -307,6 +307,9 @@ pub fn parse_paragraph_properties(reader: &mut Reader<&[u8]>) -> Result<Attribut
                             AttributeValue::Bool(is_toggle_on(&e)),
                         );
                     }
+                    b"bidi" => {
+                        attrs.set(AttributeKey::Bidi, AttributeValue::Bool(is_toggle_on(&e)));
+                    }
                     b"shd" => {
                         // Paragraph shading/background color
                         if let Some(fill) = get_attr(&e, b"fill") {

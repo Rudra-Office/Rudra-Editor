@@ -348,6 +348,31 @@ fn write_paragraph(
                 }
                 i += 1;
             }
+            NodeType::FootnoteRef => {
+                if let Some(fid) = child.attributes.get_string(&AttributeKey::FootnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{}"/></w:r>"#,
+                        escape_xml(fid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::EndnoteRef => {
+                if let Some(eid) = child.attributes.get_string(&AttributeKey::EndnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:endnoteReference w:id="{}"/></w:r>"#,
+                        escape_xml(eid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::Equation => {
+                // Write the raw equation XML stored in EquationSource attribute
+                if let Some(source) = child.attributes.get_string(&AttributeKey::EquationSource) {
+                    xml.push_str(source);
+                }
+                i += 1;
+            }
             _ => {
                 i += 1;
             }
@@ -926,6 +951,9 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
     }
     if attrs.get_bool(&AttributeKey::PageBreakBefore) == Some(true) {
         ppr.push_str("<w:pageBreakBefore/>");
+    }
+    if attrs.get_bool(&AttributeKey::Bidi) == Some(true) {
+        ppr.push_str("<w:bidi/>");
     }
 
     // Tab stops
@@ -2171,8 +2199,12 @@ mod tests {
     fn write_floating_image_anchor() {
         let mut doc = DocumentModel::new();
         let para_id = doc.next_id();
-        doc.insert_node(doc.body_id().unwrap(), 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
 
         // Create a Run to hold the image
         let run_id = doc.next_id();
@@ -2182,18 +2214,51 @@ mod tests {
         // Create floating image node
         let img_id = doc.next_id();
         let mut img = Node::new(img_id, NodeType::Image);
-        let media_id = doc.media_mut().insert("image/png", vec![0x89, 0x50, 0x4E, 0x47], Some("float.png".to_string()));
-        img.attributes.set(AttributeKey::ImageMediaId, AttributeValue::MediaId(media_id));
-        img.attributes.set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
-        img.attributes.set(AttributeKey::ImageHeight, AttributeValue::Float(150.0));
-        img.attributes.set(AttributeKey::ImagePositionType, AttributeValue::String("anchor".to_string()));
-        img.attributes.set(AttributeKey::ImageWrapType, AttributeValue::String("square".to_string()));
-        img.attributes.set(AttributeKey::ImageHorizontalOffset, AttributeValue::Int(914400));
-        img.attributes.set(AttributeKey::ImageVerticalOffset, AttributeValue::Int(457200));
-        img.attributes.set(AttributeKey::ImageHorizontalRelativeFrom, AttributeValue::String("column".to_string()));
-        img.attributes.set(AttributeKey::ImageVerticalRelativeFrom, AttributeValue::String("paragraph".to_string()));
-        img.attributes.set(AttributeKey::ImageDistanceFromText, AttributeValue::String("45720,45720,114300,114300".to_string()));
-        img.attributes.set(AttributeKey::ImageAltText, AttributeValue::String("Float test".to_string()));
+        let media_id = doc.media_mut().insert(
+            "image/png",
+            vec![0x89, 0x50, 0x4E, 0x47],
+            Some("float.png".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img.attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img.attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(150.0));
+        img.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("square".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(914400),
+        );
+        img.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(457200),
+        );
+        img.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("paragraph".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageDistanceFromText,
+            AttributeValue::String("45720,45720,114300,114300".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageAltText,
+            AttributeValue::String("Float test".to_string()),
+        );
         doc.insert_node(para_id, 0, img).unwrap();
 
         let (xml, image_rels, _) = write_document_xml(&doc);
@@ -2223,17 +2288,35 @@ mod tests {
     fn write_shape_roundtrip_raw_xml() {
         let mut doc = DocumentModel::new();
         let para_id = doc.next_id();
-        doc.insert_node(doc.body_id().unwrap(), 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
 
         let shape_id = doc.next_id();
         let mut shape = Node::new(shape_id, NodeType::Drawing);
-        shape.attributes.set(AttributeKey::ShapeType, AttributeValue::String("rect".to_string()));
-        shape.attributes.set(AttributeKey::ShapeWidth, AttributeValue::Float(200.0));
-        shape.attributes.set(AttributeKey::ShapeHeight, AttributeValue::Float(100.0));
-        shape.attributes.set(AttributeKey::ShapeFillColor, AttributeValue::String("FF0000".to_string()));
-        let raw = r##"<w:pict><v:rect style="width:200pt;height:100pt" fillcolor="#FF0000"/></w:pict>"##;
-        shape.attributes.set(AttributeKey::ShapeRawXml, AttributeValue::String(raw.to_string()));
+        shape.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String("rect".to_string()),
+        );
+        shape
+            .attributes
+            .set(AttributeKey::ShapeWidth, AttributeValue::Float(200.0));
+        shape
+            .attributes
+            .set(AttributeKey::ShapeHeight, AttributeValue::Float(100.0));
+        shape.attributes.set(
+            AttributeKey::ShapeFillColor,
+            AttributeValue::String("FF0000".to_string()),
+        );
+        let raw =
+            r##"<w:pict><v:rect style="width:200pt;height:100pt" fillcolor="#FF0000"/></w:pict>"##;
+        shape.attributes.set(
+            AttributeKey::ShapeRawXml,
+            AttributeValue::String(raw.to_string()),
+        );
         doc.insert_node(para_id, 0, shape).unwrap();
 
         let (xml, _, _) = write_document_xml(&doc);
@@ -2248,15 +2331,28 @@ mod tests {
     fn write_inline_image_default() {
         let mut doc = DocumentModel::new();
         let para_id = doc.next_id();
-        doc.insert_node(doc.body_id().unwrap(), 0, Node::new(para_id, NodeType::Paragraph))
-            .unwrap();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
 
         let img_id = doc.next_id();
         let mut img = Node::new(img_id, NodeType::Image);
-        let media_id = doc.media_mut().insert("image/png", vec![0x89, 0x50], Some("inline.png".to_string()));
-        img.attributes.set(AttributeKey::ImageMediaId, AttributeValue::MediaId(media_id));
-        img.attributes.set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
-        img.attributes.set(AttributeKey::ImageHeight, AttributeValue::Float(100.0));
+        let media_id = doc.media_mut().insert(
+            "image/png",
+            vec![0x89, 0x50],
+            Some("inline.png".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img.attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
+        img.attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(100.0));
         // No ImagePositionType set — should default to inline
         doc.insert_node(para_id, 0, img).unwrap();
 

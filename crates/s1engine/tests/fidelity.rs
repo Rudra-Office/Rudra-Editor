@@ -68,7 +68,11 @@ fn test_complex_formatting_roundtrip() {
     // Create a document with varied formatting
     let doc = DocumentBuilder::new()
         .heading(1, "Document Title")
-        .paragraph(|p| p.bold("Bold text").italic(" italic text").underline(" underlined text"))
+        .paragraph(|p| {
+            p.bold("Bold text")
+                .italic(" italic text")
+                .underline(" underlined text")
+        })
         .paragraph(|p| {
             p.colored("Red text", Color::RED)
                 .styled(" Custom font", "Courier New", 16.0)
@@ -144,8 +148,16 @@ fn test_nested_table_roundtrip() {
                     .rich_cell(|p| p.italic("Header 2"))
                     .cell("Header 3")
             })
-            .row(|r| r.cell("Row 1 Col 1").cell("Row 1 Col 2").cell("Row 1 Col 3"))
-            .row(|r| r.cell("Row 2 Col 1").cell("Row 2 Col 2").cell("Row 2 Col 3"))
+            .row(|r| {
+                r.cell("Row 1 Col 1")
+                    .cell("Row 1 Col 2")
+                    .cell("Row 1 Col 3")
+            })
+            .row(|r| {
+                r.cell("Row 2 Col 1")
+                    .cell("Row 2 Col 2")
+                    .cell("Row 2 Col 3")
+            })
         })
         .build();
 
@@ -322,10 +334,8 @@ fn test_comments_roundtrip() {
     // CommentStart
     let cs_id = model.next_id();
     let mut cs = Node::new(cs_id, NodeType::CommentStart);
-    cs.attributes.set(
-        AttributeKey::CommentId,
-        AttributeValue::String("42".into()),
-    );
+    cs.attributes
+        .set(AttributeKey::CommentId, AttributeValue::String("42".into()));
     model.insert_node(para_id, 0, cs).unwrap();
 
     // Run with text
@@ -341,10 +351,8 @@ fn test_comments_roundtrip() {
     // CommentEnd
     let ce_id = model.next_id();
     let mut ce = Node::new(ce_id, NodeType::CommentEnd);
-    ce.attributes.set(
-        AttributeKey::CommentId,
-        AttributeValue::String("42".into()),
-    );
+    ce.attributes
+        .set(AttributeKey::CommentId, AttributeValue::String("42".into()));
     model.insert_node(para_id, 2, ce).unwrap();
 
     // Create CommentBody node on the document root
@@ -352,10 +360,8 @@ fn test_comments_roundtrip() {
     let root_children = model.node(root_id).unwrap().children.len();
     let cb_id = model.next_id();
     let mut cb = Node::new(cb_id, NodeType::CommentBody);
-    cb.attributes.set(
-        AttributeKey::CommentId,
-        AttributeValue::String("42".into()),
-    );
+    cb.attributes
+        .set(AttributeKey::CommentId, AttributeValue::String("42".into()));
     cb.attributes.set(
         AttributeKey::CommentAuthor,
         AttributeValue::String("Test Author".into()),
@@ -384,23 +390,14 @@ fn test_comments_roundtrip() {
 
     // Verify comment start/end in body
     let comment_starts = count_nodes_of_type(&doc2, NodeType::CommentStart);
-    assert!(
-        comment_starts >= 1,
-        "CommentStart must survive round-trip"
-    );
+    assert!(comment_starts >= 1, "CommentStart must survive round-trip");
 
     let comment_ends = count_nodes_of_type(&doc2, NodeType::CommentEnd);
-    assert!(
-        comment_ends >= 1,
-        "CommentEnd must survive round-trip"
-    );
+    assert!(comment_ends >= 1, "CommentEnd must survive round-trip");
 
     // Verify CommentBody
     let comment_bodies = count_nodes_of_type(&doc2, NodeType::CommentBody);
-    assert!(
-        comment_bodies >= 1,
-        "CommentBody must survive round-trip"
-    );
+    assert!(comment_bodies >= 1, "CommentBody must survive round-trip");
 
     // Verify comment author
     let cb_nodes = collect_nodes_of_type(&doc2, NodeType::CommentBody);
@@ -529,10 +526,7 @@ fn test_cross_format_docx_to_odt() {
 
     // Verify table structure in ODT
     let tables = count_nodes_of_type(&from_odt, NodeType::Table);
-    assert!(
-        tables >= 1,
-        "Table must survive DOCX -> ODT conversion"
-    );
+    assert!(tables >= 1, "Table must survive DOCX -> ODT conversion");
 }
 
 // ─── Test 8: Unicode Text Round-Trip ───────────────────────────────────────
@@ -670,11 +664,10 @@ fn test_images_roundtrip() {
         0x44, 0xAE, 0x42, 0x60, 0x82,
     ];
 
-    let media_id = model.media_mut().insert(
-        "image/png",
-        png_bytes.clone(),
-        Some("test.png".to_string()),
-    );
+    let media_id =
+        model
+            .media_mut()
+            .insert("image/png", png_bytes.clone(), Some("test.png".to_string()));
 
     // Create image node
     let img_id = model.next_id();
@@ -718,7 +711,10 @@ fn test_images_roundtrip() {
     let image_nodes = collect_nodes_of_type(&doc2, NodeType::Image);
     let img_node = doc2.node(image_nodes[0]).unwrap();
     assert!(
-        img_node.attributes.get(&AttributeKey::ImageMediaId).is_some(),
+        img_node
+            .attributes
+            .get(&AttributeKey::ImageMediaId)
+            .is_some(),
         "Image must retain its media reference after round-trip"
     );
 }
@@ -780,10 +776,7 @@ fn test_hyperlinks_and_bookmarks_roundtrip() {
             }
         }
     }
-    assert!(
-        found_hyperlink,
-        "Hyperlink must survive DOCX round-trip"
-    );
+    assert!(found_hyperlink, "Hyperlink must survive DOCX round-trip");
 
     // Verify bookmarks
     let bookmarks_start = count_nodes_of_type(&doc2, NodeType::BookmarkStart);
@@ -965,10 +958,7 @@ fn test_mixed_content_stress() {
             }
         }
     }
-    assert!(
-        found_list,
-        "Lists must survive mixed-content round-trip"
-    );
+    assert!(found_list, "Lists must survive mixed-content round-trip");
 
     // Cross-format: also verify ODT export works for the whole thing
     let odt_bytes = doc2.export(Format::Odt).unwrap();

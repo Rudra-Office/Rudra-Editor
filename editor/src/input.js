@@ -479,8 +479,11 @@ export function initInput() {
         try {
           doc.merge_paragraphs(nodeId1, nodeId2);
           const updated = renderNodeById(nodeId1);
-          el.remove();
-          if (updated) setCursorAtOffset(updated, cursorPos);
+          // Only remove source element after confirming render succeeded
+          if (updated) {
+            el.remove();
+            setCursorAtOffset(updated, cursorPos);
+          }
           recordUndoAction('Merge paragraphs');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
           broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
@@ -519,8 +522,11 @@ export function initInput() {
         try {
           doc.merge_paragraphs(nodeId1, nodeId2);
           const updated = renderNodeById(nodeId1);
-          next.remove();
-          if (updated) setCursorAtOffset(updated, cursorPos);
+          // Only remove source element after confirming render succeeded
+          if (updated) {
+            next.remove();
+            setCursorAtOffset(updated, cursorPos);
+          }
           recordUndoAction('Merge paragraphs');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
           broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });

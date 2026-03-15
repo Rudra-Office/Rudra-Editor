@@ -16,6 +16,26 @@ export function repaginate() {
   const { doc } = state;
   if (!container || !doc) return;
 
+  // Save selection before DOM reconciliation (moving nodes can invalidate selection)
+  const sel = window.getSelection();
+  let savedNodeId = null, savedOffset = 0;
+  if (sel && sel.rangeCount) {
+    let n = sel.anchorNode;
+    while (n && !n.dataset?.nodeId) n = n.parentNode;
+    if (n?.dataset?.nodeId) {
+      savedNodeId = n.dataset.nodeId;
+      try {
+        const range = sel.getRangeAt(0);
+        const walker = document.createTreeWalker(n, NodeFilter.SHOW_TEXT, null);
+        let count = 0, tw;
+        while ((tw = walker.nextNode())) {
+          if (tw === range.startContainer) { savedOffset = count + range.startOffset; break; }
+          count += tw.textContent.length;
+        }
+      } catch (_) {}
+    }
+  }
+
   // Sync text to WASM before querying page map
   syncAllTextInline();
 
@@ -208,6 +228,28 @@ export function repaginate() {
     });
   }
 
+  // Restore selection if it was saved before reconciliation
+  if (savedNodeId) {
+    const restoredEl = container.querySelector(`[data-node-id="${savedNodeId}"]`);
+    if (restoredEl) {
+      try {
+        const walker = document.createTreeWalker(restoredEl, NodeFilter.SHOW_TEXT, null);
+        let counted = 0, tw;
+        while ((tw = walker.nextNode())) {
+          if (counted + tw.textContent.length >= savedOffset) {
+            const range = document.createRange();
+            range.setStart(tw, savedOffset - counted);
+            range.collapse(true);
+            const s = window.getSelection();
+            s.removeAllRanges(); s.addRange(range);
+            break;
+          }
+          counted += tw.textContent.length;
+        }
+      } catch (_) {}
+    }
+  }
+
   _updateStatus();
 }
 
@@ -220,10 +262,11 @@ export function scheduleRepaginate() {
 }
 
 /**
- * Legacy compatibility — called by existing code that used updatePageBreaks()
+ * Legacy compatibility — called by existing code that used updatePageBreaks().
+ * Uses debounced repagination to avoid redundant DOM reconciliation.
  */
 export function updatePageBreaks() {
-  repaginate();
+  scheduleRepaginate();
 }
 
 // ─── Internal helpers ──────────────────────────────────

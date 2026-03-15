@@ -393,7 +393,11 @@ impl Document {
         let rev_type = self
             .model
             .node(node_id)
-            .and_then(|n| n.attributes.get_string(&AttributeKey::RevisionType).map(|s| s.to_string()))
+            .and_then(|n| {
+                n.attributes
+                    .get_string(&AttributeKey::RevisionType)
+                    .map(|s| s.to_string())
+            })
             .ok_or_else(|| {
                 Error::Format(format!(
                     "Node {node_id} does not exist or has no RevisionType attribute"
@@ -415,7 +419,11 @@ impl Document {
         let rev_type = self
             .model
             .node(node_id)
-            .and_then(|n| n.attributes.get_string(&AttributeKey::RevisionType).map(|s| s.to_string()))
+            .and_then(|n| {
+                n.attributes
+                    .get_string(&AttributeKey::RevisionType)
+                    .map(|s| s.to_string())
+            })
             .ok_or_else(|| {
                 Error::Format(format!(
                     "Node {node_id} does not exist or has no RevisionType attribute"
@@ -509,7 +517,10 @@ impl Document {
     ///
     /// Returns an error if fonts cannot be resolved or text shaping fails.
     #[cfg(feature = "layout")]
-    pub fn layout(&self, font_db: &s1_text::FontDatabase) -> Result<s1_layout::LayoutDocument, Error> {
+    pub fn layout(
+        &self,
+        font_db: &s1_text::FontDatabase,
+    ) -> Result<s1_layout::LayoutDocument, Error> {
         self.layout_with_config(font_db, s1_layout::LayoutConfig::default())
     }
 
@@ -568,8 +579,7 @@ impl Document {
     #[cfg(feature = "pdf")]
     pub fn export_pdf(&self, font_db: &s1_text::FontDatabase) -> Result<Vec<u8>, Error> {
         let layout = self.layout(font_db)?;
-        let bytes =
-            s1_format_pdf::write_pdf(&layout, font_db, Some(self.model.metadata()))?;
+        let bytes = s1_format_pdf::write_pdf(&layout, font_db, Some(self.model.metadata()))?;
         Ok(bytes)
     }
 
@@ -588,8 +598,7 @@ impl Document {
         config: s1_layout::LayoutConfig,
     ) -> Result<Vec<u8>, Error> {
         let layout = self.layout_with_config(font_db, config)?;
-        let bytes =
-            s1_format_pdf::write_pdf(&layout, font_db, Some(self.model.metadata()))?;
+        let bytes = s1_format_pdf::write_pdf(&layout, font_db, Some(self.model.metadata()))?;
         Ok(bytes)
     }
 
@@ -608,12 +617,8 @@ impl Document {
         conformance: s1_format_pdf::PdfAConformance,
     ) -> Result<Vec<u8>, Error> {
         let layout = self.layout(font_db)?;
-        let bytes = s1_format_pdf::write_pdf_a(
-            &layout,
-            font_db,
-            Some(self.model.metadata()),
-            conformance,
-        )?;
+        let bytes =
+            s1_format_pdf::write_pdf_a(&layout, font_db, Some(self.model.metadata()), conformance)?;
         Ok(bytes)
     }
 

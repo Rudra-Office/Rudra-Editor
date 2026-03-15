@@ -5,6 +5,8 @@ import { updateUndoRedo } from './toolbar.js';
 import { broadcastOp } from './collab.js';
 
 let _findRefreshTimer = null;
+let _matchCase = false;
+let _wholeWord = false;
 
 export function initFind() {
   // E1.5: Register callback so render.js can trigger find refresh without circular import
@@ -27,10 +29,27 @@ export function initFind() {
   $('replaceBtn').addEventListener('click', () => doReplace());
   $('replaceAllBtn').addEventListener('click', () => doReplaceAll());
 
+  // Match case toggle
+  $('findMatchCase').addEventListener('click', () => {
+    _matchCase = !_matchCase;
+    $('findMatchCase').classList.toggle('active', _matchCase);
+    doFind();
+  });
+
+  // Whole word toggle
+  $('findWholeWord').addEventListener('click', () => {
+    _wholeWord = !_wholeWord;
+    $('findWholeWord').classList.toggle('active', _wholeWord);
+    doFind();
+  });
+
   // Escape to close
   $('findInput').addEventListener('keydown', e => {
     if (e.key === 'Escape') { $('findBar').classList.remove('show'); clearHighlights(); }
     if (e.key === 'Enter') navigateMatch(e.shiftKey ? -1 : 1);
+    // Alt+C = toggle match case, Alt+W = toggle whole word
+    if (e.altKey && e.key === 'c') { e.preventDefault(); $('findMatchCase').click(); }
+    if (e.altKey && e.key === 'w') { e.preventDefault(); $('findWholeWord').click(); }
   });
   $('replaceInput').addEventListener('keydown', e => {
     if (e.key === 'Escape') { $('findBar').classList.remove('show'); clearHighlights(); }
@@ -40,18 +59,52 @@ export function initFind() {
 
 function doFind() {
   clearHighlights();
-  const query = $('findInput').value;
+  let query = $('findInput').value;
   if (!query || !state.doc) { $('findCount').textContent = ''; return; }
 
   syncAllText();
+
+  // Whole word: wrap query in word boundary markers for DOM fallback
+  // For WASM find_text, we filter results post-hoc
+  const caseSensitive = _matchCase;
+
   try {
-    const results = JSON.parse(state.doc.find_text(query, true));
-    state.findMatches = results;
-    state.findIndex = results.length > 0 ? 0 : -1;
-    $('findCount').textContent = results.length + ' match' + (results.length !== 1 ? 'es' : '');
+    const results = JSON.parse(state.doc.find_text(query, caseSensitive));
+
+    // Filter for whole word matches if enabled
+    let filtered = results;
+    if (_wholeWord) {
+      filtered = results.filter(m => {
+        try {
+          const fullText = state.doc.get_document_text();
+          const start = getAbsoluteOffset(m.nodeId, m.offset);
+          if (start === -1) return true; // can't verify, keep it
+          const before = start > 0 ? fullText[start - 1] : ' ';
+          const after = start + m.length < fullText.length ? fullText[start + m.length] : ' ';
+          return /\W/.test(before) && /\W/.test(after);
+        } catch (_) {
+          return true;
+        }
+      });
+      // Simpler approach: check within the node's text
+      filtered = results.filter(m => {
+        const page = $('pageContainer');
+        const el = page.querySelector(`[data-node-id="${m.nodeId}"]`);
+        if (!el) return true;
+        const text = el.textContent || '';
+        const chars = Array.from(text);
+        const before = m.offset > 0 ? chars[m.offset - 1] : ' ';
+        const after = m.offset + m.length < chars.length ? chars[m.offset + m.length] : ' ';
+        return /\W/.test(before) && /\W/.test(after);
+      });
+    }
+
+    state.findMatches = filtered;
+    state.findIndex = filtered.length > 0 ? 0 : -1;
+    $('findCount').textContent = filtered.length + ' match' + (filtered.length !== 1 ? 'es' : '');
 
     // Highlight matches in DOM
-    results.forEach((m, i) => {
+    filtered.forEach((m, i) => {
       highlightMatch(m, i === state.findIndex);
     });
   } catch (_) {
@@ -63,10 +116,18 @@ function doFind() {
 function domFind(query) {
   const page = $('pageContainer');
   const text = page.textContent || '';
-  const lower = text.toLowerCase();
-  const q = query.toLowerCase();
+  const searchIn = _matchCase ? text : text.toLowerCase();
+  const q = _matchCase ? query : query.toLowerCase();
   let count = 0, idx = 0;
-  while ((idx = lower.indexOf(q, idx)) !== -1) { count++; idx += q.length; }
+  while ((idx = searchIn.indexOf(q, idx)) !== -1) {
+    if (_wholeWord) {
+      const before = idx > 0 ? searchIn[idx - 1] : ' ';
+      const after = idx + q.length < searchIn.length ? searchIn[idx + q.length] : ' ';
+      if (/\w/.test(before) || /\w/.test(after)) { idx += q.length; continue; }
+    }
+    count++;
+    idx += q.length;
+  }
   state.findMatches = [];
   state.findIndex = -1;
   $('findCount').textContent = count + ' match' + (count !== 1 ? 'es' : '');
@@ -86,7 +147,7 @@ function highlightMatch(match, active) {
     const nodeEnd = counted + chars.length;
     if (match.offset >= nodeStart && match.offset < nodeEnd) {
       const localOffset = match.offset - nodeStart;
-      // Convert char offset to string offset
+      // Convert char offset to string offset (for surrogate pairs)
       let strOff = 0;
       for (let i = 0; i < localOffset && i < chars.length; i++) strOff += chars[i].length;
       let endStrOff = strOff;
@@ -110,7 +171,9 @@ function highlightMatch(match, active) {
 }
 
 function clearHighlights() {
-  $('pageContainer').querySelectorAll('mark.find-highlight').forEach(m => {
+  const container = $('pageContainer');
+  if (!container) return;
+  container.querySelectorAll('mark.find-highlight').forEach(m => {
     const parent = m.parentNode;
     while (m.firstChild) parent.insertBefore(m.firstChild, m);
     m.remove();
@@ -147,8 +210,8 @@ function doReplaceAll() {
   if (!query) return;
   syncAllText();
   try {
-    const count = state.doc.replace_all(query, replacement, true);
-    broadcastOp({ action: 'replaceAll', query, replacement, caseInsensitive: true });
+    const count = state.doc.replace_all(query, replacement, _matchCase);
+    broadcastOp({ action: 'replaceAll', query, replacement, caseSensitive: _matchCase });
     renderDocument();
     updateUndoRedo();
     $('findCount').textContent = count + ' replaced';

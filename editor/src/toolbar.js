@@ -5,6 +5,39 @@ import { renderNodeById, renderNodesById, syncParagraphText } from './render.js'
 import { updatePageBreaks } from './pagination.js';
 import { broadcastOp } from './collab.js';
 
+/**
+ * Collect all paragraph-level node IDs between startNodeId and endNodeId (inclusive).
+ * Walks only direct children of .page-content across pages (O(pages * blocks_per_page)),
+ * skipping deeply nested elements for better performance on large documents.
+ */
+function collectNodeIdsBetween(container, startNodeId, endNodeId) {
+  if (startNodeId === endNodeId) return [startNodeId];
+  const ids = [];
+  let inRange = false;
+  // Walk page-content direct children only — paragraphs are always direct children
+  for (const pageEl of state.pageElements) {
+    const contentEl = pageEl.querySelector('.page-content');
+    if (!contentEl) continue;
+    for (const el of contentEl.children) {
+      if (!el.dataset?.nodeId) continue;
+      const tag = el.tagName.toLowerCase();
+      if (tag !== 'p' && !/^h[1-6]$/.test(tag)) continue;
+      const nid = el.dataset.nodeId;
+      if (nid === startNodeId || nid === endNodeId) {
+        if (!inRange) { inRange = true; ids.push(nid); if (nid === endNodeId && ids.length > 0) return ids; continue; }
+        else { ids.push(nid); return ids; }
+      }
+      if (inRange) ids.push(nid);
+    }
+  }
+  // Fallback: if we didn't find the range (e.g. reversed selection), return at least start+end
+  if (ids.length === 0) {
+    ids.push(startNodeId);
+    if (endNodeId !== startNodeId) ids.push(endNodeId);
+  }
+  return ids;
+}
+
 // Detect which style best matches the current paragraph formatting
 function detectCurrentStyle(fmt) {
   const level = parseInt(fmt.headingLevel || '0') || 0;
@@ -174,9 +207,13 @@ export function applyFormat(key, value) {
   }
 
   // E-14: Flush pending sync timer before formatting to prevent lost edits
+  // Collect ALL paragraph-level elements in the selection range and sync them
   clearTimeout(state.syncTimer);
-  syncParagraphText(startEl);
-  if (endEl !== startEl) syncParagraphText(endEl);
+  const allNodeIds = collectNodeIdsBetween(page, info.startNodeId, info.endNodeId);
+  for (const nid of allNodeIds) {
+    const el = page.querySelector(`[data-node-id="${nid}"]`);
+    if (el) syncParagraphText(el);
+  }
 
   try {
     let sn, so, en, eo;
@@ -186,10 +223,8 @@ export function applyFormat(key, value) {
     const friendlyKey = key.charAt(0).toUpperCase() + key.slice(1);
     recordUndoAction(`${value === 'false' ? 'Remove' : 'Apply'} ${friendlyKey}`);
 
-    // E-05: Batch render all affected nodes to avoid race conditions
-    const nodeIds = [info.startNodeId];
-    if (info.endNodeId !== info.startNodeId) nodeIds.push(info.endNodeId);
-    const rendered = renderNodesById(nodeIds);
+    // Re-render ALL affected nodes (not just start + end)
+    const rendered = renderNodesById(allNodeIds);
     const newStartEl = rendered.get(info.startNodeId);
     const newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
 
@@ -228,10 +263,13 @@ export function toggleFormat(key) {
         isActive = !!JSON.parse(doc.get_formatting_json(info.startNodeId))[key];
       }
     } else {
-      // E-14: Flush pending sync timer before querying formatting
+      // E-14: Flush pending sync timer before querying formatting — sync ALL paragraphs in range
       clearTimeout(state.syncTimer);
-      syncParagraphText(startEl);
-      if (endEl !== startEl) syncParagraphText(endEl);
+      const toggleNodeIds = collectNodeIdsBetween(page, info.startNodeId, info.endNodeId);
+      for (const nid of toggleNodeIds) {
+        const el = page.querySelector(`[data-node-id="${nid}"]`);
+        if (el) syncParagraphText(el);
+      }
       try {
         isActive = JSON.parse(doc.get_selection_formatting_json(
           info.startNodeId, info.startOffset, info.endNodeId, info.endOffset))[key] === true;
@@ -275,9 +313,13 @@ function applyFormatPair(clearKey, clearVal, setKey, setVal, info, startEl, endE
   }
 
   // E-14: Flush pending sync timer before formatting
+  // Sync ALL paragraphs in the selection range
   clearTimeout(state.syncTimer);
-  syncParagraphText(startEl);
-  if (endEl !== startEl) syncParagraphText(endEl);
+  const allNodeIds = collectNodeIdsBetween(page, info.startNodeId, info.endNodeId);
+  for (const nid of allNodeIds) {
+    const el = page.querySelector(`[data-node-id="${nid}"]`);
+    if (el) syncParagraphText(el);
+  }
 
   try {
     const sn = info.startNodeId, so = info.startOffset;
@@ -287,10 +329,8 @@ function applyFormatPair(clearKey, clearVal, setKey, setVal, info, startEl, endE
     doc.format_selection(sn, so, en, eo, clearKey, clearVal);
     doc.format_selection(sn, so, en, eo, setKey, setVal);
 
-    // E-05: Single batch re-render after both operations
-    const nodeIds = [info.startNodeId];
-    if (info.endNodeId !== info.startNodeId) nodeIds.push(info.endNodeId);
-    const rendered = renderNodesById(nodeIds);
+    // Re-render ALL affected nodes (not just start + end)
+    const rendered = renderNodesById(allNodeIds);
     const newStartEl = rendered.get(info.startNodeId);
     let newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
 

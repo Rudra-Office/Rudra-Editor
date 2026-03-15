@@ -167,12 +167,19 @@ function scheduleReconnect(url) {
   reconnectTimer = setTimeout(() => connect(url), delay);
 }
 
+const MAX_OFFLINE_BUFFER = 10000;
+
 function sendOp(opData) {
   const payload = JSON.stringify(opData);
   if (connected && ws && ws.readyState === 1) {
     ws.send(JSON.stringify({ type: 'op', room: roomId, data: payload }));
   } else {
-    offlineBuffer.push(opData);
+    if (offlineBuffer.length < MAX_OFFLINE_BUFFER) {
+      offlineBuffer.push(opData);
+    } else if (offlineBuffer.length === MAX_OFFLINE_BUFFER) {
+      offlineBuffer.push(opData);
+      console.warn('Offline buffer limit reached. Some changes may not sync when reconnected.');
+    }
   }
 }
 

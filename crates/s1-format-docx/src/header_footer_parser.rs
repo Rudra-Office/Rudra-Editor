@@ -174,7 +174,10 @@ mod tests {
         assert_eq!(para.node_type, NodeType::Paragraph);
 
         // Should have a Field node for PAGE
-        assert!(!para.children.is_empty(), "Footer paragraph should have a field node");
+        assert!(
+            !para.children.is_empty(),
+            "Footer paragraph should have a field node"
+        );
         let field = doc.node(para.children[0]).unwrap();
         assert_eq!(field.node_type, NodeType::Field);
         assert_eq!(

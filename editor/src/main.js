@@ -15,6 +15,18 @@ async function boot() {
   const dot = $('wasmDot');
   const label = $('wasmLabel');
 
+  // U1: Disable toolbar buttons until WASM is ready
+  const toolbar = $('toolbar');
+  if (toolbar) toolbar.style.pointerEvents = 'none';
+  label.textContent = 'Loading engine...';
+
+  // U6: Disable spellcheck on document name input
+  const docName = $('docName');
+  if (docName) {
+    docName.spellcheck = false;
+    docName.autocomplete = 'off';
+  }
+
   try {
     // Import WASM bindings from wasm-pkg directory
     const wasm = await import('../wasm-pkg/s1engine_wasm.js');
@@ -25,6 +37,8 @@ async function boot() {
 
     dot.classList.add('ok');
     label.textContent = 's1engine ready';
+    // Re-enable toolbar
+    if (toolbar) toolbar.style.pointerEvents = '';
 
     // Wire up all handlers
     initInput();
@@ -53,6 +67,10 @@ async function boot() {
           const timeStr = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
           if (confirm(`Recover unsaved document "${name}" (saved ${timeStr})?`)) {
             openFile(new Uint8Array(saved.bytes), name + '.docx');
+            // Restore comment thread replies if they were persisted
+            if (saved.commentReplies) {
+              try { state.commentReplies = JSON.parse(saved.commentReplies); } catch (_) {}
+            }
           }
         }
       }
@@ -62,6 +80,8 @@ async function boot() {
     console.error('WASM init failed:', e);
     dot.classList.add('err');
     label.textContent = 'WASM failed: ' + e.message;
+    // Keep toolbar disabled on failure
+    if (toolbar) toolbar.style.pointerEvents = 'none';
   }
 }
 

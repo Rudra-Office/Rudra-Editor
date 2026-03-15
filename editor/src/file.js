@@ -14,7 +14,7 @@ const AUTOSAVE_INTERVAL = 30000; // 30 seconds
 const DB_NAME = 'FolioAutosave';
 const DB_VERSION = 2;
 
-function openAutosaveDB() {
+export function openAutosaveDB() {
   return new Promise((resolve, reject) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
     req.onupgradeneeded = (e) => {
@@ -46,9 +46,10 @@ function doAutosave() {
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
     openAutosaveDB().then(db => {
-      // Multi-tab locking: read current stored document first
-      const readTx = db.transaction('documents', 'readonly');
-      const getReq = readTx.objectStore('documents').get('current');
+      // Single readwrite transaction — atomic read+check+write (no race between tabs)
+      const tx = db.transaction('documents', 'readwrite');
+      const store = tx.objectStore('documents');
+      const getReq = store.get('current');
       getReq.onsuccess = () => {
         const existing = getReq.result;
         // If another tab saved more recently than our last save, skip
@@ -59,11 +60,13 @@ function doAutosave() {
           setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
           return;
         }
-        // Safe to save — write with our tabId and timestamp
+        // Safe to save — write within same transaction (atomic)
         const now = Date.now();
-        const writeTx = db.transaction('documents', 'readwrite');
-        writeTx.objectStore('documents').put({
-          id: 'current', name, bytes, timestamp: now, tabId: state.tabId
+        // Include comment thread replies so they persist across reloads
+        const commentReplies = state.commentReplies && state.commentReplies.length > 0
+          ? JSON.stringify(state.commentReplies) : null;
+        store.put({
+          id: 'current', name, bytes, timestamp: now, tabId: state.tabId, commentReplies
         });
         state.lastSaveTimestamp = now;
         state.dirty = false;
@@ -72,17 +75,6 @@ function doAutosave() {
         info._userMsg = true;
         info.textContent = 'Auto-saved';
         setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
-      };
-      getReq.onerror = () => {
-        // If read fails, still attempt to save
-        const now = Date.now();
-        const writeTx = db.transaction('documents', 'readwrite');
-        writeTx.objectStore('documents').put({
-          id: 'current', name, bytes, timestamp: now, tabId: state.tabId
-        });
-        state.lastSaveTimestamp = now;
-        state.dirty = false;
-        updateDirtyIndicator();
       };
     }).catch(() => {});
   } catch (_) {}
@@ -248,8 +240,49 @@ export function checkAutoRecover() {
   }).catch(() => null);
 }
 
+/**
+ * Clear all editor state before opening a new document.
+ * Prevents stale data from previous document leaking.
+ */
+function resetEditorState() {
+  // Clear DOM lookup caches
+  state.nodeIdToElement.clear();
+  state.syncedTextCache.clear();
+  state.nodeToPage.clear();
+  state.pageElements = [];
+  state.pageMap = null;
+  state._lastPageMapHash = null;
+  // Clear find state
+  state.findMatches = [];
+  state.findIndex = -1;
+  // Clear header/footer
+  state.docHeaderHtml = '';
+  state.docFooterHtml = '';
+  state.docFirstPageHeaderHtml = '';
+  state.docFirstPageFooterHtml = '';
+  state.hasDifferentFirstPage = false;
+  // Clear page dimensions (ruler will recalculate)
+  state.pageDims = null;
+  // Clear selection/undo state
+  state.lastSelInfo = null;
+  state.pendingFormats = {};
+  state._typingBatch = null;
+  state.undoHistory = [];
+  state.undoHistoryPos = 0;
+  // Clear collaboration
+  state.internalClipboard = null;
+  state.selectedImg = null;
+  state.resizing = null;
+  // Clear timers
+  clearTimeout(state.syncTimer);
+  clearTimeout(state._findRefreshTimer);
+  clearInterval(state.autosaveTimer);
+  clearInterval(state.versionTimer);
+}
+
 export function newDocument() {
   if (!state.engine) return;
+  resetEditorState();
   state.doc = state.engine.create();
   state.currentFormat = 'new';
   state.doc.append_paragraph('');
@@ -269,6 +302,7 @@ export function newDocument() {
 export function openFile(bytes, name) {
   if (!state.engine) return;
   try {
+    resetEditorState();
     let fmt = 'txt';
     try { if (detect_format_fn) fmt = detect_format_fn(bytes); } catch (_) {}
     state.doc = state.engine.open(bytes);
@@ -317,7 +351,22 @@ function activateEditor() {
   switchView('editor');
 }
 
+// Saved cursor position for restoring when switching back to editor view
+let _savedCursorForView = null;
+
 export function switchView(view) {
+  // Save cursor position when leaving editor view
+  if (state.currentView === 'editor' && view !== 'editor') {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount) {
+      let n = sel.anchorNode;
+      while (n && !n.dataset?.nodeId) n = n.parentNode;
+      if (n?.dataset?.nodeId) {
+        _savedCursorForView = { nodeId: n.dataset.nodeId, offset: state.lastSelInfo?.startOffset || 0 };
+      }
+    }
+  }
+
   state.currentView = view;
   $('editorCanvas').classList.toggle('show', view === 'editor');
   $('pagesView').classList.toggle('show', view === 'pages');
@@ -330,6 +379,40 @@ export function switchView(view) {
   document.querySelectorAll('.tab-menu-entry').forEach(e => e.classList.toggle('active', e.dataset.view === view));
   if (view === 'pages') { syncAllText(); renderPages(); }
   if (view === 'text') { syncAllText(); renderText(); }
+
+  // Restore cursor position when returning to editor view
+  if (view === 'editor' && _savedCursorForView) {
+    const { nodeId, offset } = _savedCursorForView;
+    _savedCursorForView = null;
+    requestAnimationFrame(() => {
+      const container = $('pageContainer');
+      if (!container) return;
+      const el = container.querySelector(`[data-node-id="${nodeId}"]`);
+      if (el) {
+        const pageContent = el.closest('.page-content');
+        if (pageContent) pageContent.focus();
+        // Restore cursor using char offset
+        const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+        let counted = 0, tw;
+        while ((tw = walker.nextNode())) {
+          const chars = Array.from(tw.textContent);
+          if (counted + chars.length >= offset) {
+            let strOff = 0;
+            for (let i = 0; i < offset - counted && i < chars.length; i++) strOff += chars[i].length;
+            try {
+              const range = document.createRange();
+              range.setStart(tw, strOff);
+              range.collapse(true);
+              const s = window.getSelection();
+              s.removeAllRanges(); s.addRange(range);
+            } catch (_) {}
+            break;
+          }
+          counted += chars.length;
+        }
+      }
+    });
+  }
 }
 
 export function updateTrackChanges() {

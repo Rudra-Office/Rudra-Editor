@@ -223,9 +223,7 @@ impl<'a> LayoutEngine<'a> {
                     let space_after = sanitize_pt(para_style.space_after);
 
                     // Check if this block fits on the current page
-                    if current_y + block_height > content_rect.bottom()
-                        && !page_blocks.is_empty()
-                    {
+                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
                         pages.push(self.make_page(
                             page_index,
                             &page_layout,
@@ -288,9 +286,8 @@ impl<'a> LayoutEngine<'a> {
                             // If this is a continuation, prepend header rows — but
                             // only if there are non-header data rows remaining
                             // (avoids infinite header duplication when all rows are headers).
-                            let has_non_header_remaining = all_rows[row_idx..]
-                                .iter()
-                                .any(|r| !r.is_header_row);
+                            let has_non_header_remaining =
+                                all_rows[row_idx..].iter().any(|r| !r.is_header_row);
                             if !is_first_chunk
                                 && !header_rows.is_empty()
                                 && has_non_header_remaining
@@ -361,13 +358,10 @@ impl<'a> LayoutEngine<'a> {
                     }
                 }
                 NodeType::Image => {
-                    let block =
-                        self.layout_image(*node_id, content_rect, current_y)?;
+                    let block = self.layout_image(*node_id, content_rect, current_y)?;
                     let block_height = block.bounds.height;
 
-                    if current_y + block_height > content_rect.bottom()
-                        && !page_blocks.is_empty()
-                    {
+                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
                         pages.push(self.make_page(
                             page_index,
                             &page_layout,
@@ -378,11 +372,7 @@ impl<'a> LayoutEngine<'a> {
                         page_index += 1;
                         current_y = content_rect.y;
 
-                        let block = self.layout_image(
-                            *node_id,
-                            content_rect,
-                            current_y,
-                        )?;
+                        let block = self.layout_image(*node_id, content_rect, current_y)?;
                         let block_height = block.bounds.height;
                         page_blocks.push(block);
                         current_y += block_height;
@@ -417,8 +407,7 @@ impl<'a> LayoutEngine<'a> {
 
         // Ensure at least one page
         if pages.is_empty() {
-            let default_layout =
-                self.resolve_page_layout_for_section(initial_section_idx);
+            let default_layout = self.resolve_page_layout_for_section(initial_section_idx);
             pages.push(LayoutPage {
                 index: 0,
                 width: default_layout.width,
@@ -427,6 +416,7 @@ impl<'a> LayoutEngine<'a> {
                 blocks: Vec::new(),
                 header: None,
                 footer: None,
+                footnotes: Vec::new(),
                 section_index: initial_section_idx,
             });
             page_section_indices.push(initial_section_idx);
@@ -438,14 +428,12 @@ impl<'a> LayoutEngine<'a> {
         // Layout headers and footers for each page using the correct section
         let total_pages = pages.len();
         for (i, page) in pages.iter_mut().enumerate() {
-            let sect_idx =
-                page_section_indices.get(i).copied().unwrap_or(0);
-            self.layout_header_footer_for_section(
-                page,
-                total_pages,
-                sect_idx,
-            )?;
+            let sect_idx = page_section_indices.get(i).copied().unwrap_or(0);
+            self.layout_header_footer_for_section(page, total_pages, sect_idx)?;
         }
+
+        // Layout footnotes for each page
+        self.layout_footnotes_for_pages(&mut pages)?;
 
         // Collect bookmarks from pages
         let bookmarks = self.collect_bookmarks(&pages);
@@ -485,10 +473,7 @@ impl<'a> LayoutEngine<'a> {
     /// All blocks from the previous section boundary up to and including that
     /// paragraph belong to section `i`. Blocks after the last marked paragraph
     /// belong to the final section (the last entry in `doc.sections()`).
-    fn build_section_map(
-        &self,
-        blocks: &[(NodeId, NodeType)],
-    ) -> Vec<usize> {
+    fn build_section_map(&self, blocks: &[(NodeId, NodeType)]) -> Vec<usize> {
         let sections = self.doc.sections();
         let num_sections = sections.len();
 
@@ -510,9 +495,7 @@ impl<'a> LayoutEngine<'a> {
 
         for (block_idx, (node_id, _)) in blocks.iter().enumerate() {
             if let Some(node) = self.doc.node(*node_id) {
-                if let Some(sect_idx) =
-                    node.attributes.get_i64(&AttributeKey::SectionIndex)
-                {
+                if let Some(sect_idx) = node.attributes.get_i64(&AttributeKey::SectionIndex) {
                     section_end_blocks.push((block_idx, sect_idx as usize));
                 }
             }
@@ -522,9 +505,7 @@ impl<'a> LayoutEngine<'a> {
         // Blocks up to and including the first section-end marker belong to
         // that section. Between markers, blocks belong to the next marker's
         // section. After the last marker, blocks belong to the final section.
-        let mut current_section = if let Some(&(_, sect_idx)) =
-            section_end_blocks.first()
-        {
+        let mut current_section = if let Some(&(_, sect_idx)) = section_end_blocks.first() {
             sect_idx
         } else {
             num_sections - 1
@@ -541,8 +522,7 @@ impl<'a> LayoutEngine<'a> {
                     // Past this marker
                     marker_idx += 1;
                     if marker_idx < section_end_blocks.len() {
-                        current_section =
-                            section_end_blocks[marker_idx].1;
+                        current_section = section_end_blocks[marker_idx].1;
                     } else {
                         current_section = num_sections - 1;
                     }
@@ -645,7 +625,9 @@ impl<'a> LayoutEngine<'a> {
         };
         hash = hash.wrapping_mul(0x100000001b3);
         // Include keep flags and page break
-        hash ^= (para_style.keep_with_next as u64) | ((para_style.keep_lines as u64) << 1) | ((para_style.page_break_before as u64) << 2);
+        hash ^= (para_style.keep_with_next as u64)
+            | ((para_style.keep_lines as u64) << 1)
+            | ((para_style.page_break_before as u64) << 2);
         hash = hash.wrapping_mul(0x100000001b3);
 
         // Check cache
@@ -669,8 +651,6 @@ impl<'a> LayoutEngine<'a> {
         Ok(block)
     }
 
-
-
     /// Layout a paragraph — shape text, break into lines.
     fn layout_paragraph(
         &self,
@@ -690,8 +670,50 @@ impl<'a> LayoutEngine<'a> {
                 return Ok(LayoutBlock {
                     source_id: para_id,
                     bounds: Rect::new(x_start, y_pos, available_width, 0.0),
-                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: para_style.space_before, space_after: para_style.space_after, indent_left: para_style.indent_left, indent_right: para_style.indent_right, indent_first_line: para_style.indent_first_line, line_height: line_spacing_to_css(&para_style.line_spacing) },
+                    kind: LayoutBlockKind::Paragraph {
+                        lines: Vec::new(),
+                        text_align: None,
+                        background_color: None,
+                        border: None,
+                        list_marker: None,
+                        list_level: 0,
+                        space_before: para_style.space_before,
+                        space_after: para_style.space_after,
+                        indent_left: para_style.indent_left,
+                        indent_right: para_style.indent_right,
+                        indent_first_line: para_style.indent_first_line,
+                        line_height: line_spacing_to_css(&para_style.line_spacing),
+                        bidi: para_style.bidi,
+                    },
                 });
+            }
+        };
+
+        // Determine paragraph text direction for BiDi support
+        let direction = if para_style.bidi {
+            s1_text::Direction::Rtl
+        } else {
+            // Auto-detect from concatenated paragraph text
+            let mut all_text = String::new();
+            for &cid in &para.children {
+                if let Some(c) = self.doc.node(cid) {
+                    if c.node_type == NodeType::Run {
+                        for &sub_id in &c.children {
+                            if let Some(sub) = self.doc.node(sub_id) {
+                                if sub.node_type == NodeType::Text {
+                                    if let Some(t) = &sub.text_content {
+                                        all_text.push_str(t);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            if all_text.is_empty() {
+                s1_text::Direction::Ltr
+            } else {
+                s1_text::paragraph_direction(&all_text)
             }
         };
 
@@ -717,9 +739,9 @@ impl<'a> LayoutEngine<'a> {
                         }
                         if has_inline_break {
                             // Split into segments at each LineBreak
-                            self.shape_run_with_breaks(child_id, &mut shaped_runs)?;
+                            self.shape_run_with_breaks(child_id, &mut shaped_runs, direction)?;
                         } else {
-                            let run_info = self.shape_run(child_id)?;
+                            let run_info = self.shape_run(child_id, direction)?;
                             shaped_runs.push(run_info);
                         }
                     }
@@ -749,12 +771,19 @@ impl<'a> LayoutEngine<'a> {
                     }
                     NodeType::Tab => {
                         // Compute current x position from accumulated shaped runs
-                        let current_x: f64 = shaped_runs.iter().map(|r| {
-                            let glyph_w: f64 = r.glyphs.iter().map(|g| g.x_advance).sum();
-                            let nc = r.text.chars().count();
-                            let sp = if nc > 1 { (nc as f64 - 1.0) * r.character_spacing } else { 0.0 };
-                            glyph_w + sp
-                        }).sum();
+                        let current_x: f64 = shaped_runs
+                            .iter()
+                            .map(|r| {
+                                let glyph_w: f64 = r.glyphs.iter().map(|g| g.x_advance).sum();
+                                let nc = r.text.chars().count();
+                                let sp = if nc > 1 {
+                                    (nc as f64 - 1.0) * r.character_spacing
+                                } else {
+                                    0.0
+                                };
+                                glyph_w + sp
+                            })
+                            .sum();
 
                         // Look up paragraph tab stops from attributes
                         let tab_advance = if let Some(AttributeValue::TabStops(ref stops)) =
@@ -780,13 +809,15 @@ impl<'a> LayoutEngine<'a> {
                             } else {
                                 // No custom tab stop found — fall back to default 36pt interval
                                 let default_interval = 36.0;
-                                let next_default = ((current_x / default_interval).floor() + 1.0) * default_interval;
+                                let next_default = ((current_x / default_interval).floor() + 1.0)
+                                    * default_interval;
                                 (next_default - current_x).max(1.0)
                             }
                         } else {
                             // No custom tab stops — use default 36pt (0.5") interval
                             let default_interval = 36.0;
-                            let next_default = ((current_x / default_interval).floor() + 1.0) * default_interval;
+                            let next_default =
+                                ((current_x / default_interval).floor() + 1.0) * default_interval;
                             (next_default - current_x).max(1.0)
                         };
 
@@ -865,25 +896,57 @@ impl<'a> LayoutEngine<'a> {
                         let img_w = img_node
                             .attributes
                             .get(&AttributeKey::ImageWidth)
-                            .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            .and_then(|v| {
+                                if let AttributeValue::Float(d) = v {
+                                    Some(*d)
+                                } else {
+                                    None
+                                }
+                            })
                             .or_else(|| {
-                                img_node.attributes.get(&AttributeKey::ShapeWidth)
-                                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                                img_node
+                                    .attributes
+                                    .get(&AttributeKey::ShapeWidth)
+                                    .and_then(|v| {
+                                        if let AttributeValue::Float(d) = v {
+                                            Some(*d)
+                                        } else {
+                                            None
+                                        }
+                                    })
                             })
                             .unwrap_or(100.0);
                         // Try ImageHeight first, fall back to ShapeHeight for VML drawings
                         let img_h = img_node
                             .attributes
                             .get(&AttributeKey::ImageHeight)
-                            .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                            .and_then(|v| {
+                                if let AttributeValue::Float(d) = v {
+                                    Some(*d)
+                                } else {
+                                    None
+                                }
+                            })
                             .or_else(|| {
-                                img_node.attributes.get(&AttributeKey::ShapeHeight)
-                                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                                img_node
+                                    .attributes
+                                    .get(&AttributeKey::ShapeHeight)
+                                    .and_then(|v| {
+                                        if let AttributeValue::Float(d) = v {
+                                            Some(*d)
+                                        } else {
+                                            None
+                                        }
+                                    })
                             })
                             .unwrap_or(100.0);
 
                         // Constrain to available width
-                        let scale = if img_w > available_width { available_width / img_w } else { 1.0 };
+                        let scale = if img_w > available_width {
+                            available_width / img_w
+                        } else {
+                            1.0
+                        };
                         let final_w = img_w * scale;
                         let final_h = img_h * scale;
 
@@ -891,11 +954,20 @@ impl<'a> LayoutEngine<'a> {
                         let media_id_val = img_node
                             .attributes
                             .get(&AttributeKey::ImageMediaId)
-                            .and_then(|v| if let AttributeValue::MediaId(mid) = v { Some(mid.0) } else { None });
+                            .and_then(|v| {
+                                if let AttributeValue::MediaId(mid) = v {
+                                    Some(mid.0)
+                                } else {
+                                    None
+                                }
+                            });
                         let media_id_str = media_id_val
                             .map(|id| format!("{id}"))
                             .or_else(|| {
-                                img_node.attributes.get_string(&AttributeKey::ImageMediaId).map(|s| s.to_string())
+                                img_node
+                                    .attributes
+                                    .get_string(&AttributeKey::ImageMediaId)
+                                    .map(|s| s.to_string())
                             })
                             .unwrap_or_default();
                         let (image_data, content_type) = if let Some(mid) = media_id_val {
@@ -961,16 +1033,20 @@ impl<'a> LayoutEngine<'a> {
 
         // Check if paragraph has list info
         let (list_marker, list_level) = if let Some(para_node) = self.doc.node(para_id) {
-            if let Some(s1_model::AttributeValue::ListInfo(li)) = para_node.attributes.get(&s1_model::AttributeKey::ListInfo) {
+            if let Some(s1_model::AttributeValue::ListInfo(li)) =
+                para_node.attributes.get(&s1_model::AttributeKey::ListInfo)
+            {
                 let marker = match li.num_format {
                     s1_model::ListFormat::Bullet => "\u{2022}".to_string(),
                     s1_model::ListFormat::Decimal => format!("{}.", li.start.unwrap_or(1)),
                     s1_model::ListFormat::LowerAlpha => {
-                        let c = (b'a' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25)) as char;
+                        let c = (b'a' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25))
+                            as char;
                         format!("{}.", c)
                     }
                     s1_model::ListFormat::UpperAlpha => {
-                        let c = (b'A' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25)) as char;
+                        let c = (b'A' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25))
+                            as char;
                         format!("{}.", c)
                     }
                     s1_model::ListFormat::LowerRoman => format!("{}.", li.start.unwrap_or(1)),
@@ -1007,12 +1083,17 @@ impl<'a> LayoutEngine<'a> {
                 indent_right: para_style.indent_right,
                 indent_first_line: para_style.indent_first_line,
                 line_height: line_spacing_to_css(&para_style.line_spacing),
+                bidi: matches!(direction, s1_text::Direction::Rtl),
             },
         })
     }
 
     /// Shape a run node — resolve font, shape text, return shaped info.
-    fn shape_run(&self, run_id: NodeId) -> Result<ShapedRunInfo, LayoutError> {
+    fn shape_run(
+        &self,
+        run_id: NodeId,
+        direction: s1_text::Direction,
+    ) -> Result<ShapedRunInfo, LayoutError> {
         let run_style = resolve_run_style(self.doc, run_id);
 
         // Find font with extended fallback chain
@@ -1051,23 +1132,19 @@ impl<'a> LayoutEngine<'a> {
         let (glyphs, metrics) = if let Some(fid) = font_id {
             if let Some(font) = self.font_db.load_font(fid) {
                 // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
-                let has_explicit_size = self.doc.node(run_id)
+                let has_explicit_size = self
+                    .doc
+                    .node(run_id)
                     .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
                     .unwrap_or(false);
-                let font_size = if (run_style.superscript || run_style.subscript) && !has_explicit_size {
-                    run_style.font_size * 0.65
-                } else {
-                    run_style.font_size
-                };
+                let font_size =
+                    if (run_style.superscript || run_style.subscript) && !has_explicit_size {
+                        run_style.font_size * 0.65
+                    } else {
+                        run_style.font_size
+                    };
 
-                let glyphs = s1_text::shape_text(
-                    &text,
-                    &font,
-                    font_size,
-                    &[],
-                    None,
-                    s1_text::Direction::Ltr,
-                )?;
+                let glyphs = s1_text::shape_text(&text, &font, font_size, &[], None, direction)?;
                 let metrics = font.metrics(font_size);
                 (glyphs, Some(metrics))
             } else {
@@ -1123,6 +1200,7 @@ impl<'a> LayoutEngine<'a> {
         &self,
         run_id: NodeId,
         shaped_runs: &mut Vec<ShapedRunInfo>,
+        direction: s1_text::Direction,
     ) -> Result<(), LayoutError> {
         let run_node = match self.doc.node(run_id) {
             Some(n) => n,
@@ -1147,12 +1225,16 @@ impl<'a> LayoutEngine<'a> {
             .or_else(|| self.font_db.find("DejaVu Sans", false, false))
             .or_else(|| self.font_db.find("Liberation Sans", false, false));
 
-        let hyperlink_url = run_node.attributes.get_string(&AttributeKey::HyperlinkUrl)
+        let hyperlink_url = run_node
+            .attributes
+            .get_string(&AttributeKey::HyperlinkUrl)
             .map(|s| s.to_string())
             .or_else(|| {
                 run_node.parent.and_then(|pid| {
                     self.doc.node(pid).and_then(|p| {
-                        p.attributes.get_string(&AttributeKey::HyperlinkUrl).map(|s| s.to_string())
+                        p.attributes
+                            .get_string(&AttributeKey::HyperlinkUrl)
+                            .map(|s| s.to_string())
                     })
                 })
             });
@@ -1171,7 +1253,12 @@ impl<'a> LayoutEngine<'a> {
                         // Flush current text segment as a shaped run
                         if !segment_text.is_empty() {
                             let info = self.shape_text_segment(
-                                run_id, &segment_text, &run_style, font_id, hyperlink_url.clone(),
+                                run_id,
+                                &segment_text,
+                                &run_style,
+                                font_id,
+                                hyperlink_url.clone(),
+                                direction,
                             )?;
                             shaped_runs.push(info);
                             segment_text.clear();
@@ -1210,7 +1297,12 @@ impl<'a> LayoutEngine<'a> {
         // Flush remaining text
         if !segment_text.is_empty() {
             let info = self.shape_text_segment(
-                run_id, &segment_text, &run_style, font_id, hyperlink_url,
+                run_id,
+                &segment_text,
+                &run_style,
+                font_id,
+                hyperlink_url,
+                direction,
             )?;
             shaped_runs.push(info);
         }
@@ -1225,21 +1317,23 @@ impl<'a> LayoutEngine<'a> {
         run_style: &ResolvedRunStyle,
         font_id: Option<s1_text::FontId>,
         hyperlink_url: Option<String>,
+        direction: s1_text::Direction,
     ) -> Result<ShapedRunInfo, LayoutError> {
         let (glyphs, metrics) = if let Some(fid) = font_id {
             if let Some(font) = self.font_db.load_font(fid) {
                 // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
-                let has_explicit_size = self.doc.node(source_id)
+                let has_explicit_size = self
+                    .doc
+                    .node(source_id)
                     .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
                     .unwrap_or(false);
-                let font_size = if (run_style.superscript || run_style.subscript) && !has_explicit_size {
-                    run_style.font_size * 0.65
-                } else {
-                    run_style.font_size
-                };
-                let glyphs = s1_text::shape_text(
-                    text, &font, font_size, &[], None, s1_text::Direction::Ltr,
-                )?;
+                let font_size =
+                    if (run_style.superscript || run_style.subscript) && !has_explicit_size {
+                        run_style.font_size * 0.65
+                    } else {
+                        run_style.font_size
+                    };
+                let glyphs = s1_text::shape_text(text, &font, font_size, &[], None, direction)?;
                 let metrics = font.metrics(font_size);
                 (glyphs, Some(metrics))
             } else {
@@ -1445,11 +1539,28 @@ impl<'a> LayoutEngine<'a> {
     /// Each row is laid out with position-independent y coordinates (starting from 0).
     /// The caller is responsible for assigning final y positions and splitting
     /// across pages. Column widths are computed from the first row's cell count.
+    /// Maximum nesting depth for tables inside table cells.
+    const MAX_TABLE_NESTING: usize = 5;
+
     fn layout_table_rows(
         &self,
         table_id: NodeId,
         content_rect: Rect,
     ) -> Result<Vec<LayoutTableRow>, LayoutError> {
+        self.layout_table_rows_with_depth(table_id, content_rect, 0)
+    }
+
+    /// Layout table rows with a nesting depth cap to prevent infinite recursion.
+    fn layout_table_rows_with_depth(
+        &self,
+        table_id: NodeId,
+        content_rect: Rect,
+        depth: usize,
+    ) -> Result<Vec<LayoutTableRow>, LayoutError> {
+        if depth > Self::MAX_TABLE_NESTING {
+            return Ok(Vec::new());
+        }
+
         let table = match self.doc.node(table_id) {
             Some(n) => n,
             None => return Ok(Vec::new()),
@@ -1509,6 +1620,31 @@ impl<'a> LayoutEngine<'a> {
                                     )?;
                                     cell_y += block.bounds.height + sanitize_pt(ps.space_after);
                                     cell_blocks.push(block);
+                                } else if content.node_type == NodeType::Table {
+                                    let nested_rect =
+                                        Rect::new(cell_x + 2.0, cell_y, col_width - 4.0, 1000.0);
+                                    let nested_rows = self.layout_table_rows_with_depth(
+                                        content_id,
+                                        nested_rect,
+                                        depth + 1,
+                                    )?;
+                                    let nested_height: f64 =
+                                        nested_rows.iter().map(|r| r.bounds.height).sum();
+                                    let block = LayoutBlock {
+                                        source_id: content_id,
+                                        bounds: Rect::new(
+                                            cell_x + 2.0,
+                                            cell_y,
+                                            col_width - 4.0,
+                                            nested_height,
+                                        ),
+                                        kind: LayoutBlockKind::Table {
+                                            rows: nested_rows,
+                                            is_continuation: false,
+                                        },
+                                    };
+                                    cell_y += nested_height;
+                                    cell_blocks.push(block);
                                 }
                             }
                         }
@@ -1519,9 +1655,16 @@ impl<'a> LayoutEngine<'a> {
                         }
 
                         // Extract cell background color
-                        let background_color = cell_node.attributes
+                        let background_color = cell_node
+                            .attributes
                             .get(&AttributeKey::CellBackground)
-                            .and_then(|v| if let AttributeValue::Color(c) = v { Some(*c) } else { None });
+                            .and_then(|v| {
+                                if let AttributeValue::Color(c) = v {
+                                    Some(*c)
+                                } else {
+                                    None
+                                }
+                            });
 
                         // Extract cell borders
                         let (border_top, border_bottom, border_left, border_right) =
@@ -1785,7 +1928,21 @@ impl<'a> LayoutEngine<'a> {
                 return Ok(LayoutBlock {
                     source_id: node_id,
                     bounds: Rect::new(hf_x, hf_y, hf_width, 0.0),
-                    kind: LayoutBlockKind::Paragraph { lines: Vec::new(), text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+                    kind: LayoutBlockKind::Paragraph {
+                        lines: Vec::new(),
+                        text_align: None,
+                        background_color: None,
+                        border: None,
+                        list_marker: None,
+                        list_level: 0,
+                        space_before: 0.0,
+                        space_after: 0.0,
+                        indent_left: 0.0,
+                        indent_right: 0.0,
+                        indent_first_line: 0.0,
+                        line_height: None,
+                        bidi: false,
+                    },
                 });
             }
         };
@@ -1836,7 +1993,21 @@ impl<'a> LayoutEngine<'a> {
             Ok(LayoutBlock {
                 source_id: node_id,
                 bounds: Rect::new(hf_x, hf_y, hf_width, total_height),
-                kind: LayoutBlockKind::Paragraph { lines, text_align: None, background_color: None, border: None, list_marker: None, list_level: 0, space_before: 0.0, space_after: 0.0, indent_left: 0.0, indent_right: 0.0, indent_first_line: 0.0, line_height: None },
+                kind: LayoutBlockKind::Paragraph {
+                    lines,
+                    text_align: None,
+                    background_color: None,
+                    border: None,
+                    list_marker: None,
+                    list_level: 0,
+                    space_before: 0.0,
+                    space_after: 0.0,
+                    indent_left: 0.0,
+                    indent_right: 0.0,
+                    indent_first_line: 0.0,
+                    line_height: None,
+                    bidi: false,
+                },
             })
         }
     }
@@ -1890,41 +2061,43 @@ impl<'a> LayoutEngine<'a> {
                                         break;
                                     }
                                 }
-                                if found { break; }
+                                if found {
+                                    break;
+                                }
                             }
 
                             // Only append if no existing run was found
                             if !found {
-                              if let Some(last_line) = lines.last_mut() {
-                                let x_offset = last_line
-                                    .runs
-                                    .last()
-                                    .map(|r| r.x_offset + r.width)
-                                    .unwrap_or(0.0);
+                                if let Some(last_line) = lines.last_mut() {
+                                    let x_offset = last_line
+                                        .runs
+                                        .last()
+                                        .map(|r| r.x_offset + r.width)
+                                        .unwrap_or(0.0);
 
-                                last_line.runs.push(GlyphRun {
-                                    source_id: child_id,
-                                    font_id: FontId(fontdb::ID::dummy()),
-                                    font_size,
-                                    color: s1_model::Color::new(0, 0, 0),
-                                    x_offset,
-                                    glyphs,
-                                    width,
-                                    hyperlink_url: None,
-                                    text: text.clone(),
-                                    bold: false,
-                                    italic: false,
-                                    underline: false,
-                                    strikethrough: false,
-                                    superscript: false,
-                                    subscript: false,
-                                    highlight_color: None,
-                                    character_spacing: 0.0,
-                                    revision_type: None,
-                                    revision_author: None,
-                                    inline_image: None,
-                                });
-                              }
+                                    last_line.runs.push(GlyphRun {
+                                        source_id: child_id,
+                                        font_id: FontId(fontdb::ID::dummy()),
+                                        font_size,
+                                        color: s1_model::Color::new(0, 0, 0),
+                                        x_offset,
+                                        glyphs,
+                                        width,
+                                        hyperlink_url: None,
+                                        text: text.clone(),
+                                        bold: false,
+                                        italic: false,
+                                        underline: false,
+                                        strikethrough: false,
+                                        superscript: false,
+                                        subscript: false,
+                                        highlight_color: None,
+                                        character_spacing: 0.0,
+                                        revision_type: None,
+                                        revision_author: None,
+                                        inline_image: None,
+                                    });
+                                }
                             }
                         }
                     }
@@ -2105,14 +2278,131 @@ impl<'a> LayoutEngine<'a> {
                 for row in rows {
                     for cell in &row.cells {
                         for cell_block in &cell.blocks {
-                            self.collect_bookmarks_from_block(
-                                cell_block,
-                                page_index,
-                                bookmarks,
-                            );
+                            self.collect_bookmarks_from_block(cell_block, page_index, bookmarks);
                         }
                     }
                 }
+            }
+        }
+    }
+
+    /// Scan pages for footnote references and layout footnote content at page bottom.
+    fn layout_footnotes_for_pages(&mut self, pages: &mut [LayoutPage]) -> Result<(), LayoutError> {
+        // Build a map of footnote number → FootnoteBody node ID
+        let root_id = self.doc.root_id();
+        let footnote_bodies: Vec<(String, NodeId)> = self
+            .doc
+            .node(root_id)
+            .map(|root| {
+                root.children
+                    .iter()
+                    .filter_map(|&child_id| {
+                        let child = self.doc.node(child_id)?;
+                        if child.node_type == NodeType::FootnoteBody {
+                            let num = child.attributes.get_string(&AttributeKey::FootnoteNumber)?;
+                            Some((num.to_string(), child_id))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if footnote_bodies.is_empty() {
+            return Ok(());
+        }
+
+        let fn_map: std::collections::HashMap<String, NodeId> =
+            footnote_bodies.into_iter().collect();
+
+        for page in pages.iter_mut() {
+            // Collect footnote references from blocks on this page
+            let mut page_fn_ids: Vec<NodeId> = Vec::new();
+            for block in &page.blocks {
+                self.collect_footnote_refs_from_block(block, &fn_map, &mut page_fn_ids);
+            }
+
+            if page_fn_ids.is_empty() {
+                continue;
+            }
+
+            // Layout each referenced footnote body as paragraphs
+            let content_x = page.content_area.x;
+            let content_width = page.content_area.width;
+            let mut footnote_y = 0.0;
+            let mut fn_blocks: Vec<LayoutBlock> = Vec::new();
+
+            // Add a separator line (1pt rule)
+            footnote_y += 8.0; // Space before separator
+
+            for fn_body_id in &page_fn_ids {
+                // Layout paragraphs inside the footnote body
+                if let Some(fn_body) = self.doc.node(*fn_body_id) {
+                    for &child_id in &fn_body.children {
+                        if let Some(child) = self.doc.node(child_id) {
+                            if child.node_type == NodeType::Paragraph {
+                                let ps = resolve_paragraph_style(self.doc, child_id);
+                                let fn_rect =
+                                    Rect::new(content_x, footnote_y, content_width, 1000.0);
+                                let block =
+                                    self.layout_paragraph(child_id, &ps, fn_rect, footnote_y)?;
+                                footnote_y += block.bounds.height + sanitize_pt(ps.space_after);
+                                fn_blocks.push(block);
+                            }
+                        }
+                    }
+                }
+            }
+
+            page.footnotes = fn_blocks;
+        }
+
+        Ok(())
+    }
+
+    /// Recursively collect footnote reference node IDs from a layout block.
+    fn collect_footnote_refs_from_block(
+        &self,
+        block: &LayoutBlock,
+        fn_map: &std::collections::HashMap<String, NodeId>,
+        out: &mut Vec<NodeId>,
+    ) {
+        // Check if the source node itself is a footnote ref, or look at children
+        if let Some(node) = self.doc.node(block.source_id) {
+            self.scan_node_for_footnote_refs(node.id, fn_map, out);
+        }
+        // Also scan table cells
+        if let LayoutBlockKind::Table { rows, .. } = &block.kind {
+            for row in rows {
+                for cell in &row.cells {
+                    for cell_block in &cell.blocks {
+                        self.collect_footnote_refs_from_block(cell_block, fn_map, out);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Walk the document tree under a node to find FootnoteRef nodes.
+    fn scan_node_for_footnote_refs(
+        &self,
+        node_id: NodeId,
+        fn_map: &std::collections::HashMap<String, NodeId>,
+        out: &mut Vec<NodeId>,
+    ) {
+        if let Some(node) = self.doc.node(node_id) {
+            if node.node_type == NodeType::FootnoteRef {
+                if let Some(num) = node.attributes.get_string(&AttributeKey::FootnoteNumber) {
+                    if let Some(&body_id) = fn_map.get(num) {
+                        if !out.contains(&body_id) {
+                            out.push(body_id);
+                        }
+                    }
+                }
+            }
+            for &child_id in &node.children {
+                self.scan_node_for_footnote_refs(child_id, fn_map, out);
             }
         }
     }
@@ -2132,6 +2422,7 @@ impl<'a> LayoutEngine<'a> {
             blocks,
             header: None,
             footer: None,
+            footnotes: Vec::new(),
             section_index,
         }
     }
@@ -2263,7 +2554,11 @@ fn format_border_css(border: &s1_model::BorderSide) -> String {
         s1_model::BorderStyle::Thick => "solid",
         _ => "solid",
     };
-    let width = if border.width > 0.0 { border.width } else { 1.0 };
+    let width = if border.width > 0.0 {
+        border.width
+    } else {
+        1.0
+    };
     format!(
         "{:.1}pt {} #{:02x}{:02x}{:02x}",
         width, style_str, border.color.r, border.color.g, border.color.b
@@ -2485,7 +2780,10 @@ fn knuth_plass_breaks(
         // Keep only the best 100 candidates by demerits.
         if active.len() > 100 {
             active.sort_by(|&a, &b| {
-                nodes[a].demerits.partial_cmp(&nodes[b].demerits).unwrap_or(std::cmp::Ordering::Equal)
+                nodes[a]
+                    .demerits
+                    .partial_cmp(&nodes[b].demerits)
+                    .unwrap_or(std::cmp::Ordering::Equal)
             });
             active.truncate(100);
         }
@@ -3974,14 +4272,16 @@ mod tests {
         let page0 = &result.pages[0];
         assert!(page0.header.is_some(), "page 0 should have a header");
         assert_eq!(
-            page0.header.as_ref().unwrap().source_id, hdr0_id,
+            page0.header.as_ref().unwrap().source_id,
+            hdr0_id,
             "page 0 header should be from section 0"
         );
 
         let page1 = &result.pages[1];
         assert!(page1.header.is_some(), "page 1 should have a header");
         assert_eq!(
-            page1.header.as_ref().unwrap().source_id, hdr1_id,
+            page1.header.as_ref().unwrap().source_id,
+            hdr1_id,
             "page 1 header should be from section 1"
         );
     }
@@ -4026,10 +4326,9 @@ mod tests {
             let row_id = doc.next_id();
             let mut row_node = Node::new(row_id, NodeType::TableRow);
             if row_idx < header_row_count {
-                row_node.attributes.set(
-                    AttributeKey::TableHeaderRow,
-                    AttributeValue::Bool(true),
-                );
+                row_node
+                    .attributes
+                    .set(AttributeKey::TableHeaderRow, AttributeValue::Bool(true));
             }
             doc.insert_node(table_id, row_idx, row_node).unwrap();
 
@@ -4078,7 +4377,10 @@ mod tests {
                 rows,
                 is_continuation,
             } => {
-                assert!(!is_continuation, "first table chunk should not be a continuation");
+                assert!(
+                    !is_continuation,
+                    "first table chunk should not be a continuation"
+                );
                 assert!(!rows.is_empty(), "first page should have table rows");
             }
             _ => panic!("expected a table block on first page"),
@@ -4091,7 +4393,10 @@ mod tests {
                 rows,
                 is_continuation,
             } => {
-                assert!(*is_continuation, "second table chunk should be a continuation");
+                assert!(
+                    *is_continuation,
+                    "second table chunk should be a continuation"
+                );
                 assert!(!rows.is_empty(), "second page should have table rows");
             }
             _ => panic!("expected a table block on second page"),
@@ -4118,10 +4423,7 @@ mod tests {
         let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
         let result = engine.layout().unwrap();
 
-        assert!(
-            result.pages.len() >= 2,
-            "table should span multiple pages"
-        );
+        assert!(result.pages.len() >= 2, "table should span multiple pages");
 
         // Second page should start with a header row
         let second_table = &result.pages[1].blocks[0];
@@ -4144,7 +4446,15 @@ mod tests {
             .pages
             .iter()
             .flat_map(|p| &p.blocks)
-            .filter(|b| matches!(&b.kind, LayoutBlockKind::Table { is_continuation: true, .. }))
+            .filter(|b| {
+                matches!(
+                    &b.kind,
+                    LayoutBlockKind::Table {
+                        is_continuation: true,
+                        ..
+                    }
+                )
+            })
             .count();
         let total_rows: usize = result
             .pages
@@ -4236,9 +4546,10 @@ mod tests {
         assert!(!result.pages.is_empty(), "should produce at least one page");
 
         // The oversized row should be placed on the page
-        let has_table = result.pages[0].blocks.iter().any(|b| {
-            matches!(&b.kind, LayoutBlockKind::Table { rows, .. } if !rows.is_empty())
-        });
+        let has_table = result.pages[0]
+            .blocks
+            .iter()
+            .any(|b| matches!(&b.kind, LayoutBlockKind::Table { rows, .. } if !rows.is_empty()));
         assert!(has_table, "oversized row should be placed on the page");
     }
 
@@ -4379,14 +4690,12 @@ mod tests {
         // Add an Image node as a direct child of Body
         let img_id = doc.next_id();
         let mut img_node = Node::new(img_id, NodeType::Image);
-        img_node.attributes.set(
-            AttributeKey::ImageWidth,
-            AttributeValue::Float(200.0),
-        );
-        img_node.attributes.set(
-            AttributeKey::ImageHeight,
-            AttributeValue::Float(150.0),
-        );
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(150.0));
         doc.insert_node(body_id, 0, img_node).unwrap();
 
         let font_db = FontDatabase::new();
@@ -4420,14 +4729,12 @@ mod tests {
         // Add an inline image as a child of the paragraph
         let img_id = doc.next_id();
         let mut img_node = Node::new(img_id, NodeType::Image);
-        img_node.attributes.set(
-            AttributeKey::ImageWidth,
-            AttributeValue::Float(120.0),
-        );
-        img_node.attributes.set(
-            AttributeKey::ImageHeight,
-            AttributeValue::Float(80.0),
-        );
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(120.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(80.0));
         doc.insert_node(para_id, 0, img_node).unwrap();
 
         let font_db = FontDatabase::new();
@@ -4440,10 +4747,13 @@ mod tests {
         match &result.pages[0].blocks[0].kind {
             LayoutBlockKind::Paragraph { lines, .. } => {
                 assert!(!lines.is_empty(), "paragraph should have lines");
-                let has_inline_image = lines.iter().any(|line| {
-                    line.runs.iter().any(|run| run.inline_image.is_some())
-                });
-                assert!(has_inline_image, "paragraph should contain an inline image run");
+                let has_inline_image = lines
+                    .iter()
+                    .any(|line| line.runs.iter().any(|run| run.inline_image.is_some()));
+                assert!(
+                    has_inline_image,
+                    "paragraph should contain an inline image run"
+                );
                 // Check the inline image dimensions
                 let img_run = lines
                     .iter()
@@ -4478,14 +4788,12 @@ mod tests {
             AttributeKey::ShapeType,
             AttributeValue::String("oval".to_string()),
         );
-        drawing_node.attributes.set(
-            AttributeKey::ShapeWidth,
-            AttributeValue::Float(160.0),
-        );
-        drawing_node.attributes.set(
-            AttributeKey::ShapeHeight,
-            AttributeValue::Float(100.0),
-        );
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeWidth, AttributeValue::Float(160.0));
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeHeight, AttributeValue::Float(100.0));
         doc.insert_node(para_id, 0, drawing_node).unwrap();
 
         let font_db = FontDatabase::new();
@@ -4501,7 +4809,10 @@ mod tests {
                     .iter()
                     .flat_map(|l| l.runs.iter())
                     .find(|r| r.inline_image.is_some());
-                assert!(img_run.is_some(), "paragraph should contain an inline image run for Drawing");
+                assert!(
+                    img_run.is_some(),
+                    "paragraph should contain an inline image run for Drawing"
+                );
                 let inline = img_run.unwrap().inline_image.as_ref().unwrap();
                 assert!(
                     (inline.width - 160.0).abs() < 0.01,
@@ -4516,5 +4827,65 @@ mod tests {
             }
             other => panic!("Expected Paragraph block, got {:?}", other),
         }
+    }
+
+    #[test]
+    fn margin_collapsing_between_paragraphs() {
+        // Create a document with two paragraphs:
+        // - Para 1: space_after = 20pt
+        // - Para 2: space_before = 12pt
+        // Expected: gap between them = max(20, 12) = 20pt (not 32pt)
+
+        let mut doc = DocumentModel::new();
+        let root_id = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root_id, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Para 1: space_after = 20
+        let p1_id = doc.next_id();
+        let mut p1 = Node::new(p1_id, NodeType::Paragraph);
+        p1.attributes
+            .set(AttributeKey::SpacingAfter, AttributeValue::Float(20.0));
+        doc.insert_node(body_id, 0, p1).unwrap();
+        let r1_id = doc.next_id();
+        doc.insert_node(p1_id, 0, Node::new(r1_id, NodeType::Run))
+            .unwrap();
+        let t1_id = doc.next_id();
+        doc.insert_node(r1_id, 0, Node::text(t1_id, "First"))
+            .unwrap();
+
+        // Para 2: space_before = 12
+        let p2_id = doc.next_id();
+        let mut p2 = Node::new(p2_id, NodeType::Paragraph);
+        p2.attributes
+            .set(AttributeKey::SpacingBefore, AttributeValue::Float(12.0));
+        doc.insert_node(body_id, 1, p2).unwrap();
+        let r2_id = doc.next_id();
+        doc.insert_node(p2_id, 0, Node::new(r2_id, NodeType::Run))
+            .unwrap();
+        let t2_id = doc.next_id();
+        doc.insert_node(r2_id, 0, Node::text(t2_id, "Second"))
+            .unwrap();
+
+        // Layout and check
+        let font_db = FontDatabase::new();
+        let config = LayoutConfig::default();
+        let mut engine = LayoutEngine::new(&doc, &font_db, config);
+        let result = engine.layout().unwrap();
+
+        assert!(!result.pages.is_empty());
+        let page = &result.pages[0];
+        assert!(page.blocks.len() >= 2);
+
+        // The gap between para 1 bottom and para 2 top should be max(20, 12) = 20
+        // NOT 20 + 12 = 32
+        let p1_bottom = page.blocks[0].bounds.y + page.blocks[0].bounds.height;
+        let p2_top = page.blocks[1].bounds.y;
+        let gap = p2_top - p1_bottom;
+
+        // Gap should be approximately 20pt (collapsed), not 32pt (additive)
+        assert!(gap < 25.0, "Expected collapsed margin ~20pt, got {gap}pt");
+        assert!(gap >= 18.0, "Expected collapsed margin ~20pt, got {gap}pt");
     }
 }

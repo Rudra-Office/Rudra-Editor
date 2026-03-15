@@ -7,7 +7,7 @@ import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId
 import { insertImage } from './images.js';
 import { updatePageBreaks } from './pagination.js';
 import { renderRuler } from './ruler.js';
-import { getVersions, restoreVersion, saveVersion } from './file.js';
+import { getVersions, restoreVersion, saveVersion, openAutosaveDB } from './file.js';
 import { showShareDialog, broadcastOp } from './collab.js';
 
 // E7.2: Screen reader announcement — briefly sets the aria-live region text
@@ -21,6 +21,18 @@ export function announce(msg) {
 }
 
 export function initToolbar() {
+  // U9: Prevent toolbar buttons from stealing focus (causes selection flash).
+  // mousedown preventDefault keeps the contenteditable focused.
+  const toolbar = $('toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('mousedown', e => {
+      // Allow inputs/selects to receive focus normally
+      const tag = e.target.tagName;
+      if (tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+      e.preventDefault();
+    });
+  }
+
   // App menu bar (File/Edit/View/Insert/Format/Tools) dropdown behavior
   initAppMenubar();
   // Format toggles
@@ -511,18 +523,29 @@ function toggleList(format) {
   } catch (e) { console.error('list:', e); }
 }
 
-// Get all paragraph node IDs between selection start and end
+// Get all paragraph node IDs between selection start and end.
+// Handles reversed selections and cross-page ranges correctly.
 function getSelectedParagraphIds(info) {
   const page = $('pageContainer');
   if (!page) return [info.startNodeId];
   const paraEls = page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]');
+
+  // Find indices of start and end to handle forward and reverse selections
+  let startIdx = -1, endIdx = -1;
+  for (let i = 0; i < paraEls.length; i++) {
+    const nid = paraEls[i].dataset.nodeId;
+    if (nid === info.startNodeId && startIdx === -1) startIdx = i;
+    if (nid === info.endNodeId) endIdx = i;
+  }
+  if (startIdx === -1) return [info.startNodeId];
+  if (endIdx === -1) endIdx = startIdx;
+
+  // Normalize direction
+  const lo = Math.min(startIdx, endIdx);
+  const hi = Math.max(startIdx, endIdx);
   const ids = [];
-  let inRange = false;
-  for (const el of paraEls) {
-    const nid = el.dataset.nodeId;
-    if (nid === info.startNodeId) inRange = true;
-    if (inRange) ids.push(nid);
-    if (nid === info.endNodeId) break;
+  for (let i = lo; i <= hi; i++) {
+    ids.push(paraEls[i].dataset.nodeId);
   }
   return ids.length > 0 ? ids : [info.startNodeId];
 }
@@ -557,13 +580,14 @@ export function setZoomLevel(level) {
   const label = level + '%';
   if ($('zoomValue')) $('zoomValue').textContent = label;
   if ($('tbZoomValue')) $('tbZoomValue').textContent = label;
-  // Apply zoom to each individual page for better scroll behavior
+  // Apply CSS zoom to the page container (not transform:scale, which offsets coordinates)
   const container = $('pageContainer');
   if (container) {
-    container.querySelectorAll('.doc-page').forEach(pg => {
-      pg.style.transform = `scale(${level / 100})`;
-      pg.style.transformOrigin = 'top center';
-    });
+    if (level === 100) {
+      container.style.zoom = '';
+    } else {
+      container.style.zoom = (level / 100);
+    }
   }
   // Update active state in zoom dropdown
   const dd = $('zoomDropdown');
@@ -991,16 +1015,46 @@ function refreshHistory() {
       list.innerHTML = '<div class="history-empty">No saved versions yet. Versions are saved automatically every 5 minutes and on manual save (Ctrl+S).</div>';
       return;
     }
-    list.innerHTML = versions.map((v, i) => `
+    // Current word count for diff display
+    let currentWordCount = 0;
+    try { currentWordCount = versions[0]?.wordCount || 0; } catch (_) {}
+
+    list.innerHTML = versions.map((v, i) => {
+      const diff = i > 0 ? v.wordCount - currentWordCount : 0;
+      const diffStr = diff > 0 ? `<span style="color:#34a853">+${diff}</span>` : diff < 0 ? `<span style="color:#ea4335">${diff}</span>` : '';
+      return `
       <div class="version-card" data-version-id="${v.id}">
         <div class="version-info">
           <div class="version-date">${escapeHtml(formatVersionDate(v.timestamp))}</div>
-          <div class="version-meta">${v.wordCount.toLocaleString()} word${v.wordCount !== 1 ? 's' : ''}${v.label ? ' &middot; ' + escapeHtml(v.label) : ''}</div>
+          <div class="version-meta">${v.wordCount.toLocaleString()} word${v.wordCount !== 1 ? 's' : ''} ${diffStr}${v.label ? ' &middot; ' + escapeHtml(v.label) : ''}</div>
           ${i === 0 ? '<span class="version-badge">Current version</span>' : ''}
         </div>
-        ${i > 0 ? '<div class="version-actions"><button class="version-restore" data-id="' + v.id + '">Restore</button></div>' : ''}
-      </div>
-    `).join('');
+        ${i > 0 ? '<div class="version-actions"><button class="version-preview" data-id="' + v.id + '" title="Preview text changes">Preview</button><button class="version-restore" data-id="' + v.id + '">Restore</button></div>' : ''}
+      </div>`;
+    }).join('');
+
+    // Preview button — shows plain text diff in a popup
+    list.querySelectorAll('.version-preview').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const id = parseInt(btn.dataset.id);
+        if (!id || !state.engine) return;
+        openAutosaveDB().then(db => {
+          const tx = db.transaction('versions', 'readonly');
+          const req = tx.objectStore('versions').get(id);
+          req.onsuccess = () => {
+            const v = req.result;
+            if (!v?.bytes) return;
+            try {
+              const oldDoc = state.engine.open(new Uint8Array(v.bytes));
+              const oldText = oldDoc.to_plain_text();
+              const curText = state.doc ? state.doc.to_plain_text() : '';
+              showTextDiffPopup(oldText, curText, formatVersionDate(v.timestamp));
+            } catch (e) { console.error('preview:', e); }
+          };
+        }).catch(() => {});
+      });
+    });
+
     list.querySelectorAll('.version-restore').forEach(btn => {
       btn.addEventListener('click', () => {
         const id = parseInt(btn.dataset.id);
@@ -1015,6 +1069,66 @@ function refreshHistory() {
       });
     });
   });
+}
+
+// ── Version Diff Popup ───────────────────────────
+function showTextDiffPopup(oldText, newText, versionLabel) {
+  // Remove existing popup if any
+  const existing = document.querySelector('.version-diff-overlay');
+  if (existing) existing.remove();
+
+  const oldLines = oldText.split('\n');
+  const newLines = newText.split('\n');
+
+  // Simple line-by-line diff: mark added, removed, unchanged
+  const maxLen = Math.max(oldLines.length, newLines.length);
+  let diffHtml = '';
+  let added = 0, removed = 0, unchanged = 0;
+
+  for (let i = 0; i < maxLen; i++) {
+    const ol = i < oldLines.length ? oldLines[i] : null;
+    const nl = i < newLines.length ? newLines[i] : null;
+    if (ol === nl) {
+      diffHtml += `<div class="diff-line diff-same">${escapeHtml(ol || '')}</div>`;
+      unchanged++;
+    } else if (ol === null) {
+      diffHtml += `<div class="diff-line diff-added">+ ${escapeHtml(nl)}</div>`;
+      added++;
+    } else if (nl === null) {
+      diffHtml += `<div class="diff-line diff-removed">- ${escapeHtml(ol)}</div>`;
+      removed++;
+    } else {
+      diffHtml += `<div class="diff-line diff-removed">- ${escapeHtml(ol)}</div>`;
+      diffHtml += `<div class="diff-line diff-added">+ ${escapeHtml(nl)}</div>`;
+      removed++;
+      added++;
+    }
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'version-diff-overlay';
+  overlay.innerHTML = `
+    <div class="version-diff-dialog">
+      <div class="version-diff-header">
+        <span class="version-diff-title">Changes since ${escapeHtml(versionLabel)}</span>
+        <span class="version-diff-stats">
+          <span style="color:#34a853">+${added} added</span>,
+          <span style="color:#ea4335">-${removed} removed</span>,
+          ${unchanged} unchanged
+        </span>
+        <button class="version-diff-close" title="Close">&times;</button>
+      </div>
+      <div class="version-diff-body">${diffHtml || '<div class="diff-line diff-same">(No differences)</div>'}</div>
+    </div>`;
+
+  overlay.addEventListener('click', e => {
+    if (e.target === overlay || e.target.classList.contains('version-diff-close')) {
+      overlay.remove();
+    }
+  });
+  overlay.querySelector('.version-diff-close').addEventListener('click', () => overlay.remove());
+
+  document.body.appendChild(overlay);
 }
 
 // ── Style Gallery ─────────────────────────────────
