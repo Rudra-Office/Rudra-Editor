@@ -52,7 +52,7 @@ pub use attr_crdt::AttrCrdt;
 pub use awareness::{AwarenessState, AwarenessUpdate, CursorState};
 pub use clock::{LamportClock, VectorClock};
 pub use collab::{CollabDocument, Snapshot};
-pub use compression::compress_ops;
+pub use compression::{compress_ops, compress_ops_in_place};
 pub use crdt_op::CrdtOperation;
 pub use error::CrdtError;
 pub use metadata_crdt::MetadataCrdt;

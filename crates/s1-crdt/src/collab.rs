@@ -445,6 +445,136 @@ impl CollabDocument {
     pub fn next_id(&mut self) -> NodeId {
         self.id_gen.next_id()
     }
+
+    // ─── Compaction & GC ─────────────────────────────────────────────
+
+    /// Compact the operation log by merging consecutive character inserts.
+    ///
+    /// This reduces memory usage by merging sequential single-character inserts
+    /// into multi-character operations. The semantics of the log are preserved.
+    pub fn compact_op_log(&mut self) {
+        crate::compression::compress_ops_in_place(&mut self.op_log);
+    }
+
+    /// Garbage-collect tombstones that all replicas have seen.
+    ///
+    /// `min_state` should be the intersection of all connected replicas' state vectors.
+    /// Tombstones whose operations are included in `min_state` can be safely removed.
+    /// Returns the number of tombstones removed.
+    pub fn gc_tombstones(&mut self, min_state: &StateVector) -> usize {
+        self.resolver.gc_tombstones(min_state)
+    }
+
+    /// Get the current size of the operation log.
+    pub fn op_log_size(&self) -> usize {
+        self.op_log.len()
+    }
+
+    /// Get the current tombstone count from the resolver.
+    pub fn tombstone_count(&self) -> usize {
+        self.resolver.tombstone_count()
+    }
+
+    /// Create a snapshot, then truncate the operation log.
+    ///
+    /// Returns the snapshot (which includes the full op_log at that point).
+    /// After this call, the local op_log is empty — new changes will start
+    /// from a clean log. Useful for periodic checkpointing in long sessions.
+    pub fn snapshot_and_truncate(&mut self) -> Snapshot {
+        let snapshot = self.snapshot();
+        self.op_log.clear();
+        snapshot
+    }
+
+    /// Auto-compact the operation log if it exceeds the given threshold.
+    ///
+    /// Returns `true` if compaction was performed.
+    pub fn auto_compact(&mut self, threshold: usize) -> bool {
+        if self.op_log.len() >= threshold {
+            self.compact_op_log();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Force-GC tombstones that exceed a maximum count.
+    ///
+    /// Safety valve for when a slow replica prevents normal GC. Removes the
+    /// oldest tombstones even if not all replicas have acknowledged them.
+    /// Returns the number of tombstones removed.
+    pub fn gc_tombstones_excess(&mut self, max_count: usize) -> usize {
+        self.resolver.gc_tombstones_excess(max_count)
+    }
+
+    /// Estimate the in-memory size of the CRDT state in bytes.
+    ///
+    /// This is a rough estimate including the op log, tombstones, and resolver
+    /// state. Useful for monitoring and triggering compaction when the state
+    /// exceeds a size threshold.
+    pub fn estimated_size_bytes(&self) -> usize {
+        // Op log: ~100 bytes per operation (rough estimate)
+        let op_log_size = self.op_log.len() * 100;
+        // Tombstone tracking overhead
+        let tombstone_size = self.resolver.tombstone_count() * 48;
+        // State vector: 16 bytes per replica entry
+        let state_size = self.state.entries().len() * 16;
+        op_log_size + tombstone_size + state_size
+    }
+
+    /// Compact the CRDT state if the estimated size exceeds the given byte threshold.
+    ///
+    /// Performs op log compaction, then tombstone GC, then snapshot-and-truncate
+    /// if the state is still over the threshold. Returns `true` if compaction was
+    /// triggered.
+    pub fn compact_if_oversized(
+        &mut self,
+        max_bytes: usize,
+        min_state: Option<&StateVector>,
+        max_tombstones: usize,
+    ) -> bool {
+        if self.estimated_size_bytes() <= max_bytes {
+            return false;
+        }
+        // Step 1: Compact op log
+        self.compact_op_log();
+        // Step 2: GC tombstones
+        if let Some(ms) = min_state {
+            self.resolver.gc_tombstones(ms);
+        }
+        self.resolver.gc_tombstones_excess(max_tombstones);
+        // Step 3: If still oversized, truncate op log
+        if self.estimated_size_bytes() > max_bytes {
+            self.op_log.clear();
+        }
+        true
+    }
+
+    /// Run maintenance: compact the op log and cap tombstones.
+    ///
+    /// Call this periodically (e.g., every 60 seconds or every 1000 operations).
+    /// - Compacts the op log if it exceeds `op_log_threshold`.
+    /// - GCs tombstones against `min_state` if provided.
+    /// - Force-GCs excess tombstones above `max_tombstones`.
+    pub fn maintenance(
+        &mut self,
+        op_log_threshold: usize,
+        min_state: Option<&StateVector>,
+        max_tombstones: usize,
+    ) {
+        // Compact op log
+        if self.op_log.len() >= op_log_threshold {
+            self.compact_op_log();
+        }
+
+        // GC tombstones against min state
+        if let Some(ms) = min_state {
+            self.resolver.gc_tombstones(ms);
+        }
+
+        // Force-GC excess tombstones
+        self.resolver.gc_tombstones_excess(max_tombstones);
+    }
 }
 
 /// A document snapshot for initial synchronization.
@@ -720,5 +850,298 @@ mod tests {
 
         let doc = CollabDocument::from_model(model, 1);
         assert!(doc.model().node(para_id).is_some());
+    }
+
+    // ─── Compaction & GC tests ───────────────────────────────────────
+
+    /// Helper: build a paragraph/run/text structure and return the text node id.
+    fn setup_text_doc(doc: &mut CollabDocument) -> NodeId {
+        let body_id = doc.model().body_id().unwrap();
+        let para_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            body_id,
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        ))
+        .unwrap();
+
+        let run_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            para_id,
+            0,
+            Node::new(run_id, NodeType::Run),
+        ))
+        .unwrap();
+
+        let text_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(run_id, 0, Node::text(text_id, "")))
+            .unwrap();
+
+        text_id
+    }
+
+    #[test]
+    fn compact_op_log_reduces_size() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        // Insert chars one by one
+        for ch in "hello world".chars() {
+            doc.apply_local(Operation::insert_text(
+                text_id,
+                doc.to_plain_text().len(),
+                ch.to_string(),
+            ))
+            .unwrap();
+        }
+
+        let size_before = doc.op_log_size();
+        // 3 structural ops + 11 char inserts = 14
+        assert!(size_before >= 14);
+
+        doc.compact_op_log();
+
+        let size_after = doc.op_log_size();
+        // After compaction, char inserts should be merged
+        assert!(size_after < size_before);
+    }
+
+    #[test]
+    fn compact_preserves_semantics() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        for ch in "abcdef".chars() {
+            doc.apply_local(Operation::insert_text(
+                text_id,
+                doc.to_plain_text().len(),
+                ch.to_string(),
+            ))
+            .unwrap();
+        }
+
+        let text_before = doc.to_plain_text();
+        doc.compact_op_log();
+        let text_after = doc.to_plain_text();
+
+        assert_eq!(text_before, text_after);
+        assert_eq!(text_after, "abcdef");
+    }
+
+    #[test]
+    fn gc_tombstones_removes_old() {
+        let mut doc = CollabDocument::new(1);
+        let body_id = doc.model().body_id().unwrap();
+
+        // Insert a paragraph
+        let para_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            body_id,
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        ))
+        .unwrap();
+
+        // Delete it
+        doc.apply_local(Operation::delete_node(para_id)).unwrap();
+        assert!(doc.tombstone_count() > 0);
+
+        // GC with a state vector that covers all operations
+        let mut min_state = doc.state_vector().clone();
+        // Ensure all replicas are covered
+        min_state.set(1, 1000);
+        let removed = doc.gc_tombstones(&min_state);
+        assert!(removed > 0);
+    }
+
+    #[test]
+    fn auto_compact_below_threshold() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        doc.apply_local(Operation::insert_text(text_id, 0, "a".to_string()))
+            .unwrap();
+
+        let size_before = doc.op_log_size();
+        let compacted = doc.auto_compact(1000); // Threshold much higher
+        assert!(!compacted);
+        assert_eq!(doc.op_log_size(), size_before);
+    }
+
+    #[test]
+    fn auto_compact_above_threshold() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        for ch in "hello world".chars() {
+            doc.apply_local(Operation::insert_text(
+                text_id,
+                doc.to_plain_text().len(),
+                ch.to_string(),
+            ))
+            .unwrap();
+        }
+
+        let size_before = doc.op_log_size();
+        let compacted = doc.auto_compact(5); // Low threshold
+        assert!(compacted);
+        assert!(doc.op_log_size() < size_before);
+    }
+
+    #[test]
+    fn snapshot_and_truncate_empties_log() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        doc.apply_local(Operation::insert_text(text_id, 0, "hello".to_string()))
+            .unwrap();
+
+        assert!(doc.op_log_size() > 0);
+
+        let snapshot = doc.snapshot_and_truncate();
+        assert_eq!(doc.op_log_size(), 0);
+        // Snapshot should have the ops
+        assert!(!snapshot.op_log.is_empty());
+    }
+
+    #[test]
+    fn snapshot_and_truncate_preserves_model() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        doc.apply_local(Operation::insert_text(text_id, 0, "hello".to_string()))
+            .unwrap();
+
+        let text_before = doc.to_plain_text();
+        let _snapshot = doc.snapshot_and_truncate();
+
+        // Model is unchanged despite op_log being empty
+        assert_eq!(doc.to_plain_text(), text_before);
+        assert_eq!(doc.to_plain_text(), "hello");
+    }
+
+    #[test]
+    fn op_log_size_introspection() {
+        let mut doc = CollabDocument::new(1);
+        assert_eq!(doc.op_log_size(), 0);
+
+        let body_id = doc.model().body_id().unwrap();
+        let para_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            body_id,
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        ))
+        .unwrap();
+        assert_eq!(doc.op_log_size(), 1);
+
+        let para_id2 = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            body_id,
+            1,
+            Node::new(para_id2, NodeType::Paragraph),
+        ))
+        .unwrap();
+        assert_eq!(doc.op_log_size(), 2);
+    }
+
+    #[test]
+    fn tombstone_count_introspection() {
+        let mut doc = CollabDocument::new(1);
+        assert_eq!(doc.tombstone_count(), 0);
+
+        let body_id = doc.model().body_id().unwrap();
+        let para_id = doc.next_id();
+        doc.apply_local(Operation::insert_node(
+            body_id,
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        ))
+        .unwrap();
+
+        // Delete it — should add a tombstone
+        doc.apply_local(Operation::delete_node(para_id)).unwrap();
+        assert!(doc.tombstone_count() > 0);
+    }
+
+    #[test]
+    fn long_session_simulation() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        // Insert 1000 chars one by one (simulating sequential typing)
+        for i in 0..1000 {
+            let ch = (b'a' + (i % 26) as u8) as char;
+            doc.apply_local(Operation::insert_text(
+                text_id,
+                doc.to_plain_text().len(),
+                ch.to_string(),
+            ))
+            .unwrap();
+        }
+
+        let size_before = doc.op_log_size();
+        // 3 structural + 1000 char inserts = 1003
+        assert_eq!(size_before, 1003);
+
+        let text_before = doc.to_plain_text();
+        assert_eq!(text_before.len(), 1000);
+
+        doc.compact_op_log();
+
+        let size_after = doc.op_log_size();
+        // Should be much smaller (3 structural + 1 merged text = 4)
+        assert!(size_after < size_before);
+        assert!(size_after <= 10); // Very aggressive compression for sequential typing
+
+        // Text is unchanged
+        assert_eq!(doc.to_plain_text(), text_before);
+    }
+
+    #[test]
+    fn estimated_size_bytes() {
+        let mut doc = CollabDocument::new(1);
+
+        // Empty doc should have small estimated size
+        let empty_size = doc.estimated_size_bytes();
+        assert!(empty_size < 1000, "empty doc size should be small: {empty_size}");
+
+        // Add some operations via setup_text_doc
+        let text_id = setup_text_doc(&mut doc);
+        doc.apply_local(Operation::insert_text(text_id, 0, "a".repeat(100)))
+            .unwrap();
+
+        let size_with_ops = doc.estimated_size_bytes();
+        assert!(size_with_ops > empty_size, "size should grow with operations");
+    }
+
+    #[test]
+    fn compact_if_oversized() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        // Insert many single-char operations to build up op log
+        for i in 0..200 {
+            doc.apply_local(Operation::insert_text(text_id, i, "x".to_string()))
+                .unwrap();
+        }
+
+        let size_before = doc.op_log_size();
+        assert!(size_before >= 200);
+
+        // Set a very low threshold to trigger compaction
+        let compacted = doc.compact_if_oversized(100, None, 10_000);
+        assert!(compacted, "compaction should have been triggered");
+
+        let size_after = doc.op_log_size();
+        assert!(size_after < size_before, "op log should be smaller after compaction");
+    }
+
+    #[test]
+    fn compact_if_not_oversized() {
+        let mut doc = CollabDocument::new(1);
+        // Very large threshold — should not compact
+        let compacted = doc.compact_if_oversized(10_000_000, None, 10_000);
+        assert!(!compacted, "compaction should not be triggered for small doc");
     }
 }

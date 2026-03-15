@@ -296,9 +296,10 @@ impl DocumentModel {
         // Insert node into storage
         self.nodes.insert(node_id, node);
 
-        // Add to parent's children
-        let parent = self.nodes.get_mut(&parent_id).unwrap();
-        parent.children.insert(index, node_id);
+        // Add to parent's children (parent validated above, must still exist)
+        if let Some(parent) = self.nodes.get_mut(&parent_id) {
+            parent.children.insert(index, node_id);
+        }
 
         Ok(())
     }
@@ -394,17 +395,22 @@ impl DocumentModel {
             }
         }
 
-        // Validate index after removal
-        let new_parent = self.nodes.get(&new_parent_id).unwrap();
-        let actual_index = new_index.min(new_parent.children.len());
+        // Validate index after removal (new_parent validated above, must still exist)
+        let actual_index = self
+            .nodes
+            .get(&new_parent_id)
+            .map(|p| new_index.min(p.children.len()))
+            .unwrap_or(0);
 
         // Add to new parent
-        let new_parent = self.nodes.get_mut(&new_parent_id).unwrap();
-        new_parent.children.insert(actual_index, id);
+        if let Some(new_parent) = self.nodes.get_mut(&new_parent_id) {
+            new_parent.children.insert(actual_index, id);
+        }
 
         // Update parent reference
-        let node = self.nodes.get_mut(&id).unwrap();
-        node.parent = Some(new_parent_id);
+        if let Some(node) = self.nodes.get_mut(&id) {
+            node.parent = Some(new_parent_id);
+        }
 
         Ok(())
     }

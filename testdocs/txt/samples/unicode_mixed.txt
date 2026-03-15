@@ -1,0 +1,10 @@
+English: The quick brown fox jumps over the lazy dog.
+Chinese: 你好世界。这是一个测试文档。
+Arabic: مرحبا بالعالم. هذا مستند اختبار.
+Japanese: こんにちは世界。これはテスト文書です。
+Korean: 안녕하세요 세계. 이것은 테스트 문서입니다.
+Emoji: 🎉🚀📝💻🔥✨🌍🎯🏆🎨
+Accented: café résumé naïve über straße año piñata
+Math symbols: ∑ ∏ ∫ √ ∞ ≠ ≤ ≥ ± ÷
+Currency: $ € £ ¥ ₹ ₽ ₩ ₿
+Mixed: Hello 你好 مرحبا こんにちは 안녕 🌍 café ∞

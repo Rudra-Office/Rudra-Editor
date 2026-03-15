@@ -10,6 +10,7 @@ use crate::content_writer::write_content_xml;
 use crate::error::OdtError;
 use crate::manifest_writer::write_manifest_xml;
 use crate::metadata_writer::write_meta_xml;
+use crate::settings_writer::write_settings_xml;
 use crate::style_writer::write_styles_xml;
 
 /// Write a `DocumentModel` as ODT bytes.
@@ -55,6 +56,11 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, OdtError> {
         zip.write_all(meta.as_bytes())?;
     }
 
+    // 7b. Write settings.xml (always — default zoom 100%)
+    let settings_xml = write_settings_xml(100);
+    zip.start_file("settings.xml", deflated)?;
+    zip.write_all(settings_xml.as_bytes())?;
+
     // 8. Write images to Pictures/
     for entry in &image_entries {
         if let Some(media) = doc.media().get(entry.media_id) {
@@ -65,7 +71,7 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, OdtError> {
 
     // 9. Write META-INF/manifest.xml
     let image_paths: Vec<&str> = image_entries.iter().map(|e| e.href.as_str()).collect();
-    let manifest = write_manifest_xml(&image_paths);
+    let manifest = write_manifest_xml(&image_paths, meta_xml.is_some());
     zip.start_file("META-INF/manifest.xml", deflated)?;
     zip.write_all(manifest.as_bytes())?;
 

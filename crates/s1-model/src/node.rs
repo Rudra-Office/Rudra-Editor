@@ -45,6 +45,8 @@ pub enum NodeType {
     // Generated content
     /// A Table of Contents block. Contains cached entry paragraphs.
     TableOfContents,
+    /// A mathematical equation (inline or display).
+    Equation,
 
     // Objects
     /// An inline or floating image.
@@ -73,6 +75,16 @@ pub enum NodeType {
     CommentEnd,
     /// Comment content container.
     CommentBody,
+
+    // Footnotes / Endnotes
+    /// An inline footnote reference marker.
+    FootnoteRef,
+    /// The footnote body content (child of Document root, like CommentBody).
+    FootnoteBody,
+    /// An inline endnote reference marker.
+    EndnoteRef,
+    /// The endnote body content (child of Document root, like CommentBody).
+    EndnoteBody,
 }
 
 impl NodeType {
@@ -92,6 +104,8 @@ impl NodeType {
                 | NodeType::Footer
                 | NodeType::CommentBody
                 | NodeType::TableOfContents
+                | NodeType::FootnoteBody
+                | NodeType::EndnoteBody
         )
     }
 
@@ -121,10 +135,13 @@ impl NodeType {
                 | NodeType::Image
                 | NodeType::Drawing
                 | NodeType::Field
+                | NodeType::Equation
                 | NodeType::BookmarkStart
                 | NodeType::BookmarkEnd
                 | NodeType::CommentStart
                 | NodeType::CommentEnd
+                | NodeType::FootnoteRef
+                | NodeType::EndnoteRef
         )
     }
 
@@ -136,6 +153,8 @@ impl NodeType {
                 NodeType::Header,
                 NodeType::Footer,
                 NodeType::CommentBody,
+                NodeType::FootnoteBody,
+                NodeType::EndnoteBody,
             ],
             NodeType::Body => &[
                 NodeType::Section,
@@ -143,6 +162,8 @@ impl NodeType {
                 NodeType::Table,
                 NodeType::Image,
                 NodeType::TableOfContents,
+                NodeType::PageBreak,
+                NodeType::ColumnBreak,
             ],
             NodeType::Section => &[
                 NodeType::Paragraph,
@@ -158,18 +179,24 @@ impl NodeType {
                 NodeType::ColumnBreak,
                 NodeType::Tab,
                 NodeType::Image,
+                NodeType::Drawing,
                 NodeType::Field,
+                NodeType::Equation,
                 NodeType::BookmarkStart,
                 NodeType::BookmarkEnd,
                 NodeType::CommentStart,
                 NodeType::CommentEnd,
+                NodeType::FootnoteRef,
+                NodeType::EndnoteRef,
             ],
             NodeType::Run => &[NodeType::Text],
             NodeType::Table => &[NodeType::TableRow],
             NodeType::TableRow => &[NodeType::TableCell],
             NodeType::TableCell => &[NodeType::Paragraph, NodeType::Table],
             NodeType::Header | NodeType::Footer => &[NodeType::Paragraph, NodeType::Table],
-            NodeType::CommentBody => &[NodeType::Paragraph],
+            NodeType::CommentBody | NodeType::FootnoteBody | NodeType::EndnoteBody => {
+                &[NodeType::Paragraph]
+            }
             // Leaf nodes
             _ => &[],
         }
@@ -239,9 +266,9 @@ impl Node {
         self.children.len()
     }
 
-    /// Returns the text content length, or 0 for non-text nodes.
+    /// Returns the text content length in characters, or 0 for non-text nodes.
     pub fn text_len(&self) -> usize {
-        self.text_content.as_ref().map_or(0, |t| t.len())
+        self.text_content.as_ref().map_or(0, |t| t.chars().count())
     }
 }
 

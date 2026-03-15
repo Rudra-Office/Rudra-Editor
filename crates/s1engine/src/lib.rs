@@ -78,6 +78,20 @@ pub use s1_crdt as crdt;
 #[cfg(feature = "crdt")]
 pub use s1_crdt::{CollabDocument, CrdtError, CrdtOperation, OpId, StateVector};
 
+// Layout engine support (feature-gated).
+#[cfg(feature = "layout")]
+pub use s1_layout as layout;
+
+#[cfg(feature = "layout")]
+pub use s1_layout::{
+    layout_to_html, layout_to_html_with_options, GlyphRun, HtmlOptions, LayoutBlock,
+    LayoutBlockKind, LayoutBookmark, LayoutCache, LayoutConfig, LayoutDocument, LayoutLine,
+    LayoutPage, LayoutTableCell, LayoutTableRow, PageLayout, Rect,
+};
+
+#[cfg(feature = "layout")]
+pub use s1_text as text;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +316,360 @@ mod tests {
         assert!(doc.can_undo());
         doc.clear_history();
         assert!(!doc.can_undo());
+    }
+
+    // ─── Layout Tests (feature-gated) ────────────────────────────
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_empty_document() {
+        let doc = Document::new();
+        let font_db = s1_text::FontDatabase::empty();
+        let result = doc.layout(&font_db).unwrap();
+        assert_eq!(result.pages.len(), 1, "empty doc should produce 1 page");
+        assert!(result.pages[0].blocks.is_empty());
+    }
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_single_paragraph() {
+        let doc = DocumentBuilder::new()
+            .paragraph(|p| p.text("Hello World"))
+            .build();
+        let font_db = s1_text::FontDatabase::empty();
+        let result = doc.layout(&font_db).unwrap();
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Paragraph { lines, .. } => {
+                assert!(!lines.is_empty(), "paragraph should have at least one line");
+            }
+            _ => panic!("expected a paragraph block"),
+        }
+    }
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_with_config() {
+        let doc = DocumentBuilder::new()
+            .paragraph(|p| p.text("Hello"))
+            .build();
+        let font_db = s1_text::FontDatabase::empty();
+        let config = LayoutConfig {
+            default_page_layout: PageLayout::a4(),
+            ..Default::default()
+        };
+        let result = doc.layout_with_config(&font_db, config).unwrap();
+        let page = &result.pages[0];
+        assert!(
+            (page.width - 595.28).abs() < 0.01,
+            "A4 page width should be ~595.28pt"
+        );
+        assert!(
+            (page.height - 841.89).abs() < 0.01,
+            "A4 page height should be ~841.89pt"
+        );
+    }
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_table() {
+        let doc = DocumentBuilder::new()
+            .table(|t| {
+                t.row(|r| r.cell("R0C0").cell("R0C1"))
+                    .row(|r| r.cell("R1C0").cell("R1C1"))
+            })
+            .build();
+        let font_db = s1_text::FontDatabase::empty();
+        let result = doc.layout(&font_db).unwrap();
+        assert_eq!(result.pages[0].blocks.len(), 1);
+        match &result.pages[0].blocks[0].kind {
+            LayoutBlockKind::Table { rows, .. } => {
+                assert_eq!(rows.len(), 2, "table should have 2 rows");
+                assert_eq!(rows[0].cells.len(), 2, "row should have 2 cells");
+            }
+            _ => panic!("expected a table block"),
+        }
+    }
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_multiple_paragraphs() {
+        let doc = DocumentBuilder::new()
+            .paragraph(|p| p.text("First paragraph"))
+            .paragraph(|p| p.text("Second paragraph"))
+            .paragraph(|p| p.text("Third paragraph"))
+            .build();
+        let font_db = s1_text::FontDatabase::empty();
+        let result = doc.layout(&font_db).unwrap();
+        assert_eq!(
+            result.pages[0].blocks.len(),
+            3,
+            "should have 3 paragraph blocks"
+        );
+    }
+
+    #[cfg(feature = "layout")]
+    #[test]
+    fn layout_returns_pages() {
+        let doc = DocumentBuilder::new()
+            .paragraph(|p| p.text("Content"))
+            .build();
+        let font_db = s1_text::FontDatabase::empty();
+        let result = doc.layout(&font_db).unwrap();
+        assert!(
+            !result.pages.is_empty(),
+            "layout should return at least 1 page"
+        );
+        let page = &result.pages[0];
+        // Default letter size
+        assert!((page.width - 612.0).abs() < 0.01);
+        assert!((page.height - 792.0).abs() < 0.01);
+        // Content area should be inside margins
+        assert!(page.content_area.x >= 72.0);
+        assert!(page.content_area.y >= 72.0);
+        assert!(page.content_area.width > 0.0);
+        assert!(page.content_area.height > 0.0);
+    }
+
+    // ─── Track Changes Accept/Reject Tests ──────────────────────
+
+    /// Helper: create a document with a paragraph containing a run marked
+    /// with a revision attribute. Returns (doc, run_node_id).
+    fn make_tracked_doc(rev_type: &str, text: &str) -> (Document, NodeId) {
+        let mut doc = Document::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let model = doc.model_mut();
+        model
+            .insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = model.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String(rev_type.to_string()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Alice".to_string()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2026-03-13T10:00:00Z".to_string()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(42));
+        model.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = model.next_id();
+        model
+            .insert_node(run_id, 0, Node::text(text_id, text))
+            .unwrap();
+
+        (doc, run_id)
+    }
+
+    #[test]
+    fn test_accept_all_insertions() {
+        let (mut doc, run_id) = make_tracked_doc("Insert", "inserted text");
+
+        // Verify the tracked change exists
+        let changes = doc.tracked_changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].1, "Insert");
+
+        // Accept all changes
+        doc.accept_all_changes().unwrap();
+
+        // Revision attributes should be gone
+        let node = doc.node(run_id).unwrap();
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionAuthor)
+            .is_none());
+
+        // Content should still be there
+        assert!(doc.to_plain_text().contains("inserted text"));
+
+        // No more tracked changes
+        assert_eq!(doc.tracked_changes().len(), 0);
+    }
+
+    #[test]
+    fn test_accept_all_deletions() {
+        let (mut doc, run_id) = make_tracked_doc("Delete", "deleted text");
+
+        // Content exists before accept
+        assert!(doc.to_plain_text().contains("deleted text"));
+        assert_eq!(doc.tracked_changes().len(), 1);
+
+        // Accept all: deleted nodes should be removed
+        doc.accept_all_changes().unwrap();
+
+        // Node should be gone
+        assert!(doc.node(run_id).is_none());
+
+        // Text should be gone
+        assert!(!doc.to_plain_text().contains("deleted text"));
+
+        // No more tracked changes
+        assert_eq!(doc.tracked_changes().len(), 0);
+    }
+
+    #[test]
+    fn test_reject_all_insertions() {
+        let (mut doc, run_id) = make_tracked_doc("Insert", "inserted text");
+
+        assert_eq!(doc.tracked_changes().len(), 1);
+
+        // Reject all: inserted nodes should be removed
+        doc.reject_all_changes().unwrap();
+
+        // Node should be gone
+        assert!(doc.node(run_id).is_none());
+
+        // Text should be gone
+        assert!(!doc.to_plain_text().contains("inserted text"));
+
+        // No more tracked changes
+        assert_eq!(doc.tracked_changes().len(), 0);
+    }
+
+    #[test]
+    fn test_reject_all_deletions() {
+        let (mut doc, run_id) = make_tracked_doc("Delete", "deleted text");
+
+        assert_eq!(doc.tracked_changes().len(), 1);
+
+        // Reject all: deletions are un-deleted (revision attrs removed, content stays)
+        doc.reject_all_changes().unwrap();
+
+        // Node should still be there
+        let node = doc.node(run_id).unwrap();
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+        assert!(node
+            .attributes
+            .get_string(&AttributeKey::RevisionAuthor)
+            .is_none());
+
+        // Content should still be there (un-deleted)
+        assert!(doc.to_plain_text().contains("deleted text"));
+
+        // No more tracked changes
+        assert_eq!(doc.tracked_changes().len(), 0);
+    }
+
+    #[test]
+    fn test_accept_single_change() {
+        let (mut doc, run_id1) = make_tracked_doc("Insert", "first insert");
+
+        // Add a second tracked change
+        let body_id = doc.body_id().unwrap();
+        let para_id2 = doc.next_id();
+        let model = doc.model_mut();
+        model
+            .insert_node(body_id, 1, Node::new(para_id2, NodeType::Paragraph))
+            .unwrap();
+        let run_id2 = model.next_id();
+        let mut run2 = Node::new(run_id2, NodeType::Run);
+        run2.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Insert".to_string()),
+        );
+        run2.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".to_string()),
+        );
+        model.insert_node(para_id2, 0, run2).unwrap();
+        let text_id2 = model.next_id();
+        model
+            .insert_node(run_id2, 0, Node::text(text_id2, "second insert"))
+            .unwrap();
+
+        // Two tracked changes
+        assert_eq!(doc.tracked_changes().len(), 2);
+
+        // Accept only the first change
+        doc.accept_change(run_id1).unwrap();
+
+        // First change accepted (attrs removed), second still tracked
+        let changes = doc.tracked_changes();
+        assert_eq!(changes.len(), 1);
+        assert_eq!(changes[0].0, run_id2);
+
+        // First run has no revision attrs but content remains
+        let node1 = doc.node(run_id1).unwrap();
+        assert!(node1
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+        assert!(doc.to_plain_text().contains("first insert"));
+    }
+
+    #[test]
+    fn test_tracked_changes_list() {
+        let mut doc = Document::new();
+        let body_id = doc.body_id().unwrap();
+
+        // No tracked changes initially
+        assert_eq!(doc.tracked_changes().len(), 0);
+
+        // Add three tracked changes of different types
+        let rev_types = ["Insert", "Delete", "FormatChange"];
+        let mut run_ids = Vec::new();
+
+        for (i, rev_type) in rev_types.iter().enumerate() {
+            let para_id = doc.next_id();
+            let model = doc.model_mut();
+            model
+                .insert_node(body_id, i, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = model.next_id();
+            let mut run = Node::new(run_id, NodeType::Run);
+            run.attributes.set(
+                AttributeKey::RevisionType,
+                AttributeValue::String(rev_type.to_string()),
+            );
+            run.attributes.set(
+                AttributeKey::RevisionAuthor,
+                AttributeValue::String(format!("Author{}", i)),
+            );
+            run.attributes.set(
+                AttributeKey::RevisionDate,
+                AttributeValue::String(format!("2026-03-13T1{}:00:00Z", i)),
+            );
+            model.insert_node(para_id, 0, run).unwrap();
+            let text_id = model.next_id();
+            model
+                .insert_node(run_id, 0, Node::text(text_id, format!("text{}", i)))
+                .unwrap();
+            run_ids.push(run_id);
+        }
+
+        // Should have 3 tracked changes
+        let changes = doc.tracked_changes();
+        assert_eq!(changes.len(), 3);
+
+        // Verify types
+        let types: Vec<&str> = changes.iter().map(|(_, t, _, _)| t.as_str()).collect();
+        assert!(types.contains(&"Insert"));
+        assert!(types.contains(&"Delete"));
+        assert!(types.contains(&"FormatChange"));
+
+        // Verify authors are present
+        for (_, _, author, date) in &changes {
+            assert!(author.is_some());
+            assert!(date.is_some());
+        }
     }
 }

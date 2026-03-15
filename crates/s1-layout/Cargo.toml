@@ -14,7 +14,9 @@ categories.workspace = true
 s1-model = { workspace = true }
 s1-text = { workspace = true }
 thiserror = { workspace = true }
+base64 = { workspace = true }
 fontdb = "0.23"
+unicode-script = "0.5"
 
 [dev-dependencies]
 pretty_assertions = { workspace = true }

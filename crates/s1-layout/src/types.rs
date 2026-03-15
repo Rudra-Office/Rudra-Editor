@@ -44,6 +44,12 @@ pub struct LayoutPage {
     pub header: Option<LayoutBlock>,
     /// Footer content (if any).
     pub footer: Option<LayoutBlock>,
+    /// Footnote blocks laid out at the bottom of the page.
+    pub footnotes: Vec<LayoutBlock>,
+    /// Floating images positioned absolutely on this page.
+    pub floating_images: Vec<LayoutBlock>,
+    /// 0-based section index this page belongs to.
+    pub section_index: usize,
 }
 
 /// A positioned block element (paragraph, table, or image).
@@ -65,11 +71,37 @@ pub enum LayoutBlockKind {
     Paragraph {
         /// Lines of text.
         lines: Vec<LayoutLine>,
+        /// Text alignment (CSS text-align value).
+        text_align: Option<String>,
+        /// Paragraph background color.
+        background_color: Option<Color>,
+        /// Paragraph border (CSS border shorthand).
+        border: Option<String>,
+        /// List marker text (e.g., "•", "1.", "a.") if this paragraph is a list item.
+        list_marker: Option<String>,
+        /// List indent level (0-based).
+        list_level: u8,
+        /// Space before paragraph in points.
+        space_before: f64,
+        /// Space after paragraph in points.
+        space_after: f64,
+        /// Left indent in points.
+        indent_left: f64,
+        /// Right indent in points.
+        indent_right: f64,
+        /// First-line indent in points.
+        indent_first_line: f64,
+        /// Line height as a CSS-compatible value (e.g., 1.15 for 115%).
+        line_height: Option<f64>,
+        /// Whether this paragraph has right-to-left (BiDi) direction.
+        bidi: bool,
     },
     /// A table with rows.
     Table {
         /// Table rows with cells.
         rows: Vec<LayoutTableRow>,
+        /// Whether this table is a continuation from a previous page.
+        is_continuation: bool,
     },
     /// An inline image.
     Image {
@@ -95,6 +127,21 @@ pub struct LayoutLine {
     pub runs: Vec<GlyphRun>,
 }
 
+/// An inline image within a glyph run.
+#[derive(Debug, Clone)]
+pub struct InlineImage {
+    /// Media ID reference.
+    pub media_id: String,
+    /// Image width in points.
+    pub width: f64,
+    /// Image height in points.
+    pub height: f64,
+    /// Raw image bytes.
+    pub image_data: Option<Vec<u8>>,
+    /// MIME content type (e.g., "image/png", "image/jpeg").
+    pub content_type: Option<String>,
+}
+
 /// A contiguous run of glyphs with uniform formatting.
 #[derive(Debug, Clone)]
 pub struct GlyphRun {
@@ -114,6 +161,30 @@ pub struct GlyphRun {
     pub width: f64,
     /// Hyperlink URL if this run is part of a hyperlink.
     pub hyperlink_url: Option<String>,
+    /// The original text content of this run (before shaping).
+    pub text: String,
+    /// Whether this run is bold.
+    pub bold: bool,
+    /// Whether this run is italic.
+    pub italic: bool,
+    /// Whether this run is underlined.
+    pub underline: bool,
+    /// Whether this run has strikethrough.
+    pub strikethrough: bool,
+    /// Whether this run is superscript.
+    pub superscript: bool,
+    /// Whether this run is subscript.
+    pub subscript: bool,
+    /// Highlight/background color.
+    pub highlight_color: Option<Color>,
+    /// Character spacing in points (letter-spacing).
+    pub character_spacing: f64,
+    /// Revision type for track changes (e.g., "insertion", "deletion").
+    pub revision_type: Option<String>,
+    /// Revision author for track changes.
+    pub revision_author: Option<String>,
+    /// Inline image data, if this run represents an inline image.
+    pub inline_image: Option<InlineImage>,
 }
 
 /// A table row in the layout.
@@ -123,6 +194,8 @@ pub struct LayoutTableRow {
     pub bounds: Rect,
     /// Cells in this row.
     pub cells: Vec<LayoutTableCell>,
+    /// Whether this row is a header row that repeats on continuation pages.
+    pub is_header_row: bool,
 }
 
 /// A table cell in the layout.
@@ -132,6 +205,66 @@ pub struct LayoutTableCell {
     pub bounds: Rect,
     /// Content blocks inside the cell.
     pub blocks: Vec<LayoutBlock>,
+    /// Cell background color (if any).
+    pub background_color: Option<Color>,
+    /// Cell border top (CSS border string).
+    pub border_top: Option<String>,
+    /// Cell border bottom (CSS border string).
+    pub border_bottom: Option<String>,
+    /// Cell border left (CSS border string).
+    pub border_left: Option<String>,
+    /// Cell border right (CSS border string).
+    pub border_right: Option<String>,
+}
+
+/// Text wrap type for floating images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapType {
+    /// No wrapping (image behind or in front of text).
+    None,
+    /// Text wraps around rectangular bounding box.
+    Square,
+    /// Text wraps tightly around the image shape.
+    Tight,
+    /// Text wraps through the image.
+    Through,
+    /// No text beside the image — text above and below only.
+    TopAndBottom,
+}
+
+/// A floating image's exclusion zone for text wrapping.
+#[derive(Debug, Clone, Copy)]
+pub struct FloatingImageRect {
+    /// Absolute bounds on the page (in points).
+    pub bounds: Rect,
+    /// Wrap type.
+    pub wrap_type: WrapType,
+    /// Distance from text — top, in points.
+    pub dist_top: f64,
+    /// Distance from text — bottom, in points.
+    pub dist_bottom: f64,
+    /// Distance from text — left, in points.
+    pub dist_left: f64,
+    /// Distance from text — right, in points.
+    pub dist_right: f64,
+}
+
+impl FloatingImageRect {
+    /// The exclusion zone including distance-from-text padding.
+    pub fn exclusion_rect(&self) -> Rect {
+        Rect::new(
+            self.bounds.x - self.dist_left,
+            self.bounds.y - self.dist_top,
+            self.bounds.width + self.dist_left + self.dist_right,
+            self.bounds.height + self.dist_top + self.dist_bottom,
+        )
+    }
+
+    /// Check if this float's exclusion zone overlaps a vertical range.
+    pub fn overlaps_y(&self, y_top: f64, y_bottom: f64) -> bool {
+        let ex = self.exclusion_rect();
+        ex.y < y_bottom && ex.bottom() > y_top
+    }
 }
 
 /// A rectangle with position and size.

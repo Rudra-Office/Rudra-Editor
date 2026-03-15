@@ -302,6 +302,10 @@ pub enum AttributeKey {
     TableBorders,
     CellMargins,
 
+    // Table row attributes
+    /// Marks a table row as a header row that should repeat on continuation pages.
+    TableHeaderRow,
+
     // Cell attributes
     CellWidth,
     VerticalAlign,
@@ -315,6 +319,20 @@ pub enum AttributeKey {
     ImageWidth,
     ImageHeight,
     ImageAltText,
+    /// "inline" (default) or "anchor" (floating)
+    ImagePositionType,
+    /// Text wrap style: "none", "square", "tight", "topAndBottom", "behind", "inFront"
+    ImageWrapType,
+    /// Horizontal offset in EMUs from anchor (for floating images)
+    ImageHorizontalOffset,
+    /// Vertical offset in EMUs from anchor (for floating images)
+    ImageVerticalOffset,
+    /// Horizontal relative-to: "column", "page", "margin", "character"
+    ImageHorizontalRelativeFrom,
+    /// Vertical relative-to: "paragraph", "page", "margin", "line"
+    ImageVerticalRelativeFrom,
+    /// Distance from text in EMUs (top, bottom, left, right as comma-separated string)
+    ImageDistanceFromText,
 
     // Field attributes
     FieldType,
@@ -326,6 +344,24 @@ pub enum AttributeKey {
     /// Custom title for the TOC (e.g. "Table of Contents").
     TocTitle,
 
+    // Hyphenation attributes
+    /// Suppress automatic hyphenation for this paragraph.
+    SuppressAutoHyphens,
+
+    // BiDi attribute
+    /// Whether text direction is right-to-left.
+    Bidi,
+
+    // Equation attributes
+    /// Source content for an equation (LaTeX string or raw OOXML).
+    EquationSource,
+
+    // Footnote/Endnote attributes
+    /// Footnote number (auto-assigned).
+    FootnoteNumber,
+    /// Endnote number (auto-assigned).
+    EndnoteNumber,
+
     // Link / annotation attributes
     HyperlinkUrl,
     HyperlinkTooltip,
@@ -333,6 +369,36 @@ pub enum AttributeKey {
     CommentId,
     CommentAuthor,
     CommentDate,
+    /// Parent comment ID for threaded replies.
+    CommentParentId,
+
+    // Revision / track changes attributes
+    /// Revision type: "Insert", "Delete", or "FormatChange".
+    RevisionType,
+    /// Revision author name.
+    RevisionAuthor,
+    /// Revision date/time string (ISO 8601).
+    RevisionDate,
+    /// Revision ID (unique within document).
+    RevisionId,
+    /// The original formatting before a format change (stored as string representation).
+    RevisionOriginalFormatting,
+
+    // Shape / drawing attributes
+    /// Shape type identifier (e.g., "rect", "roundRect", "ellipse", "line", "textBox").
+    ShapeType,
+    /// Shape width in points.
+    ShapeWidth,
+    /// Shape height in points.
+    ShapeHeight,
+    /// Shape fill color (hex string, no #).
+    ShapeFillColor,
+    /// Shape outline/stroke color (hex string, no #).
+    ShapeStrokeColor,
+    /// Shape outline width in points.
+    ShapeStrokeWidth,
+    /// Raw VML/DrawingML XML for preserving shapes that can't be fully modeled.
+    ShapeRawXml,
 }
 
 /// Typed attribute values.

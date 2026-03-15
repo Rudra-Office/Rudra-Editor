@@ -20,6 +20,10 @@ pub enum Error {
     #[cfg(feature = "crdt")]
     #[error("CRDT error: {0}")]
     Crdt(#[from] s1_crdt::CrdtError),
+    /// Error from the layout engine.
+    #[cfg(feature = "layout")]
+    #[error("Layout error: {0}")]
+    Layout(#[from] s1_layout::LayoutError),
 }
 
 #[cfg(feature = "docx")]
@@ -39,6 +43,13 @@ impl From<s1_format_odt::OdtError> for Error {
 #[cfg(feature = "txt")]
 impl From<s1_format_txt::TxtError> for Error {
     fn from(e: s1_format_txt::TxtError) -> Self {
+        Self::Format(e.to_string())
+    }
+}
+
+#[cfg(feature = "pdf")]
+impl From<s1_format_pdf::PdfError> for Error {
+    fn from(e: s1_format_pdf::PdfError) -> Self {
         Self::Format(e.to_string())
     }
 }

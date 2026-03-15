@@ -217,6 +217,73 @@ fn write_paragraph(
                         write_run(doc, run_id, xml);
                     }
                     xml.push_str("</w:hyperlink>");
+                } else if let Some(rev_type) =
+                    child.attributes.get_string(&AttributeKey::RevisionType)
+                {
+                    // Tracked change — group consecutive runs with same revision
+                    let rev_type = rev_type.to_string();
+                    if rev_type == "Insert"
+                        || rev_type == "Delete"
+                        || rev_type == "MoveTo"
+                        || rev_type == "MoveFrom"
+                    {
+                        let rev_id = child.attributes.get_i64(&AttributeKey::RevisionId);
+                        let rev_author = child
+                            .attributes
+                            .get_string(&AttributeKey::RevisionAuthor)
+                            .map(|s| s.to_string());
+                        let rev_date = child
+                            .attributes
+                            .get_string(&AttributeKey::RevisionDate)
+                            .map(|s| s.to_string());
+
+                        // Find all consecutive runs with same revision info
+                        let rev_start = i;
+                        while i < children.len() {
+                            if let Some(n) = doc.node(children[i]) {
+                                if n.node_type == NodeType::Run
+                                    && n.attributes.get_string(&AttributeKey::RevisionType)
+                                        == Some(&rev_type)
+                                    && n.attributes.get_i64(&AttributeKey::RevisionId) == rev_id
+                                {
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+
+                        // Write tracked change wrapper
+                        let tag = match rev_type.as_str() {
+                            "Insert" => "ins",
+                            "Delete" => "del",
+                            "MoveTo" => "moveTo",
+                            "MoveFrom" => "moveFrom",
+                            _ => "ins", // fallback
+                        };
+                        let mut wrapper = format!("<w:{tag}");
+                        if let Some(id) = rev_id {
+                            wrapper.push_str(&format!(r#" w:id="{id}""#));
+                        }
+                        if let Some(ref author) = rev_author {
+                            wrapper.push_str(&format!(r#" w:author="{}""#, escape_xml(author)));
+                        }
+                        if let Some(ref date) = rev_date {
+                            wrapper.push_str(&format!(r#" w:date="{}""#, escape_xml(date)));
+                        }
+                        wrapper.push('>');
+                        xml.push_str(&wrapper);
+
+                        for &run_id in &children[rev_start..i] {
+                            write_run(doc, run_id, xml);
+                        }
+
+                        xml.push_str(&format!("</w:{tag}>"));
+                    } else {
+                        // FormatChange — write_run handles rPrChange
+                        write_run(doc, child_id, xml);
+                        i += 1;
+                    }
                 } else {
                     write_run(doc, child_id, xml);
                     i += 1;
@@ -279,6 +346,40 @@ fn write_paragraph(
                         r#"<w:r><w:rPr><w:rStyle w:val="CommentReference"/></w:rPr><w:commentReference w:id="{}"/></w:r>"#,
                         escape_xml(cid)
                     ));
+                }
+                i += 1;
+            }
+            NodeType::Drawing => {
+                // Write shape using stored raw XML for round-trip fidelity
+                if let Some(raw) = child.attributes.get_string(&AttributeKey::ShapeRawXml) {
+                    xml.push_str("<w:r>");
+                    xml.push_str(raw);
+                    xml.push_str("</w:r>");
+                }
+                i += 1;
+            }
+            NodeType::FootnoteRef => {
+                if let Some(fid) = child.attributes.get_string(&AttributeKey::FootnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="FootnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:footnoteReference w:id="{}"/></w:r>"#,
+                        escape_xml(fid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::EndnoteRef => {
+                if let Some(eid) = child.attributes.get_string(&AttributeKey::EndnoteNumber) {
+                    xml.push_str(&format!(
+                        r#"<w:r><w:rPr><w:rStyle w:val="EndnoteReference"/><w:vertAlign w:val="superscript"/></w:rPr><w:endnoteReference w:id="{}"/></w:r>"#,
+                        escape_xml(eid)
+                    ));
+                }
+                i += 1;
+            }
+            NodeType::Equation => {
+                // Write the raw equation XML stored in EquationSource attribute
+                if let Some(source) = child.attributes.get_string(&AttributeKey::EquationSource) {
+                    xml.push_str(source);
                 }
                 i += 1;
             }
@@ -414,6 +515,11 @@ fn write_table_properties(attrs: &s1_model::AttributeMap) -> String {
         tpr.push_str("</w:tblBorders>");
     }
 
+    // Table property change tracking (tblPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("tblPrChange", "tblPr", attrs, &mut tpr);
+    }
+
     tpr
 }
 
@@ -431,6 +537,14 @@ fn write_table_row(
     };
 
     xml.push_str("<w:tr>");
+
+    // Row properties (header row, property change tracking)
+    let trpr = write_row_properties(&row.attributes);
+    if !trpr.is_empty() {
+        xml.push_str("<w:trPr>");
+        xml.push_str(&trpr);
+        xml.push_str("</w:trPr>");
+    }
 
     let children: Vec<NodeId> = row.children.clone();
     for child_id in children {
@@ -562,7 +676,29 @@ fn write_cell_properties(attrs: &s1_model::AttributeMap) -> String {
         tcp.push_str("</w:tcBorders>");
     }
 
+    // Cell property change tracking (tcPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("tcPrChange", "tcPr", attrs, &mut tcp);
+    }
+
     tcp
+}
+
+/// Generate row properties XML.
+fn write_row_properties(attrs: &s1_model::AttributeMap) -> String {
+    let mut trp = String::new();
+
+    // Header row
+    if attrs.get_bool(&AttributeKey::TableHeaderRow) == Some(true) {
+        trp.push_str("<w:tblHeader/>");
+    }
+
+    // Row property change tracking (trPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("trPrChange", "trPr", attrs, &mut trp);
+    }
+
+    trp
 }
 
 /// Write border sides (top, bottom, left, right) shared between table and cell borders.
@@ -600,7 +736,8 @@ fn write_border_side(name: &str, side: &BorderSide, xml: &mut String) {
     ));
 }
 
-/// Write an inline image as `<w:r><w:drawing><wp:inline>…</wp:inline></w:drawing></w:r>`.
+/// Write an image as `<w:r><w:drawing>…</w:drawing></w:r>`.
+/// Supports both inline (`wp:inline`) and floating (`wp:anchor`) images.
 fn write_image(
     doc: &DocumentModel,
     image_id: NodeId,
@@ -653,12 +790,88 @@ fn write_image(
         .get_string(&AttributeKey::ImageAltText)
         .unwrap_or("");
 
-    xml.push_str("<w:r><w:drawing><wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">");
-    xml.push_str(&format!(r#"<wp:extent cx="{cx}" cy="{cy}"/>"#));
-    xml.push_str(&format!(
-        r#"<wp:docPr id="{idx}" name="Image{idx}" descr="{}"/>"#,
-        escape_xml(alt)
-    ));
+    // Check if this is a floating (anchor) image
+    let is_floating = image
+        .attributes
+        .get_string(&AttributeKey::ImagePositionType)
+        .map(|s| s == "anchor")
+        .unwrap_or(false);
+
+    xml.push_str("<w:r><w:drawing>");
+
+    if is_floating {
+        // Floating image — output wp:anchor
+        let dist_str = image
+            .attributes
+            .get_string(&AttributeKey::ImageDistanceFromText)
+            .unwrap_or("0,0,0,0");
+        let dists: Vec<&str> = dist_str.split(',').collect();
+        let dist_t = dists.first().unwrap_or(&"0");
+        let dist_b = dists.get(1).unwrap_or(&"0");
+        let dist_l = dists.get(2).unwrap_or(&"0");
+        let dist_r = dists.get(3).unwrap_or(&"0");
+
+        xml.push_str(&format!(
+            r#"<wp:anchor distT="{dist_t}" distB="{dist_b}" distL="{dist_l}" distR="{dist_r}" simplePos="0" relativeHeight="0" behindDoc="0" locked="0" layoutInCell="1" allowOverlap="1">"#
+        ));
+        xml.push_str(r#"<wp:simplePos x="0" y="0"/>"#);
+
+        // Horizontal position
+        let h_rel = image
+            .attributes
+            .get_string(&AttributeKey::ImageHorizontalRelativeFrom)
+            .unwrap_or("column");
+        let h_off = image
+            .attributes
+            .get_i64(&AttributeKey::ImageHorizontalOffset)
+            .unwrap_or(0);
+        xml.push_str(&format!(
+            r#"<wp:positionH relativeFrom="{h_rel}"><wp:posOffset>{h_off}</wp:posOffset></wp:positionH>"#
+        ));
+
+        // Vertical position
+        let v_rel = image
+            .attributes
+            .get_string(&AttributeKey::ImageVerticalRelativeFrom)
+            .unwrap_or("paragraph");
+        let v_off = image
+            .attributes
+            .get_i64(&AttributeKey::ImageVerticalOffset)
+            .unwrap_or(0);
+        xml.push_str(&format!(
+            r#"<wp:positionV relativeFrom="{v_rel}"><wp:posOffset>{v_off}</wp:posOffset></wp:positionV>"#
+        ));
+
+        xml.push_str(&format!(r#"<wp:extent cx="{cx}" cy="{cy}"/>"#));
+        xml.push_str("<wp:effectExtent l=\"0\" t=\"0\" r=\"0\" b=\"0\"/>");
+        xml.push_str(&format!(
+            r#"<wp:docPr id="{idx}" name="Image{idx}" descr="{}"/>"#,
+            escape_xml(alt)
+        ));
+
+        // Wrap type
+        let wrap = image
+            .attributes
+            .get_string(&AttributeKey::ImageWrapType)
+            .unwrap_or("square");
+        match wrap {
+            "none" => xml.push_str("<wp:wrapNone/>"),
+            "tight" => xml.push_str(r#"<wp:wrapTight wrapText="bothSides"><wp:wrapPolygon edited="0"><wp:start x="0" y="0"/><wp:lineTo x="0" y="21600"/><wp:lineTo x="21600" y="21600"/><wp:lineTo x="21600" y="0"/><wp:lineTo x="0" y="0"/></wp:wrapPolygon></wp:wrapTight>"#),
+            "through" => xml.push_str(r#"<wp:wrapThrough wrapText="bothSides"><wp:wrapPolygon edited="0"><wp:start x="0" y="0"/><wp:lineTo x="0" y="21600"/><wp:lineTo x="21600" y="21600"/><wp:lineTo x="21600" y="0"/><wp:lineTo x="0" y="0"/></wp:wrapPolygon></wp:wrapThrough>"#),
+            "topAndBottom" => xml.push_str("<wp:wrapTopAndBottom/>"),
+            _ => xml.push_str(r#"<wp:wrapSquare wrapText="bothSides"/>"#), // default: square
+        }
+    } else {
+        // Inline image — output wp:inline
+        xml.push_str("<wp:inline distT=\"0\" distB=\"0\" distL=\"0\" distR=\"0\">");
+        xml.push_str(&format!(r#"<wp:extent cx="{cx}" cy="{cy}"/>"#));
+        xml.push_str(&format!(
+            r#"<wp:docPr id="{idx}" name="Image{idx}" descr="{}"/>"#,
+            escape_xml(alt)
+        ));
+    }
+
+    // Common graphic element (same for both inline and anchor)
     xml.push_str("<a:graphic><a:graphicData uri=\"http://schemas.openxmlformats.org/drawingml/2006/picture\">");
     xml.push_str(&format!(
         r#"<pic:pic><pic:nvPicPr><pic:cNvPr id="{idx}" name="Image{idx}"/><pic:cNvPicPr/></pic:nvPicPr>"#
@@ -669,7 +882,12 @@ fn write_image(
     xml.push_str(&format!(
         r#"<pic:spPr><a:xfrm><a:off x="0" y="0"/><a:ext cx="{cx}" cy="{cy}"/></a:xfrm><a:prstGeom prst="rect"><a:avLst/></a:prstGeom></pic:spPr>"#
     ));
-    xml.push_str("</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>");
+
+    if is_floating {
+        xml.push_str("</pic:pic></a:graphicData></a:graphic></wp:anchor></w:drawing></w:r>");
+    } else {
+        xml.push_str("</pic:pic></a:graphicData></a:graphic></wp:inline></w:drawing></w:r>");
+    }
 }
 
 /// Generate paragraph properties XML from a Node.
@@ -779,6 +997,12 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
     if attrs.get_bool(&AttributeKey::PageBreakBefore) == Some(true) {
         ppr.push_str("<w:pageBreakBefore/>");
     }
+    if attrs.get_bool(&AttributeKey::Bidi) == Some(true) {
+        ppr.push_str("<w:bidi/>");
+    }
+    if attrs.get_bool(&AttributeKey::SuppressAutoHyphens) == Some(true) {
+        ppr.push_str("<w:suppressAutoHyphens/>");
+    }
 
     // Tab stops
     if let Some(AttributeValue::TabStops(tab_stops)) = attrs.get(&AttributeKey::TabStops) {
@@ -827,7 +1051,41 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
         ));
     }
 
+    // Paragraph property change tracking (pPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("pPrChange", "pPr", attrs, &mut ppr);
+    }
+
     ppr
+}
+
+/// Write a property change element (`pPrChange`, `tcPrChange`, `trPrChange`, `tblPrChange`).
+///
+/// Emits `<w:{tag} w:id="..." w:author="..." w:date="..."><w:{inner_tag}/></w:{tag}>`.
+fn write_property_change_element(
+    tag: &str,
+    inner_tag: &str,
+    attrs: &s1_model::AttributeMap,
+    xml: &mut String,
+) {
+    let id = attrs
+        .get_i64(&AttributeKey::RevisionId)
+        .unwrap_or(0);
+    let author = attrs
+        .get_string(&AttributeKey::RevisionAuthor)
+        .unwrap_or_default();
+    let date = attrs
+        .get_string(&AttributeKey::RevisionDate)
+        .unwrap_or_default();
+
+    xml.push_str(&format!(
+        r#"<w:{tag} w:id="{id}" w:author="{}" w:date="{}">"#,
+        escape_xml(author),
+        escape_xml(date),
+    ));
+    // Write empty old properties element (original formatting not stored)
+    xml.push_str(&format!("<w:{inner_tag}/>"));
+    xml.push_str(&format!("</w:{tag}>"));
 }
 
 /// Public wrapper for write_run (for use by header/footer writer).
@@ -874,9 +1132,14 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
         None => return,
     };
 
+    let is_delete = matches!(
+        run.attributes.get_string(&AttributeKey::RevisionType),
+        Some("Delete") | Some("MoveFrom")
+    );
+
     xml.push_str("<w:r>");
 
-    // Run properties
+    // Run properties (includes rPrChange for FormatChange revisions)
     let rpr = write_run_properties(run);
     if !rpr.is_empty() {
         xml.push_str("<w:rPr>");
@@ -884,7 +1147,8 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
         xml.push_str("</w:rPr>");
     }
 
-    // Text children
+    // Text children — use <w:delText> for delete revisions
+    let text_tag = if is_delete { "delText" } else { "t" };
     let children: Vec<NodeId> = run.children.clone();
     for child_id in children {
         let child = match doc.node(child_id) {
@@ -894,9 +1158,9 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
 
         if child.node_type == NodeType::Text {
             if let Some(text) = &child.text_content {
-                xml.push_str(r#"<w:t xml:space="preserve">"#);
+                xml.push_str(&format!(r#"<w:{text_tag} xml:space="preserve">"#));
                 xml.push_str(&escape_xml(text));
-                xml.push_str("</w:t>");
+                xml.push_str(&format!("</w:{text_tag}>"));
             }
         }
     }
@@ -999,6 +1263,22 @@ pub fn write_run_properties_from_attrs(attrs: &s1_model::AttributeMap) -> String
     // Language
     if let Some(lang) = attrs.get_string(&AttributeKey::Language) {
         rpr.push_str(&format!(r#"<w:lang w:val="{}"/>"#, escape_xml(lang)));
+    }
+
+    // Track changes — format change revision (rPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("FormatChange") {
+        let mut rpr_change = String::from("<w:rPrChange");
+        if let Some(id) = attrs.get_i64(&AttributeKey::RevisionId) {
+            rpr_change.push_str(&format!(r#" w:id="{id}""#));
+        }
+        if let Some(author) = attrs.get_string(&AttributeKey::RevisionAuthor) {
+            rpr_change.push_str(&format!(r#" w:author="{}""#, escape_xml(author)));
+        }
+        if let Some(date) = attrs.get_string(&AttributeKey::RevisionDate) {
+            rpr_change.push_str(&format!(r#" w:date="{}""#, escape_xml(date)));
+        }
+        rpr_change.push_str("><w:rPr/></w:rPrChange>");
+        rpr.push_str(&rpr_change);
     }
 
     rpr
@@ -1759,6 +2039,23 @@ mod tests {
     }
 
     #[test]
+    fn write_suppress_auto_hyphens() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::SuppressAutoHyphens,
+            AttributeValue::Bool(true),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:suppressAutoHyphens/>"));
+    }
+
+    #[test]
     fn write_character_spacing() {
         let mut doc = DocumentModel::new();
         let body_id = doc.body_id().unwrap();
@@ -1875,5 +2172,540 @@ mod tests {
         assert!(xml.contains("<w:sdt>"));
         assert!(xml.contains(r#"fldCharType="begin"#));
         assert!(xml.contains(r#"fldCharType="end"#));
+    }
+
+    // ─── Track changes writing tests ────────────────────────────────
+
+    #[test]
+    fn write_ins_basic() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Insert".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(1));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("John".into()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2024-01-01T12:00:00Z".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "inserted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:ins w:id="1""#));
+        assert!(xml.contains(r#"w:author="John""#));
+        assert!(xml.contains(r#"w:date="2024-01-01T12:00:00Z""#));
+        assert!(xml.contains("inserted"));
+        assert!(xml.contains("</w:ins>"));
+        // Should use <w:t>, not <w:delText>
+        assert!(xml.contains("<w:t xml:space=\"preserve\">inserted</w:t>"));
+    }
+
+    #[test]
+    fn write_del_basic() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("Delete".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(2));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Jane".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "deleted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains(r#"<w:del w:id="2""#));
+        assert!(xml.contains(r#"w:author="Jane""#));
+        assert!(xml.contains("</w:del>"));
+        // Should use <w:delText>, not <w:t>
+        assert!(xml.contains("<w:delText xml:space=\"preserve\">deleted</w:delText>"));
+        assert!(!xml.contains("<w:t xml:space=\"preserve\">deleted</w:t>"));
+    }
+
+    #[test]
+    fn write_rpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run = Node::new(run_id, NodeType::Run);
+        run.attributes
+            .set(AttributeKey::Bold, AttributeValue::Bool(true));
+        run.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("FormatChange".into()),
+        );
+        run.attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(3));
+        run.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".into()),
+        );
+        run.attributes.set(
+            AttributeKey::RevisionDate,
+            AttributeValue::String("2024-01-03T09:00:00Z".into()),
+        );
+        doc.insert_node(para_id, 0, run).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "reformatted"))
+            .unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:b/>"));
+        assert!(xml.contains(r#"<w:rPrChange w:id="3""#));
+        assert!(xml.contains(r#"w:author="Bob""#));
+        assert!(xml.contains(r#"w:date="2024-01-03T09:00:00Z""#));
+        assert!(xml.contains("</w:rPrChange>"));
+        // FormatChange should NOT wrap in <w:ins> or <w:del>
+        assert!(!xml.contains("<w:ins"));
+        assert!(!xml.contains("<w:del"));
+    }
+
+    #[test]
+    fn write_floating_image_anchor() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        // Create a Run to hold the image
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+
+        // Create floating image node
+        let img_id = doc.next_id();
+        let mut img = Node::new(img_id, NodeType::Image);
+        let media_id = doc.media_mut().insert(
+            "image/png",
+            vec![0x89, 0x50, 0x4E, 0x47],
+            Some("float.png".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img.attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img.attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(150.0));
+        img.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("square".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(914400),
+        );
+        img.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(457200),
+        );
+        img.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("paragraph".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageDistanceFromText,
+            AttributeValue::String("45720,45720,114300,114300".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageAltText,
+            AttributeValue::String("Float test".to_string()),
+        );
+        doc.insert_node(para_id, 0, img).unwrap();
+
+        let (xml, image_rels, _) = write_document_xml(&doc);
+
+        // Should use wp:anchor, not wp:inline
+        assert!(xml.contains("<wp:anchor"), "should contain wp:anchor");
+        assert!(!xml.contains("<wp:inline"), "should not contain wp:inline");
+
+        // Check positioning
+        assert!(xml.contains(r#"relativeFrom="column">"#));
+        assert!(xml.contains("<wp:posOffset>914400</wp:posOffset>"));
+        assert!(xml.contains(r#"relativeFrom="paragraph">"#));
+        assert!(xml.contains("<wp:posOffset>457200</wp:posOffset>"));
+
+        // Check wrap type
+        assert!(xml.contains("<wp:wrapSquare"));
+
+        // Check distances
+        assert!(xml.contains(r#"distT="45720""#));
+        assert!(xml.contains(r#"distL="114300""#));
+
+        // Check image relationship
+        assert_eq!(image_rels.len(), 1);
+    }
+
+    #[test]
+    fn write_shape_roundtrip_raw_xml() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let shape_id = doc.next_id();
+        let mut shape = Node::new(shape_id, NodeType::Drawing);
+        shape.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String("rect".to_string()),
+        );
+        shape
+            .attributes
+            .set(AttributeKey::ShapeWidth, AttributeValue::Float(200.0));
+        shape
+            .attributes
+            .set(AttributeKey::ShapeHeight, AttributeValue::Float(100.0));
+        shape.attributes.set(
+            AttributeKey::ShapeFillColor,
+            AttributeValue::String("FF0000".to_string()),
+        );
+        let raw =
+            r##"<w:pict><v:rect style="width:200pt;height:100pt" fillcolor="#FF0000"/></w:pict>"##;
+        shape.attributes.set(
+            AttributeKey::ShapeRawXml,
+            AttributeValue::String(raw.to_string()),
+        );
+        doc.insert_node(para_id, 0, shape).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        // Should contain the raw VML wrapped in a run
+        assert!(xml.contains("<w:r><w:pict>"), "should wrap shape in run");
+        assert!(xml.contains("v:rect"), "should preserve shape element");
+        assert!(xml.contains("fillcolor"), "should preserve fill color");
+    }
+
+    #[test]
+    fn write_inline_image_default() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let img_id = doc.next_id();
+        let mut img = Node::new(img_id, NodeType::Image);
+        let media_id = doc.media_mut().insert(
+            "image/png",
+            vec![0x89, 0x50],
+            Some("inline.png".to_string()),
+        );
+        img.attributes.set(
+            AttributeKey::ImageMediaId,
+            AttributeValue::MediaId(media_id),
+        );
+        img.attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
+        img.attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(100.0));
+        // No ImagePositionType set — should default to inline
+        doc.insert_node(para_id, 0, img).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        // Should use wp:inline, not wp:anchor
+        assert!(xml.contains("<wp:inline"), "should contain wp:inline");
+        assert!(!xml.contains("<wp:anchor"), "should not contain wp:anchor");
+    }
+
+    #[test]
+    fn write_drawing_xml_roundtrip() {
+        // Test that a Drawing node with DrawingML raw XML is written correctly
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let drawing_id = doc.next_id();
+        let mut drawing = Node::new(drawing_id, NodeType::Drawing);
+        drawing.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String("drawing".to_string()),
+        );
+        let raw = r#"<w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId8"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        drawing.attributes.set(
+            AttributeKey::ShapeRawXml,
+            AttributeValue::String(raw.to_string()),
+        );
+        doc.insert_node(para_id, 0, drawing).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        // Should wrap the drawing XML in a run
+        assert!(
+            xml.contains("<w:r><w:drawing>"),
+            "should wrap drawing in run"
+        );
+        assert!(xml.contains("c:chart"), "should preserve chart reference");
+        assert!(
+            xml.contains("</w:drawing></w:r>"),
+            "should close run after drawing"
+        );
+    }
+
+    #[test]
+    fn write_move_to_revision() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run_node = Node::new(run_id, NodeType::Run);
+        run_node.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("MoveTo".to_string()),
+        );
+        run_node
+            .attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(5));
+        run_node.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Alice".to_string()),
+        );
+        doc.insert_node(para_id, 0, run_node).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "moved"))
+            .unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:moveTo w:id="5""#),
+            "should output moveTo wrapper: {xml}"
+        );
+        assert!(xml.contains(r#"w:author="Alice""#), "should include author");
+        assert!(xml.contains("</w:moveTo>"), "should close moveTo");
+        // MoveTo should use <w:t>, not <w:delText>
+        assert!(
+            xml.contains("<w:t xml:space=\"preserve\">moved</w:t>"),
+            "moveTo should use w:t"
+        );
+    }
+
+    #[test]
+    fn write_move_from_revision() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run_node = Node::new(run_id, NodeType::Run);
+        run_node.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("MoveFrom".to_string()),
+        );
+        run_node
+            .attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(6));
+        run_node.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".to_string()),
+        );
+        doc.insert_node(para_id, 0, run_node).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "moved away"))
+            .unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:moveFrom w:id="6""#),
+            "should output moveFrom wrapper: {xml}"
+        );
+        assert!(xml.contains("</w:moveFrom>"), "should close moveFrom");
+        // MoveFrom should use <w:delText> like Delete
+        assert!(
+            xml.contains("<w:delText xml:space=\"preserve\">moved away</w:delText>"),
+            "moveFrom should use w:delText: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_ppr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(AttributeKey::Alignment, AttributeValue::Alignment(Alignment::Center));
+        para.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        para.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(50));
+        para.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Alice".into()));
+        para.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-01-01T12:00:00Z".into()));
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:pPrChange w:id="50" w:author="Alice" w:date="2026-01-01T12:00:00Z">"#),
+            "should output pPrChange: {xml}"
+        );
+        assert!(xml.contains("</w:pPrChange>"), "should close pPrChange");
+    }
+
+    #[test]
+    fn write_tcpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table)).unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow)).unwrap();
+
+        let cell_id = doc.next_id();
+        let mut cell = Node::new(cell_id, NodeType::TableCell);
+        cell.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        cell.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(60));
+        cell.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Bob".into()));
+        cell.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-02-15T08:00:00Z".into()));
+        doc.insert_node(row_id, 0, cell).unwrap();
+
+        // Add a paragraph inside the cell (required for valid DOCX)
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:tcPrChange w:id="60" w:author="Bob" w:date="2026-02-15T08:00:00Z">"#),
+            "should output tcPrChange: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_trpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table)).unwrap();
+
+        let row_id = doc.next_id();
+        let mut row = Node::new(row_id, NodeType::TableRow);
+        row.attributes.set(AttributeKey::TableHeaderRow, AttributeValue::Bool(true));
+        row.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        row.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(70));
+        row.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Carol".into()));
+        row.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-03-10T10:00:00Z".into()));
+        doc.insert_node(table_id, 0, row).unwrap();
+
+        // Add a cell + paragraph inside
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell)).unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains("<w:tblHeader/>"),
+            "should output tblHeader: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<w:trPrChange w:id="70" w:author="Carol" w:date="2026-03-10T10:00:00Z">"#),
+            "should output trPrChange: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_tblpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let table_id = doc.next_id();
+        let mut table = Node::new(table_id, NodeType::Table);
+        table.attributes.set(AttributeKey::TableAlignment, AttributeValue::Alignment(Alignment::Center));
+        table.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        table.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(80));
+        table.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Dave".into()));
+        table.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-03-12T14:00:00Z".into()));
+        doc.insert_node(body_id, 0, table).unwrap();
+
+        // Add row/cell/paragraph
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow)).unwrap();
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell)).unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:tblPrChange w:id="80" w:author="Dave" w:date="2026-03-12T14:00:00Z">"#),
+            "should output tblPrChange: {xml}"
+        );
     }
 }

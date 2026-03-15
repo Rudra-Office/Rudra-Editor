@@ -10,7 +10,10 @@ Phase 2: Rich Documents     █████████████████�
 Phase 3: Layout & Export    ████████████████████  COMPLETE (all milestones)
 Phase 4: Collaboration      ████████████████████  COMPLETE (4/4 milestones)
 Phase 5: Production Ready   ████████████████████  COMPLETE (WASM, C FFI, hardening)
-Phase 6: Fidelity & MD      ████████░░░░░░░░░░░░  IN PROGRESS (F.1-F.3 done, F.4-F.7 remaining)
+Phase 6: Fidelity & MD      ████████████████████  COMPLETE (F.1-F.7 all milestones)
+Phase 7: Hardening Plan     ████████████████████  COMPLETE (15/15 milestones + bug fixes)
+Phase 8: Editor API         ████████████████████  COMPLETE (P.1-P.5, 44 new WASM tests)
+Phase 9: Editor Demo        ████████████████░░░░  MOSTLY COMPLETE (P.6+P.7 done, P.8+P.9 planned)
 ```
 
 ---
@@ -433,9 +436,9 @@ assert_eq!(doc_a.text_content(node), doc_b.text_content(node));
 
 ---
 
-## Phase 6: Format Fidelity & Markdown (IN PROGRESS)
+## Phase 6: Format Fidelity & Markdown (COMPLETE)
 
-**Started**: 2026-03-12
+**Completed**: 2026-03-13
 **Goal**: Close fidelity gaps across ODT and TXT, add Markdown as a new format.
 
 ### Milestone F.1: ODT Quick Wins (COMPLETE — 10 tests)
@@ -458,28 +461,262 @@ assert_eq!(doc_a.text_content(node), doc_b.text_content(node));
 - [x] Write hyperlinks as `<text:a>` wrapping runs, bookmarks as `text:bookmark-start/end`
 - [x] Round-trip tests for hyperlinks and bookmarks
 
-### Milestone F.4: ODT Tab Stops + Paragraph Borders (~14 tests)
-- [ ] Parse `<style:tab-stops>` with position/type/leader
-- [ ] Parse `fo:border-*` for paragraph borders
-- [ ] Write tab stops and borders in ODT output
-- [ ] Round-trip tests
+### Milestone F.4: ODT Tab Stops + Paragraph Borders (COMPLETE — 7 tests)
+- [x] Parse `<style:tab-stops>` with position/type/leader
+- [x] Parse `fo:border-*` for paragraph borders
+- [x] Write tab stops and borders in ODT output
+- [x] Round-trip tests
 
-### Milestone F.5: TXT Fidelity (~15 tests)
-- [ ] Writer: heading markers (`#`), bullet/numbered list markers, thematic breaks
-- [ ] Reader: detect structural markers on read
-- [ ] Round-trip tests
+### Milestone F.5: TXT Fidelity (COMPLETE — 14 tests)
+- [x] Writer: heading `#` markers, bullet `-` markers, numbered `N.` markers, nested list indent, thematic break `---`
+- [x] Reader: detect structural markers on read
+- [x] Round-trip tests
 
-### Milestone F.6: ODT Comments (~14 tests)
-- [ ] Parse `<office:annotation>` / `<office:annotation-end>` inline elements
-- [ ] Write comment annotations with `<dc:creator>`, `<dc:date>`, body text
-- [ ] Round-trip tests
+### Milestone F.6: ODT Comments (COMPLETE — 7 tests)
+- [x] Parse `<office:annotation>` / `<office:annotation-end>` inline elements
+- [x] Write comment annotations with `<dc:creator>`, `<dc:date>`, body text
+- [x] Round-trip tests
 
-### Milestone F.7: ODT Headers/Footers/Sections (~18 tests)
-- [ ] Parse `<style:page-layout-properties>` for page dimensions/margins
-- [ ] Parse `<style:master-page>` for header/footer content
-- [ ] Write page layout and header/footer into styles.xml
-- [ ] Section breaks via `<text:section>`
-- [ ] Round-trip tests
+### Milestone F.7: ODT Headers/Footers/Sections (COMPLETE — 12 tests)
+- [x] Parse `<style:page-layout-properties>` for page dimensions/margins
+- [x] Parse `<style:master-page>` for header/footer content (incl. first-page)
+- [x] Write page layout and header/footer into styles.xml
+- [x] Round-trip tests
+
+---
+
+## Phase 7: Production Hardening (COMPLETE)
+
+**Completed**: 2026-03-14
+**Goal**: DOC binary format support, rendering engine, CRDT hardening, bug fixes.
+**Tests**: ~128 new tests across 15 milestones + bug fixes
+
+### Workstream A: DOC Binary Format
+
+#### A.1: FIB & Piece Table (COMPLETE — 24 tests)
+- [x] FileInformationBlock parser: magic, version, table stream selector, Clx offsets, ccpText
+- [x] Piece table (Clx/Pcdt/PlcPcd): ANSI (CP1252) vs Unicode (UTF-16LE) per piece via bit 30
+- [x] Proper paragraph breaks from piece table structure
+- [x] Heuristic fallback for files with invalid FIB
+
+#### A.2: CHPx/SPRM Character Formatting (COMPLETE — 12 tests)
+- [x] SPRM opcode parsing: operand sizes from bits 13-15
+- [x] PlcfBteChpx bin table → CHPX FKP pages → character runs
+- [x] Properties: bold, italic, font size, color index, font index, underline, strikethrough, superscript/subscript
+- [x] DOC color index → RGB mapping (17-color standard table)
+- [x] Integration with document model (formatted Run nodes)
+
+#### A.3: PAPx/SPRM Paragraph Formatting (COMPLETE — 14 tests)
+- [x] Paragraph SPRM opcodes: justification, indent, spacing, line spacing, keep lines, page break before
+- [x] List info (level + list ID) from paragraph SPRMs
+- [x] Style index extraction
+
+#### A.4: Style Sheet & Font Table (COMPLETE — 17 tests)
+- [x] SttbfFfn (font table) parser: font names, TrueType flag, UTF-16LE decoding
+- [x] STSH (style sheet) parser: style names, types, basedOn inheritance
+- [x] Built-in style name mapping (Normal, Heading 1-9, etc.)
+
+#### A.5: Tables & Metadata (COMPLETE — 8 tests)
+- [x] Table detection from 0x07 cell mark characters in extracted text
+- [x] Row/cell grouping into proper Table > TableRow > TableCell structure
+- [x] SummaryInformation OLE2 stream parsing for metadata (title, author, subject, keywords)
+
+### Workstream B: Rendering Engine
+
+#### B.1: Layout Engine Facade (COMPLETE — 6 tests)
+- [x] `layout` feature flag on s1engine (optional)
+- [x] `Document::layout(font_db)` → `LayoutDocument`
+- [x] `Document::layout_with_config(font_db, config)` → `LayoutDocument`
+- [x] `LayoutError` variant in Error enum, conditional re-exports
+
+#### B.2: Paginated HTML (COMPLETE — 10 tests)
+- [x] `layout_to_html()` and `layout_to_html_with_options()` with `HtmlOptions`
+- [x] CSS-positioned `<div>` pages with absolute positioning
+- [x] GlyphRun formatting: bold, italic, underline, strikethrough, color
+- [x] Table rendering, image base64 embedding, hyperlinks, bookmarks
+- [x] Header/footer placement at computed positions
+
+#### B.3: Wire HTML into WASM (COMPLETE — 6 tests)
+- [x] `WasmLayoutConfig` struct exposed to JS with US Letter defaults
+- [x] `to_paginated_html()`, `to_paginated_html_with_config()`
+- [x] `to_paginated_html_with_fonts()`, `to_paginated_html_with_fonts_and_config()`
+
+#### B.4: Browser Demo Paginated Viewer (COMPLETE)
+- [x] "Pages" tab in demo/index.html with layout-engine-based rendering
+- [x] Page navigation (Previous/Next with scroll-to-page)
+- [x] Page shadows, centered layout, gray background
+- [x] Lazy rendering on tab switch, graceful fallback
+
+### Workstream C: Layout, CRDT & Testing
+
+#### C.1: Multi-Section Layout (COMPLETE — 8 tests)
+- [x] Per-section page sizes/margins via `resolve_page_layout_for_section()`
+- [x] Section block mapping via `build_section_map()`
+- [x] Section break types: NextPage, Continuous, EvenPage, OddPage
+- [x] Per-section header/footer layout
+
+#### C.2: Tables Across Page Breaks (COMPLETE — 6 tests)
+- [x] Row-by-row table layout with page break checking
+- [x] Table splitting at row boundaries with `is_continuation` flag
+- [x] Header row repeat on continuation pages
+- [x] Multi-page split (3+ pages), oversized row handling
+
+#### C.3: Track Changes Read/Write (COMPLETE — 14 tests)
+- [x] RevisionType/Author/Date/Id/OriginalFormatting attributes
+- [x] DOCX parser: `w:ins`, `w:del` (block + inline), `w:rPrChange`, `w:delText`
+- [x] DOCX writer: grouped `w:ins`/`w:del` wrappers, `w:delText`, `w:rPrChange`
+- [x] Round-trip tests
+
+#### C.4: Track Changes Accept/Reject API (COMPLETE — 6 tests)
+- [x] `Document::accept_all_changes()` / `reject_all_changes()`
+- [x] `Document::accept_change(node_id)` / `reject_change(node_id)`
+- [x] `Document::tracked_changes()` listing
+- [x] WASM bindings with visual indicators (green underline / red strikethrough)
+
+#### C.5: CRDT Long-Running Session Hardening (COMPLETE — 10 tests)
+- [x] `compact_op_log()` — merge consecutive char inserts
+- [x] `gc_tombstones(min_state)` — garbage-collect acknowledged tombstones
+- [x] `auto_compact(threshold)` — compact when op_log exceeds threshold
+- [x] `snapshot_and_truncate()` — snapshot + clear op_log
+- [x] `op_log_size()`, `tombstone_count()` introspection
+- [x] 1000-character long session simulation test
+
+#### C.6: Fidelity Testing Suite (COMPLETE — 12 tests)
+- [x] Complex formatting DOCX round-trip
+- [x] Nested table round-trip
+- [x] Multi-section document, all heading levels
+- [x] Comments round-trip, 100-paragraph performance test
+- [x] Cross-format DOCX→ODT, Unicode (CJK/Arabic/Emoji)
+- [x] Nested lists, images, hyperlinks/bookmarks
+- [x] Mixed content stress test
+
+### Bug Fixes (2026-03-14)
+
+#### ODT Content.xml Compliance (3 new tests)
+- [x] Nested list XML well-formedness (proper `text:list > text:list-item` nesting)
+- [x] Missing `xmlns:dc` namespace for comments
+- [x] Missing `office:version="1.2"` attribute
+- [x] Missing `table:table-column` and `table:name` on tables
+- [x] Missing `text:anchor-type="as-char"` on images
+- [x] Newline/tab conversion to `<text:line-break/>`/`<text:tab/>`
+- [x] Conditional `meta.xml` in manifest
+- [x] `text:select-page="current"` on page-number/page-count
+
+#### DOCX Parsing (5 new tests)
+- [x] Non-self-closing `<w:fldChar>` elements (fixes footer page numbers)
+- [x] Paragraph-level `mc:AlternateContent` (fixes Google Docs images)
+- [x] Fallback skipping (prevents duplicate images)
+
+#### WASM PDF Export (4 new tests)
+- [x] `to_pdf()`, `to_pdf_with_fonts()`, `to_pdf_data_url()`, `to_pdf_data_url_with_fonts()`
+- [x] Feature-gated `pdf` on s1engine (`export_pdf`, `export_pdf_with_config`)
+
+---
+
+## Phase 8: Production Editor API (P.1-P.5 COMPLETE)
+
+**Completed**: 2026-03-14
+**Tests**: 44 new WASM tests (102 total)
+**Goal**: Full WASM API for building a production-grade document editor. Selection-based formatting, table/image/structural editing, find & replace.
+
+### P.1: Selection & Range Formatting (COMPLETE — 12 tests)
+- [x] `split_run(node_id, char_offset)` — Split Run at character offset, preserve formatting
+- [x] `format_run(run_id, key, value)` — Set attribute on specific Run
+- [x] `format_selection(start_node, start_off, end_node, end_off, key, value)` — Format text range spanning runs/paragraphs (auto-splits, single transaction)
+- [x] `get_run_ids(paragraph_id)` — JSON array of run IDs
+- [x] `get_run_text(run_id)` — Text content of specific run
+- [x] `get_run_formatting_json(run_id)` — Formatting as JSON
+- [x] `get_selection_formatting_json(...)` — Common formatting (true/false/"mixed")
+- [x] Helper: `format_range_in_paragraph`, `split_run_internal`, `parse_format_kv`
+
+### P.2: Table Operations (COMPLETE — 10 tests)
+- [x] `insert_table(after_node, rows, cols)` — Full Table>Row>Cell>Para>Run>Text structure
+- [x] `insert_table_row(table_id, row_index)` — Insert row with matching column count
+- [x] `delete_table_row(table_id, row_index)` — Delete row
+- [x] `insert_table_column(table_id, col_index)` — Insert column across all rows
+- [x] `delete_table_column(table_id, col_index)` — Delete column across all rows
+- [x] `set_cell_text(cell_id, text)` / `get_cell_text(cell_id)` — Cell text get/set
+- [x] `get_table_dimensions(table_id)` — JSON `{rows, cols}`
+- [x] `merge_cells(table_id, start_row/col, end_row/col)` — ColumnSpan/RowSpan
+- [x] `set_cell_background(cell_id, hex)` — Cell background color
+
+### P.3: Image Operations (COMPLETE — 6 tests)
+- [x] `insert_image(after_node, data, content_type, width, height)` — Image node under Paragraph (per model constraints)
+- [x] `delete_image(image_id)` — Remove image node
+- [x] `resize_image(image_id, width, height)` — Update dimensions
+- [x] `get_image_data_url(image_id)` — Base64 data URL for display
+- [x] `set_image_alt_text(image_id, alt)` — Accessibility
+
+### P.4: Structural Elements (COMPLETE — 10 tests)
+- [x] `insert_hyperlink(run_id, url, tooltip)` / `remove_hyperlink(run_id)`
+- [x] `insert_bookmark(para_id, name)` — BookmarkStart + BookmarkEnd
+- [x] `set_list_format(para_id, format, level)` — bullet/decimal/none
+- [x] `insert_page_break(after_node)` / `insert_horizontal_rule(after_node)`
+- [x] `get_comments_json()` / `insert_comment(...)` / `delete_comment(comment_id)`
+- [x] `get_sections_json()` — Page size, margins, orientation
+
+### P.5: Find & Replace (COMPLETE — 6 tests)
+- [x] `find_text(query, case_sensitive)` — JSON array of `{nodeId, offset, length}`
+- [x] `replace_text(node_id, offset, length, replacement)` — Single replacement
+- [x] `replace_all(query, replacement, case_sensitive)` — Atomic transaction, returns count
+- [x] `paste_plain_text(para_id, offset, text)` — Multi-paragraph paste (splits on newlines)
+- [x] `get_document_text()` — Full document text
+
+---
+
+## Phase 9: Production Editor Demo (MOSTLY COMPLETE)
+
+**Goal**: Complete rewrite of `demo/index.html` as operation-based editor. All mutations through WASM, no `document.execCommand()`. Collaboration API exposed via WASM.
+
+### P.6: Collaboration WASM API (COMPLETE)
+- [x] `WasmCollabDocument` struct wrapping `CollabDocument`
+- [x] `create_collab(replica_id)` / `open_collab(data, replica_id)` on WasmEngine
+- [x] `apply_local_insert_text()` / `apply_local_delete_text()` / `apply_local_format()` — returns serialized CRDT ops
+- [x] `apply_remote_ops(json)` — apply received remote operations
+- [x] `get_state_vector()` / `get_changes_since(state_vector_json)` — delta sync
+- [x] `set_cursor(node_id, offset, user_name, user_color)` / `apply_awareness_update()` — cursor awareness
+- [x] `get_peers_json()` — peer cursor positions
+- [x] `undo()` / `redo()` / `can_undo()` / `can_redo()` — local undo/redo with CRDT broadcast
+- [x] `compact_op_log()` / `gc_tombstones()` / `auto_compact()` — session management
+- [x] `snapshot()` / `restore_snapshot()` — full snapshot sync
+- [x] `to_html()` / `export(format)` — render/export collaborative doc
+
+### P.7: Demo Editor Rewrite (COMPLETE)
+- [x] WYSIWYG editor with contentEditable and WASM-backed operations
+- [x] Google Docs-style UI: menu bar, formatting toolbar, insert bar
+- [x] Formatting via `format_selection()` WASM API (Bold, Italic, Underline, Strikethrough, Font, Size, Color, Highlight)
+- [x] Paragraph operations: Enter splits, Backspace merges, all via WASM
+- [x] Heading levels (Normal, H1-H6) via `set_heading_level()`
+- [x] Block formatting: alignment, lists (bullet/numbered)
+- [x] Keyboard shortcuts (Cmd/Ctrl+B/I/U/Z/Shift+Z)
+- [x] Insert menu: Table, Image, Hyperlink, Page Break, Horizontal Rule
+- [x] Table editing: insert/delete rows/columns, cell text editing, cell background
+- [x] Image editing: insert from file, resize, delete, alt text
+- [x] Find & Replace (Ctrl+F/H with match highlighting)
+- [x] Comments (view, insert, delete)
+- [x] Track changes visual indicators (accept/reject all)
+- [x] Undo/Redo via WASM history
+- [x] Export dropdown (DOCX/ODT/TXT/MD/PDF)
+- [x] Pages view (paginated HTML from layout engine)
+- [x] Text view (plain text read-only)
+- [x] Drag-and-drop file opening
+- [x] Status bar (word count, paragraph count, format, zoom)
+
+### P.8: Collaboration Frontend (PLANNED)
+- [ ] WebSocket relay server
+- [ ] Wire local edits → serialize → broadcast
+- [ ] Wire received ops → apply_remote → re-render
+- [ ] Peer cursor rendering (colored carets)
+- [ ] Connection status UI
+- [ ] Offline editing + reconnect sync
+- [ ] Share URL generation
+
+### P.9: Polish & Performance (PLANNED)
+- [ ] Edge cases (empty paragraphs, table navigation, HTML paste)
+- [ ] Performance (debounce DOM patches, lazy render, virtual scroll)
+- [ ] Accessibility (ARIA labels, keyboard navigation)
+- [ ] Mobile (touch selection, responsive toolbar)
+- [ ] Playwright e2e tests
 
 ---
 
@@ -487,12 +724,12 @@ assert_eq!(doc_a.text_content(node), doc_b.text_content(node));
 
 | Risk | Likelihood | Impact | Mitigation | Status |
 |---|---|---|---|---|
-| OOXML spec complexity | High | High | Pragmatic subset; test against real files, not spec | Mitigated — 172 DOCX tests |
-| CRDT for tree structures | High | High | Custom Fugue text + Kleppmann tree CRDTs in s1-crdt | **RESOLVED** — 172 CRDT tests |
-| Performance targets | Medium | Medium | Profile early; incremental layout is key | Mitigated — incremental layout cache |
-| DOC binary format | High | Medium | Heuristic text extraction from OLE2 containers | **RESOLVED** — s1-convert |
-| Cross-platform fonts | Medium | Medium | Use fontdb; test on all platforms in CI | Mitigated — pure Rust |
-| WASM bundle size | Medium | Low | Feature flags, tree-shaking, split crates | Ongoing |
+| OOXML spec complexity | High | High | Pragmatic subset; test against real files, not spec | **RESOLVED** — 194 DOCX tests |
+| CRDT for tree structures | High | High | Custom Fugue text + Kleppmann tree CRDTs in s1-crdt | **RESOLVED** — 182 CRDT tests, session hardening |
+| Performance targets | Medium | Medium | Profile early; incremental layout is key | **RESOLVED** — incremental layout cache, row-by-row tables |
+| DOC binary format | High | Medium | FIB + piece table + CHPx/PAPx + style sheet + font table | **RESOLVED** — 90 s1-convert tests |
+| Cross-platform fonts | Medium | Medium | Use fontdb; test on all platforms in CI | **RESOLVED** — pure Rust, WASM fallback metrics |
+| WASM bundle size | Medium | Low | Feature flags, tree-shaking, split crates | Mitigated — pdf/layout optional |
 
 ---
 

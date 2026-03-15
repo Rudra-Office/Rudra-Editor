@@ -2,6 +2,8 @@
 //!
 //! Converts a [`DocumentModel`] into a Markdown string.
 
+use std::collections::HashMap;
+
 use s1_model::{AttributeKey, AttributeValue, DocumentModel, ListFormat, NodeId, NodeType};
 
 /// Write a document model to a Markdown string.
@@ -17,12 +19,14 @@ pub fn write(doc: &DocumentModel) -> String {
         None => return String::new(),
     };
 
+    let mut list_counters: HashMap<(u32, u8), u32> = HashMap::new();
+
     let children: Vec<NodeId> = body.children.clone();
     for (i, &child_id) in children.iter().enumerate() {
         if i > 0 {
             out.push('\n');
         }
-        write_block(doc, child_id, &mut out);
+        write_block(doc, child_id, &mut out, &mut list_counters);
     }
 
     out
@@ -34,7 +38,12 @@ fn heading_level(style_id: &str) -> Option<u8> {
 }
 
 /// Write a block-level node.
-fn write_block(doc: &DocumentModel, node_id: NodeId, out: &mut String) {
+fn write_block(
+    doc: &DocumentModel,
+    node_id: NodeId,
+    out: &mut String,
+    list_counters: &mut HashMap<(u32, u8), u32>,
+) {
     let node = match doc.node(node_id) {
         Some(n) => n,
         None => return,
@@ -56,16 +65,30 @@ fn write_block(doc: &DocumentModel, node_id: NodeId, out: &mut String) {
             if let Some(AttributeValue::ListInfo(info)) =
                 node.attributes.get(&AttributeKey::ListInfo)
             {
-                let indent = if info.level > 1 {
-                    "  ".repeat((info.level - 1) as usize)
+                let indent = if info.level > 0 {
+                    "  ".repeat(info.level as usize)
                 } else {
                     String::new()
                 };
                 out.push_str(&indent);
                 match info.num_format {
-                    ListFormat::Decimal => out.push_str("1. "),
+                    ListFormat::Decimal
+                    | ListFormat::LowerAlpha
+                    | ListFormat::UpperAlpha
+                    | ListFormat::LowerRoman
+                    | ListFormat::UpperRoman => {
+                        let key = (info.num_id, info.level);
+                        let counter = list_counters
+                            .entry(key)
+                            .or_insert_with(|| info.start.unwrap_or(1).saturating_sub(1));
+                        *counter += 1;
+                        out.push_str(&format!("{}. ", counter));
+                    }
                     _ => out.push_str("- "),
                 }
+            } else {
+                // Non-list paragraph resets counters
+                list_counters.clear();
             }
 
             // Check for thematic break (PageBreakBefore on empty paragraph)
@@ -108,7 +131,7 @@ fn write_block(doc: &DocumentModel, node_id: NodeId, out: &mut String) {
         NodeType::Section | NodeType::Body | NodeType::Document => {
             let children: Vec<NodeId> = node.children.clone();
             for &child_id in &children {
-                write_block(doc, child_id, out);
+                write_block(doc, child_id, out, list_counters);
             }
         }
 
@@ -533,8 +556,8 @@ mod tests {
         }
 
         let md = write(&doc);
-        assert!(md.contains("1. Item 1"));
-        assert!(md.contains("1. Item 2"));
+        assert!(md.contains("1. Item 1"), "md: {md}");
+        assert!(md.contains("2. Item 2"), "md: {md}");
     }
 
     #[test]

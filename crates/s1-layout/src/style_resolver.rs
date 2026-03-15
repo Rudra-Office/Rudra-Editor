@@ -44,6 +44,8 @@ pub struct ResolvedParagraphStyle {
     pub keep_lines: bool,
     /// Page break before.
     pub page_break_before: bool,
+    /// BiDi (right-to-left) paragraph direction.
+    pub bidi: bool,
 }
 
 impl Default for ResolvedParagraphStyle {
@@ -59,6 +61,7 @@ impl Default for ResolvedParagraphStyle {
             keep_with_next: false,
             keep_lines: false,
             page_break_before: false,
+            bidi: false,
         }
     }
 }
@@ -84,6 +87,14 @@ pub struct ResolvedRunStyle {
     pub superscript: bool,
     /// Subscript.
     pub subscript: bool,
+    /// Highlight/background color.
+    pub highlight_color: Option<Color>,
+    /// Character spacing in points (letter-spacing).
+    pub character_spacing: f64,
+    /// Revision type for track changes (e.g., "insertion", "deletion").
+    pub revision_type: Option<String>,
+    /// Revision author for track changes.
+    pub revision_author: Option<String>,
 }
 
 impl Default for ResolvedRunStyle {
@@ -98,6 +109,10 @@ impl Default for ResolvedRunStyle {
             strikethrough: false,
             superscript: false,
             subscript: false,
+            highlight_color: None,
+            character_spacing: 0.0,
+            revision_type: None,
+            revision_author: None,
         }
     }
 }
@@ -205,6 +220,9 @@ fn apply_paragraph_attrs(node: &Node, style: &mut ResolvedParagraphStyle) {
     if let Some(AttributeValue::Bool(v)) = node.attributes.get(&AttributeKey::PageBreakBefore) {
         style.page_break_before = *v;
     }
+    if let Some(AttributeValue::Bool(v)) = node.attributes.get(&AttributeKey::Bidi) {
+        style.bidi = *v;
+    }
 }
 
 fn apply_spacing_from_attrs(attrs: &s1_model::AttributeMap, style: &mut ResolvedParagraphStyle) {
@@ -263,6 +281,18 @@ fn apply_run_attrs_from_map(attrs: &s1_model::AttributeMap, style: &mut Resolved
     }
     if let Some(AttributeValue::Bool(v)) = attrs.get(&AttributeKey::Subscript) {
         style.subscript = *v;
+    }
+    if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::HighlightColor) {
+        style.highlight_color = Some(*c);
+    }
+    if let Some(AttributeValue::Float(v)) = attrs.get(&AttributeKey::FontSpacing) {
+        style.character_spacing = *v;
+    }
+    if let Some(AttributeValue::String(v)) = attrs.get(&AttributeKey::RevisionType) {
+        style.revision_type = Some(v.clone());
+    }
+    if let Some(AttributeValue::String(v)) = attrs.get(&AttributeKey::RevisionAuthor) {
+        style.revision_author = Some(v.clone());
     }
 }
 
