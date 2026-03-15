@@ -4,6 +4,8 @@
 //! is stripped. Paragraphs are separated by newlines. Tables are rendered
 //! as tab-separated columns.
 
+use std::collections::HashMap;
+
 use s1_model::{AttributeKey, AttributeValue, DocumentModel, ListFormat, NodeId, NodeType};
 
 /// Write a document model to plain text bytes (UTF-8).
@@ -30,6 +32,9 @@ fn collect_blocks(doc: &DocumentModel, container_id: NodeId, blocks: &mut Vec<St
         Some(n) => n,
         None => return,
     };
+
+    // Track list item counters per (num_id, level) for ordered list numbering
+    let mut list_counters: HashMap<(u32, u8), u32> = HashMap::new();
 
     let children: Vec<NodeId> = node.children.clone();
     for child_id in children {
@@ -62,16 +67,53 @@ fn collect_blocks(doc: &DocumentModel, container_id: NodeId, blocks: &mut Vec<St
                     text.push_str(&indent);
                     match li.num_format {
                         ListFormat::Bullet => text.push_str("- "),
-                        ListFormat::Decimal
-                        | ListFormat::LowerAlpha
-                        | ListFormat::UpperAlpha
-                        | ListFormat::LowerRoman
-                        | ListFormat::UpperRoman => {
-                            let start = li.start.unwrap_or(1);
-                            text.push_str(&format!("{}. ", start));
+                        ListFormat::Decimal => {
+                            let key = (li.num_id, li.level);
+                            let counter = list_counters
+                                .entry(key)
+                                .or_insert_with(|| li.start.unwrap_or(1).saturating_sub(1));
+                            *counter += 1;
+                            text.push_str(&format!("{}. ", counter));
+                        }
+                        ListFormat::LowerAlpha => {
+                            let key = (li.num_id, li.level);
+                            let counter = list_counters
+                                .entry(key)
+                                .or_insert_with(|| li.start.unwrap_or(1).saturating_sub(1));
+                            *counter += 1;
+                            let ch = (b'a' + ((*counter - 1) % 26) as u8) as char;
+                            text.push_str(&format!("{}. ", ch));
+                        }
+                        ListFormat::UpperAlpha => {
+                            let key = (li.num_id, li.level);
+                            let counter = list_counters
+                                .entry(key)
+                                .or_insert_with(|| li.start.unwrap_or(1).saturating_sub(1));
+                            *counter += 1;
+                            let ch = (b'A' + ((*counter - 1) % 26) as u8) as char;
+                            text.push_str(&format!("{}. ", ch));
+                        }
+                        ListFormat::LowerRoman => {
+                            let key = (li.num_id, li.level);
+                            let counter = list_counters
+                                .entry(key)
+                                .or_insert_with(|| li.start.unwrap_or(1).saturating_sub(1));
+                            *counter += 1;
+                            text.push_str(&format!("{}. ", to_roman_lower(*counter)));
+                        }
+                        ListFormat::UpperRoman => {
+                            let key = (li.num_id, li.level);
+                            let counter = list_counters
+                                .entry(key)
+                                .or_insert_with(|| li.start.unwrap_or(1).saturating_sub(1));
+                            *counter += 1;
+                            text.push_str(&format!("{}. ", to_roman_upper(*counter)));
                         }
                         _ => text.push_str("- "),
                     }
+                } else {
+                    // Non-list paragraph resets list counters
+                    list_counters.clear();
                 }
 
                 let para_children: Vec<NodeId> = child.children.clone();
@@ -261,6 +303,38 @@ fn write_toc(doc: &DocumentModel, toc_id: NodeId, blocks: &mut Vec<String>) {
             }
         }
     }
+}
+
+/// Convert a number to lowercase Roman numerals.
+fn to_roman_lower(mut n: u32) -> String {
+    let table = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut result = String::new();
+    for &(value, numeral) in &table {
+        while n >= value {
+            result.push_str(numeral);
+            n -= value;
+        }
+    }
+    result
+}
+
+/// Convert a number to uppercase Roman numerals.
+fn to_roman_upper(n: u32) -> String {
+    to_roman_lower(n).to_uppercase()
 }
 
 #[cfg(test)]

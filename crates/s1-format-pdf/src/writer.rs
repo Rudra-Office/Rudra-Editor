@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use pdf_writer::types::FontFlags;
+use pdf_writer::types::{FontFlags, TextRenderingMode};
 use pdf_writer::{Content, Finish, Name, Pdf, Rect, Ref, Str, TextStr};
 
 use s1_layout::{
@@ -196,6 +196,8 @@ fn collect_font_usage(layout: &LayoutDocument) -> HashMap<FontId, Vec<u16>> {
         if let Some(ref footer) = page.footer {
             collect_block_font_usage(footer, &mut usage);
         }
+        collect_blocks_font_usage(&page.footnotes, &mut usage);
+        collect_blocks_font_usage(&page.floating_images, &mut usage);
     }
 
     usage
@@ -365,6 +367,38 @@ fn embed_images(
 
     for page in &layout.pages {
         collect_and_embed_images(pdf, alloc, &page.blocks, &mut image_map, &mut img_idx)?;
+        if let Some(ref header) = page.header {
+            collect_and_embed_images(
+                pdf,
+                alloc,
+                std::slice::from_ref(header),
+                &mut image_map,
+                &mut img_idx,
+            )?;
+        }
+        if let Some(ref footer) = page.footer {
+            collect_and_embed_images(
+                pdf,
+                alloc,
+                std::slice::from_ref(footer),
+                &mut image_map,
+                &mut img_idx,
+            )?;
+        }
+        collect_and_embed_images(
+            pdf,
+            alloc,
+            &page.footnotes,
+            &mut image_map,
+            &mut img_idx,
+        )?;
+        collect_and_embed_images(
+            pdf,
+            alloc,
+            &page.floating_images,
+            &mut image_map,
+            &mut img_idx,
+        )?;
     }
 
     Ok(image_map)
@@ -556,6 +590,47 @@ fn write_page(
         );
     }
 
+    // Render footnotes at the bottom of the page
+    if !page.footnotes.is_empty() {
+        // Draw a separator line above footnotes
+        let first_fn = &page.footnotes[0];
+        let sep_y = page.height - first_fn.bounds.y + 4.0;
+        content.save_state();
+        content.set_stroke_rgb(0.4, 0.4, 0.4);
+        content.set_line_width(0.5);
+        move_to(&mut content, page.content_area.x, sep_y);
+        line_to(
+            &mut content,
+            page.content_area.x + page.content_area.width * 0.33,
+            sep_y,
+        );
+        content.stroke();
+        content.restore_state();
+
+        for fn_block in &page.footnotes {
+            render_block(
+                &mut content,
+                fn_block,
+                page.height,
+                font_map,
+                image_map,
+                &mut hyperlinks,
+            );
+        }
+    }
+
+    // Render floating images
+    for float_block in &page.floating_images {
+        render_block(
+            &mut content,
+            float_block,
+            page.height,
+            font_map,
+            image_map,
+            &mut hyperlinks,
+        );
+    }
+
     let content_data = content.finish();
 
     // Write content stream
@@ -624,7 +699,54 @@ fn render_block(
     hyperlinks: &mut Vec<HyperlinkAnnotation>,
 ) {
     match &block.kind {
-        LayoutBlockKind::Paragraph { lines, .. } => {
+        LayoutBlockKind::Paragraph {
+            lines,
+            list_marker,
+            background_color,
+            ..
+        } => {
+            // Draw paragraph background if present
+            if let Some(ref bg) = background_color {
+                content.save_state();
+                content.set_fill_rgb(
+                    bg.r as f32 / 255.0,
+                    bg.g as f32 / 255.0,
+                    bg.b as f32 / 255.0,
+                );
+                let bg_y = page_height - block.bounds.y - block.bounds.height;
+                content.rect(
+                    block.bounds.x as f32,
+                    bg_y as f32,
+                    block.bounds.width as f32,
+                    block.bounds.height as f32,
+                );
+                content.fill_nonzero();
+                content.restore_state();
+            }
+
+            // Render list marker if present
+            if let Some(ref marker) = list_marker {
+                if let Some(first_line) = lines.first() {
+                    if let Some(first_run) = first_line.runs.first() {
+                        if let Some(pdf_font) = font_map.get(&first_run.font_id) {
+                            let marker_y =
+                                page_height - block.bounds.y - first_line.baseline_y;
+                            let marker_x = block.bounds.x - 15.0; // Position left of text
+                            content.set_fill_rgb(0.0, 0.0, 0.0);
+                            content.begin_text();
+                            content.set_font(
+                                Name(pdf_font.name.as_bytes()),
+                                first_run.font_size as f32,
+                            );
+                            content.next_line(marker_x as f32, marker_y as f32);
+                            // List markers are plain text, encode as raw bytes
+                            content.show(Str(marker.as_bytes()));
+                            content.end_text();
+                        }
+                    }
+                }
+            }
+
             for line in lines {
                 render_line(
                     content,
@@ -712,23 +834,88 @@ fn render_line(
     let pdf_baseline_y = page_height - block_bounds.y - line.baseline_y;
 
     for run in &line.runs {
-        if run.glyphs.is_empty() {
+        if run.glyphs.is_empty() && run.inline_image.is_none() {
+            continue;
+        }
+
+        // Handle inline images
+        if let Some(ref _inline_img) = run.inline_image {
+            // Inline images are rendered as block images by the layout engine
             continue;
         }
 
         if let Some(pdf_font) = font_map.get(&run.font_id) {
             let pdf_x = block_bounds.x + run.x_offset;
 
-            // Set color
-            content.set_fill_rgb(
-                run.color.r as f32 / 255.0,
-                run.color.g as f32 / 255.0,
-                run.color.b as f32 / 255.0,
-            );
+            // Adjust baseline for superscript/subscript
+            let adjusted_baseline_y = if run.superscript {
+                pdf_baseline_y + run.font_size * 0.35
+            } else if run.subscript {
+                pdf_baseline_y - run.font_size * 0.2
+            } else {
+                pdf_baseline_y
+            };
+
+            // Effective font size (smaller for super/subscript)
+            let effective_font_size = if run.superscript || run.subscript {
+                run.font_size * 0.7
+            } else {
+                run.font_size
+            };
+
+            // Draw highlight/background color behind the text
+            if let Some(ref hl) = run.highlight_color {
+                content.save_state();
+                content.set_fill_rgb(
+                    hl.r as f32 / 255.0,
+                    hl.g as f32 / 255.0,
+                    hl.b as f32 / 255.0,
+                );
+                let hl_bottom = adjusted_baseline_y - effective_font_size * 0.25;
+                let hl_height = effective_font_size * 1.2;
+                content.rect(
+                    pdf_x as f32,
+                    hl_bottom as f32,
+                    run.width as f32,
+                    hl_height as f32,
+                );
+                content.fill_nonzero();
+                content.restore_state();
+            }
+
+            // Set text color
+            let r = run.color.r as f32 / 255.0;
+            let g = run.color.g as f32 / 255.0;
+            let b = run.color.b as f32 / 255.0;
+            content.set_fill_rgb(r, g, b);
+
+            // Synthetic bold: use FillStroke rendering mode with a thin stroke
+            if run.bold {
+                content.set_stroke_rgb(r, g, b);
+                content.set_line_width((effective_font_size * 0.03) as f32);
+            }
 
             content.begin_text();
-            content.set_font(Name(pdf_font.name.as_bytes()), run.font_size as f32);
-            content.next_line(pdf_x as f32, pdf_baseline_y as f32);
+            content.set_font(Name(pdf_font.name.as_bytes()), effective_font_size as f32);
+
+            // Synthetic bold: fill then stroke to simulate bold weight
+            if run.bold {
+                content.set_text_rendering_mode(TextRenderingMode::FillStroke);
+            }
+
+            // Synthetic italic: apply a shear transformation via text matrix
+            if run.italic {
+                content.set_text_matrix([
+                    1.0,
+                    0.0,
+                    0.21,
+                    1.0,
+                    pdf_x as f32,
+                    adjusted_baseline_y as f32,
+                ]);
+            } else {
+                content.next_line(pdf_x as f32, adjusted_baseline_y as f32);
+            }
 
             // Encode glyphs as CID (2 bytes per glyph)
             let encoded: Vec<u8> = run
@@ -738,12 +925,52 @@ fn render_line(
                 .collect();
 
             content.show(Str(&encoded));
+
+            // Reset text rendering mode after bold run
+            if run.bold {
+                content.set_text_rendering_mode(TextRenderingMode::Fill);
+            }
+
             content.end_text();
+
+            // Draw underline
+            if run.underline {
+                content.save_state();
+                content.set_stroke_rgb(
+                    run.color.r as f32 / 255.0,
+                    run.color.g as f32 / 255.0,
+                    run.color.b as f32 / 255.0,
+                );
+                let underline_thickness = (effective_font_size * 0.05).max(0.5);
+                content.set_line_width(underline_thickness as f32);
+                let underline_y = adjusted_baseline_y - effective_font_size * 0.15;
+                move_to(content, pdf_x, underline_y);
+                line_to(content, pdf_x + run.width, underline_y);
+                content.stroke();
+                content.restore_state();
+            }
+
+            // Draw strikethrough
+            if run.strikethrough {
+                content.save_state();
+                content.set_stroke_rgb(
+                    run.color.r as f32 / 255.0,
+                    run.color.g as f32 / 255.0,
+                    run.color.b as f32 / 255.0,
+                );
+                let strike_thickness = (effective_font_size * 0.05).max(0.5);
+                content.set_line_width(strike_thickness as f32);
+                let strike_y = adjusted_baseline_y + effective_font_size * 0.3;
+                move_to(content, pdf_x, strike_y);
+                line_to(content, pdf_x + run.width, strike_y);
+                content.stroke();
+                content.restore_state();
+            }
 
             // Collect hyperlink annotation if this run has a URL
             if let Some(ref url) = run.hyperlink_url {
-                let run_bottom = pdf_baseline_y - run.font_size * 0.2; // slight descent
-                let run_top = pdf_baseline_y + run.font_size * 0.8; // slight ascent
+                let run_bottom = adjusted_baseline_y - effective_font_size * 0.2;
+                let run_top = adjusted_baseline_y + effective_font_size * 0.8;
                 hyperlinks.push(HyperlinkAnnotation {
                     rect: Rect::new(
                         pdf_x as f32,
@@ -768,44 +995,229 @@ fn render_table(
     image_map: &HashMap<String, PdfImage>,
     hyperlinks: &mut Vec<HyperlinkAnnotation>,
 ) {
-    // Draw cell borders
-    content.save_state();
-    content.set_stroke_rgb(0.0, 0.0, 0.0);
-    content.set_line_width(0.5);
-
     for row in rows {
         let row_pdf_y = page_height - table_bounds.y - row.bounds.y - row.bounds.height;
 
-        // Draw row border
-        content.rect(
-            (table_bounds.x + row.bounds.x) as f32,
-            row_pdf_y as f32,
-            row.bounds.width as f32,
-            row.bounds.height as f32,
-        );
-        content.stroke();
-
-        // Draw cell borders and content
+        // Draw cell borders, backgrounds, and content
         for cell in &row.cells {
             let cell_x = table_bounds.x + cell.bounds.x;
             let cell_pdf_y = row_pdf_y;
 
-            content.rect(
-                cell_x as f32,
-                cell_pdf_y as f32,
-                cell.bounds.width as f32,
-                cell.bounds.height as f32,
-            );
-            content.stroke();
+            // Fill cell background if present
+            if let Some(ref bg) = cell.background_color {
+                content.save_state();
+                content.set_fill_rgb(
+                    bg.r as f32 / 255.0,
+                    bg.g as f32 / 255.0,
+                    bg.b as f32 / 255.0,
+                );
+                content.rect(
+                    cell_x as f32,
+                    cell_pdf_y as f32,
+                    cell.bounds.width as f32,
+                    cell.bounds.height as f32,
+                );
+                content.fill_nonzero();
+                content.restore_state();
+            }
 
-            // Render cell content
+            // Draw per-cell borders
+            content.save_state();
+            content.set_line_width(0.5);
+
+            // Top border
+            if let Some(ref border_str) = cell.border_top {
+                let (w, r, g, b) = parse_css_border(border_str);
+                content.set_stroke_rgb(r, g, b);
+                content.set_line_width(w);
+                move_to(content, cell_x, cell_pdf_y + cell.bounds.height);
+                line_to(
+                    content,
+                    cell_x + cell.bounds.width,
+                    cell_pdf_y + cell.bounds.height,
+                );
+                content.stroke();
+            }
+
+            // Bottom border
+            if let Some(ref border_str) = cell.border_bottom {
+                let (w, r, g, b) = parse_css_border(border_str);
+                content.set_stroke_rgb(r, g, b);
+                content.set_line_width(w);
+                move_to(content, cell_x, cell_pdf_y);
+                line_to(content, cell_x + cell.bounds.width, cell_pdf_y);
+                content.stroke();
+            }
+
+            // Left border
+            if let Some(ref border_str) = cell.border_left {
+                let (w, r, g, b) = parse_css_border(border_str);
+                content.set_stroke_rgb(r, g, b);
+                content.set_line_width(w);
+                move_to(content, cell_x, cell_pdf_y);
+                line_to(content, cell_x, cell_pdf_y + cell.bounds.height);
+                content.stroke();
+            }
+
+            // Right border
+            if let Some(ref border_str) = cell.border_right {
+                let (w, r, g, b) = parse_css_border(border_str);
+                content.set_stroke_rgb(r, g, b);
+                content.set_line_width(w);
+                move_to(content, cell_x + cell.bounds.width, cell_pdf_y);
+                line_to(
+                    content,
+                    cell_x + cell.bounds.width,
+                    cell_pdf_y + cell.bounds.height,
+                );
+                content.stroke();
+            }
+
+            // If no per-cell borders, draw a default cell outline
+            if cell.border_top.is_none()
+                && cell.border_bottom.is_none()
+                && cell.border_left.is_none()
+                && cell.border_right.is_none()
+            {
+                content.set_stroke_rgb(0.0, 0.0, 0.0);
+                content.set_line_width(0.5);
+                content.rect(
+                    cell_x as f32,
+                    cell_pdf_y as f32,
+                    cell.bounds.width as f32,
+                    cell.bounds.height as f32,
+                );
+                content.stroke();
+            }
+
+            content.restore_state();
+
+            // Render cell content with coordinate offset.
+            // Cell content blocks have coordinates relative to the cell,
+            // so we must offset by table position + cell position.
+            let offset_x = table_bounds.x + cell.bounds.x;
+            let offset_y = table_bounds.y + row.bounds.y + cell.bounds.y;
             for block in &cell.blocks {
-                render_block(content, block, page_height, font_map, image_map, hyperlinks);
+                render_block_with_offset(
+                    content,
+                    block,
+                    offset_x,
+                    offset_y,
+                    page_height,
+                    font_map,
+                    image_map,
+                    hyperlinks,
+                );
             }
         }
     }
+}
 
-    content.restore_state();
+/// Render a block with coordinate offsets applied.
+///
+/// This is used for table cell content where block bounds are relative to
+/// the cell, not the page.
+#[allow(clippy::too_many_arguments)]
+fn render_block_with_offset(
+    content: &mut Content,
+    block: &LayoutBlock,
+    offset_x: f64,
+    offset_y: f64,
+    page_height: f64,
+    font_map: &HashMap<FontId, PdfFont>,
+    image_map: &HashMap<String, PdfImage>,
+    hyperlinks: &mut Vec<HyperlinkAnnotation>,
+) {
+    // Create adjusted bounds by adding the offset
+    let adjusted_bounds = s1_layout::Rect::new(
+        block.bounds.x + offset_x,
+        block.bounds.y + offset_y,
+        block.bounds.width,
+        block.bounds.height,
+    );
+
+    match &block.kind {
+        LayoutBlockKind::Paragraph { lines, .. } => {
+            for line in lines {
+                render_line(
+                    content,
+                    line,
+                    &adjusted_bounds,
+                    page_height,
+                    font_map,
+                    hyperlinks,
+                );
+            }
+        }
+        LayoutBlockKind::Table { rows, .. } => {
+            // Nested table — recurse with adjusted bounds
+            render_table(
+                content,
+                rows,
+                &adjusted_bounds,
+                page_height,
+                font_map,
+                image_map,
+                hyperlinks,
+            );
+        }
+        LayoutBlockKind::Image {
+            media_id, bounds, ..
+        } => {
+            if let Some(pdf_img) = image_map.get(media_id) {
+                let pdf_y = page_height - adjusted_bounds.y - bounds.height;
+                content.save_state();
+                content.transform([
+                    bounds.width as f32,
+                    0.0,
+                    0.0,
+                    bounds.height as f32,
+                    adjusted_bounds.x as f32,
+                    pdf_y as f32,
+                ]);
+                content.x_object(Name(pdf_img.name.as_bytes()));
+                content.restore_state();
+            }
+        }
+        _ => {} // Other block kinds (future-proofing for non-exhaustive enum)
+    }
+}
+
+/// Helper to move the PDF path cursor.
+fn move_to(content: &mut Content, x: f64, y: f64) {
+    content.move_to(x as f32, y as f32);
+}
+
+/// Helper to draw a line to the given point.
+fn line_to(content: &mut Content, x: f64, y: f64) {
+    content.line_to(x as f32, y as f32);
+}
+
+/// Parse a CSS-style border string like "1px solid #000000" into (width, r, g, b).
+/// Returns defaults (0.5, 0.0, 0.0, 0.0) for unparseable values.
+fn parse_css_border(border: &str) -> (f32, f32, f32, f32) {
+    let parts: Vec<&str> = border.split_whitespace().collect();
+    let width = parts
+        .first()
+        .and_then(|s| s.trim_end_matches("px").trim_end_matches("pt").parse::<f32>().ok())
+        .unwrap_or(0.5);
+
+    let (r, g, b) = parts
+        .last()
+        .and_then(|s| {
+            let s = s.trim_start_matches('#');
+            if s.len() == 6 {
+                let r = u8::from_str_radix(&s[0..2], 16).ok()?;
+                let g = u8::from_str_radix(&s[2..4], 16).ok()?;
+                let b = u8::from_str_radix(&s[4..6], 16).ok()?;
+                Some((r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0))
+            } else {
+                None
+            }
+        })
+        .unwrap_or((0.0, 0.0, 0.0));
+
+    (width, r, g, b)
 }
 
 /// Write PDF document outline (bookmarks).

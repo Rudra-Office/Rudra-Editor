@@ -83,6 +83,8 @@
         <button class="app-menu-entry" id="miTOC" role="menuitem" tabindex="-1"><span class="msi">toc</span> Table of Contents</button>
         <button class="app-menu-entry" id="miHR" role="menuitem" tabindex="-1"><span class="msi">horizontal_rule</span> Horizontal Rule</button>
         <button class="app-menu-entry" id="miPageBreak" role="menuitem" tabindex="-1"><span class="msi">insert_page_break</span> Page Break</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="miHeaderFooter" role="menuitem" tabindex="-1"><span class="msi">vertical_split</span> Headers &amp; Footers...</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="formatMenu">
@@ -94,6 +96,8 @@
         <button class="app-menu-entry" id="menuStrike" role="menuitem" tabindex="-1"><span class="msi">strikethrough_s</span> Strikethrough</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuClearFormat" role="menuitem" tabindex="-1"><span class="msi">format_clear</span> Clear formatting</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuPageSetup" role="menuitem" tabindex="-1"><span class="msi">description</span> Page Setup...</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="toolsMenu">
@@ -259,9 +263,10 @@
         <button class="ctx-item" data-action="comment" role="menuitem"><span class="msi ctx-icon">add_comment</span> Comment...</button>
         <div class="ctx-sep"></div>
         <button class="ctx-item" data-action="toc" role="menuitem"><span class="msi ctx-icon">toc</span> Table of Contents</button>
-        <button class="ctx-item" data-action="toc" role="menuitem"><span class="msi ctx-icon">toc</span> Table of Contents</button>
         <button class="ctx-item" data-action="hr" role="menuitem"><span class="msi ctx-icon">horizontal_rule</span> Horizontal Rule</button>
         <button class="ctx-item" data-action="pagebreak" role="menuitem"><span class="msi ctx-icon">insert_page_break</span> Page Break</button>
+        <div class="ctx-sep"></div>
+        <button class="ctx-item" data-action="headerfooter" role="menuitem"><span class="msi ctx-icon">vertical_split</span> Headers &amp; Footers...</button>
       </div>
     </div>
     <div class="tb-sep" role="separator"></div>
@@ -472,6 +477,33 @@
   </div>
 </div>
 
+<!-- Header/Footer Modal -->
+<div class="modal-overlay" id="headerFooterModal" role="dialog" aria-modal="true" aria-label="Headers & Footers">
+  <div class="modal" style="max-width:500px">
+    <h3><span class="msi modal-icon">vertical_split</span> Headers &amp; Footers</h3>
+    <div class="modal-field">
+      <label for="headerText">Header text</label>
+      <input type="text" id="headerText" placeholder="Enter header text..." autocomplete="off" title="Text to display in the page header" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none">
+    </div>
+    <div class="modal-field">
+      <label for="footerText">Footer text</label>
+      <input type="text" id="footerText" placeholder="Enter footer text..." autocomplete="off" title="Text to display in the page footer" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none">
+    </div>
+    <div class="modal-field" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="footerPageNum" title="Show page numbers centered in the footer">
+      <label for="footerPageNum">Show page numbers in footer</label>
+    </div>
+    <div class="modal-field" style="display:flex;align-items:center;gap:8px">
+      <input type="checkbox" id="differentFirstPage" title="Use different header/footer on the first page">
+      <label for="differentFirstPage">Different first page</label>
+    </div>
+    <div class="modal-actions">
+      <button id="hfCancelBtn" title="Cancel and close">Cancel</button>
+      <button id="hfApplyBtn" class="primary" title="Apply header and footer settings">Apply</button>
+    </div>
+  </div>
+</div>
+
 <!-- Table Context Menu -->
 <div class="ctx-menu" id="tableContextMenu">
   <button class="ctx-item" id="cmInsertRowAbove"><span class="msi ctx-icon">add</span> Insert Row Above</button>
@@ -542,13 +574,14 @@
 
 <!-- Image Context Menu -->
 <div class="ctx-menu" id="imageContextMenu">
-  <button class="ctx-item" id="imAlignLeft"><span class="msi ctx-icon">format_align_left</span> Align Left</button>
-  <button class="ctx-item" id="imAlignCenter"><span class="msi ctx-icon">format_align_center</span> Align Center</button>
-  <button class="ctx-item" id="imAlignRight"><span class="msi ctx-icon">format_align_right</span> Align Right</button>
+  <button class="ctx-item" id="imAlignLeft" title="Align image to the left"><span class="msi ctx-icon">format_align_left</span> Align Left</button>
+  <button class="ctx-item" id="imAlignCenter" title="Center the image"><span class="msi ctx-icon">format_align_center</span> Align Center</button>
+  <button class="ctx-item" id="imAlignRight" title="Align image to the right"><span class="msi ctx-icon">format_align_right</span> Align Right</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="imAltText"><span class="msi ctx-icon">text_fields</span> Alt Text...</button>
+  <button class="ctx-item" id="imAltText" title="Set alternative text for accessibility"><span class="msi ctx-icon">text_fields</span> Alt Text...</button>
+  <button class="ctx-item" id="imReplace" title="Replace with a different image"><span class="msi ctx-icon">swap_horiz</span> Replace Image...</button>
   <div class="ctx-sep"></div>
-  <button class="ctx-item" id="imDelete" style="color:var(--danger)"><span class="msi ctx-icon">delete</span> Delete Image</button>
+  <button class="ctx-item" id="imDelete" title="Delete this image" style="color:var(--danger)"><span class="msi ctx-icon">delete</span> Delete Image</button>
 </div>
 
 <!-- Slash Command Menu -->
@@ -677,6 +710,59 @@
     </div>
     <div class="modal-actions">
       <button id="templateCancelBtn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- Page Setup Modal -->
+<div class="modal-overlay" id="pageSetupModal" role="dialog" aria-modal="true" aria-label="Page Setup">
+  <div class="modal" style="max-width:420px">
+    <h3><span class="msi modal-icon">description</span> Page Setup</h3>
+    <div style="display:flex;flex-direction:column;gap:12px">
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Page Size</legend>
+        <select id="psPageSize" title="Page size" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg-white);color:var(--text-primary)">
+          <option value="letter">Letter (8.5 x 11 in)</option>
+          <option value="a4">A4 (8.27 x 11.69 in)</option>
+          <option value="legal">Legal (8.5 x 14 in)</option>
+        </select>
+      </fieldset>
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Orientation</legend>
+        <div style="display:flex;gap:16px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer">
+            <input type="radio" name="psOrientation" value="portrait" checked> Portrait
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-primary);cursor:pointer">
+            <input type="radio" name="psOrientation" value="landscape"> Landscape
+          </label>
+        </div>
+      </fieldset>
+      <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
+        <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Margins (inches)</legend>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+            Top:
+            <input type="number" id="psMarginTop" value="1" min="0" max="5" step="0.25" title="Top margin in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+            Bottom:
+            <input type="number" id="psMarginBottom" value="1" min="0" max="5" step="0.25" title="Bottom margin in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+            Left:
+            <input type="number" id="psMarginLeft" value="1" min="0" max="5" step="0.25" title="Left margin in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+            Right:
+            <input type="number" id="psMarginRight" value="1" min="0" max="5" step="0.25" title="Right margin in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+          </label>
+        </div>
+      </fieldset>
+    </div>
+    <div class="modal-actions">
+      <button id="psCancelBtn" title="Cancel page setup changes">Cancel</button>
+      <button class="primary" id="psApplyBtn" title="Apply page setup changes">Apply</button>
     </div>
   </div>
 </div>

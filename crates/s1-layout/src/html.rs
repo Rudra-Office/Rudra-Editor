@@ -146,6 +146,11 @@ fn render_page(
         render_block(html, footer);
     }
 
+    // Render floating images
+    for float_block in &page.floating_images {
+        render_block(html, float_block);
+    }
+
     html.push_str("</div>");
 }
 
@@ -506,11 +511,11 @@ fn render_table(html: &mut String, block: &LayoutBlock, rows: &[LayoutTableRow])
                 h = fmt_pt(cell.bounds.height),
             );
 
-            // Cell borders (use originals or fallback to 1px solid #ccc)
-            let bt = cell.border_top.as_deref().unwrap_or("1px solid #ccc");
-            let bb = cell.border_bottom.as_deref().unwrap_or("1px solid #ccc");
-            let bl = cell.border_left.as_deref().unwrap_or("1px solid #ccc");
-            let br = cell.border_right.as_deref().unwrap_or("1px solid #ccc");
+            // Cell borders (use originals or none if not specified)
+            let bt = cell.border_top.as_deref().unwrap_or("none");
+            let bb = cell.border_bottom.as_deref().unwrap_or("none");
+            let bl = cell.border_left.as_deref().unwrap_or("none");
+            let br = cell.border_right.as_deref().unwrap_or("none");
             cell_style.push_str(&format!(
                 ";border-top:{bt};border-bottom:{bb};border-left:{bl};border-right:{br}"
             ));
@@ -715,6 +720,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -736,6 +742,7 @@ mod tests {
                 header: None,
                 footer: None,
                 footnotes: vec![],
+            floating_images: vec![],
                 section_index: 0,
             }],
             bookmarks: Vec::new(),
@@ -768,6 +775,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let page2 = LayoutPage {
@@ -779,6 +787,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -850,6 +859,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -946,6 +956,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -984,6 +995,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -1107,6 +1119,7 @@ mod tests {
             header: Some(header_block),
             footer: Some(footer_block),
             footnotes: Vec::new(),
+            floating_images: Vec::new(),
             section_index: 0,
         };
 
@@ -1184,6 +1197,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -1212,6 +1226,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
 
@@ -1305,6 +1320,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -1376,6 +1392,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -1447,6 +1464,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -1518,6 +1536,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -1589,6 +1608,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {
@@ -1660,6 +1680,7 @@ mod tests {
             header: None,
             footer: None,
             footnotes: vec![],
+            floating_images: vec![],
             section_index: 0,
         };
         let doc = LayoutDocument {

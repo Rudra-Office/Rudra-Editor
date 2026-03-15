@@ -162,6 +162,8 @@ impl NodeType {
                 NodeType::Table,
                 NodeType::Image,
                 NodeType::TableOfContents,
+                NodeType::PageBreak,
+                NodeType::ColumnBreak,
             ],
             NodeType::Section => &[
                 NodeType::Paragraph,

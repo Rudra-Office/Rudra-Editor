@@ -12,7 +12,7 @@ use s1_model::{
 };
 
 use crate::error::DocxError;
-use crate::property_parser::{parse_cell_properties, parse_run_properties, parse_table_properties};
+use crate::property_parser::{parse_cell_properties, parse_row_properties, parse_run_properties, parse_table_properties};
 use crate::section_parser::{parse_section_properties, RawSectionProperties};
 use crate::xml_util::{emu_to_points, get_attr, mime_for_extension};
 
@@ -138,9 +138,46 @@ fn parse_body(
                             b"del",
                         )?;
                     }
+                    b"moveTo" => {
+                        let rev = extract_revision_attrs(&e, "MoveTo");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            body_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"moveTo",
+                        )?;
+                    }
+                    b"moveFrom" => {
+                        let rev = extract_revision_attrs(&e, "MoveFrom");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            body_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"moveFrom",
+                        )?;
+                    }
                     _ => {
                         skip_element(reader)?;
                     }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                // Skip move-related range markers at body level
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"moveToRangeStart"
+                    | b"moveToRangeEnd"
+                    | b"moveFromRangeStart"
+                    | b"moveFromRangeEnd" => {
+                        // Silently skip — these are range markers for moved content
+                    }
+                    _ => {}
                 }
             }
             Ok(Event::End(e)) if e.local_name().as_ref() == b"body" => break,
@@ -209,6 +246,30 @@ pub(crate) fn parse_block_content(
                             &ctx,
                             &rev,
                             b"del",
+                        )?;
+                    }
+                    b"moveTo" => {
+                        let rev = extract_revision_attrs(&e, "MoveTo");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            parent_id,
+                            &mut child_index,
+                            &ctx,
+                            &rev,
+                            b"moveTo",
+                        )?;
+                    }
+                    b"moveFrom" => {
+                        let rev = extract_revision_attrs(&e, "MoveFrom");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            parent_id,
+                            &mut child_index,
+                            &ctx,
+                            &rev,
+                            b"moveFrom",
                         )?;
                     }
                     _ => {
@@ -390,6 +451,32 @@ fn parse_paragraph(
                             &rev,
                             &mut field_state,
                             b"del",
+                        )?;
+                    }
+                    b"moveTo" => {
+                        let rev = extract_revision_attrs(&e, "MoveTo");
+                        parse_tracked_inline_runs(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            &mut field_state,
+                            b"moveTo",
+                        )?;
+                    }
+                    b"moveFrom" => {
+                        let rev = extract_revision_attrs(&e, "MoveFrom");
+                        parse_tracked_inline_runs(
+                            reader,
+                            doc,
+                            para_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            &mut field_state,
+                            b"moveFrom",
                         )?;
                     }
                     _ => {
@@ -713,7 +800,14 @@ fn parse_table_row(
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"trPr" => {
-                        skip_element(reader)?;
+                        let attrs = parse_row_properties(reader)?;
+                        if !attrs.is_empty() {
+                            if let Some(node) = doc.node_mut(row_id) {
+                                for (key, value) in attrs.iter() {
+                                    node.attributes.set(key.clone(), value.clone());
+                                }
+                            }
+                        }
                     }
                     b"tc" => {
                         parse_table_cell(reader, doc, row_id, cell_index, ctx)?;
@@ -791,6 +885,30 @@ fn parse_table_cell(
                             b"del",
                         )?;
                     }
+                    b"moveTo" => {
+                        let rev = extract_revision_attrs(&e, "MoveTo");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            cell_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"moveTo",
+                        )?;
+                    }
+                    b"moveFrom" => {
+                        let rev = extract_revision_attrs(&e, "MoveFrom");
+                        parse_tracked_block(
+                            reader,
+                            doc,
+                            cell_id,
+                            &mut child_index,
+                            ctx,
+                            &rev,
+                            b"moveFrom",
+                        )?;
+                    }
                     _ => {
                         skip_element(reader)?;
                     }
@@ -815,6 +933,8 @@ enum RunContent {
     Field(FieldType, String),
     /// A shape/drawing element with its raw VML/XML for round-trip preservation.
     Shape(ShapeInfo),
+    /// A non-image drawing element (chart, DrawingML shape, etc.) captured as raw XML.
+    DrawingXml(String),
     /// An inline footnote reference (w:id value).
     FootnoteRef(String),
     /// An inline endnote reference (w:id value).
@@ -941,11 +1061,15 @@ fn parse_run(
                             }
                         }
                     }
-                    b"drawing" => {
-                        if let Some(info) = parse_drawing(reader, ctx)? {
-                            content.push(RunContent::Image(info));
+                    b"drawing" => match parse_drawing(reader, ctx)? {
+                        Some(DrawingResult::Image(info)) => {
+                            content.push(RunContent::Image(*info));
                         }
-                    }
+                        Some(DrawingResult::RawXml(xml)) => {
+                            content.push(RunContent::DrawingXml(xml));
+                        }
+                        None => {}
+                    },
                     // instrText holds the field instruction (e.g., " PAGE ")
                     b"instrText" => {
                         let instr = read_instr_text_content(reader)?;
@@ -1061,6 +1185,10 @@ fn parse_run(
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
                 insert_shape_node(doc, para_id, child_index, &info)?;
             }
+            RunContent::DrawingXml(raw_xml) => {
+                flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
+                insert_drawing_xml_node(doc, para_id, child_index, &raw_xml)?;
+            }
             RunContent::FootnoteRef(id) => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
                 let ref_id = doc.next_id();
@@ -1134,8 +1262,14 @@ fn parse_alternate_content(
                         fallback_depth = depth;
                     }
                     b"drawing" if !in_fallback => {
-                        if let Some(info) = parse_drawing(reader, ctx)? {
-                            content.push(RunContent::Image(info));
+                        match parse_drawing(reader, ctx)? {
+                            Some(DrawingResult::Image(info)) => {
+                                content.push(RunContent::Image(*info));
+                            }
+                            Some(DrawingResult::RawXml(xml)) => {
+                                content.push(RunContent::DrawingXml(xml));
+                            }
+                            None => {}
                         }
                         depth -= 1; // parse_drawing consumed the </drawing> end tag
                     }
@@ -1187,8 +1321,14 @@ fn parse_alternate_content_into_paragraph(
                         fallback_depth = depth;
                     }
                     b"drawing" if !in_fallback => {
-                        if let Some(info) = parse_drawing(reader, ctx)? {
-                            insert_image_node(doc, para_id, child_index, &info, ctx)?;
+                        match parse_drawing(reader, ctx)? {
+                            Some(DrawingResult::Image(info)) => {
+                                insert_image_node(doc, para_id, child_index, &info, ctx)?;
+                            }
+                            Some(DrawingResult::RawXml(xml)) => {
+                                insert_drawing_xml_node(doc, para_id, child_index, &xml)?;
+                            }
+                            None => {}
                         }
                         depth -= 1; // parse_drawing consumed the </drawing> end tag
                     }
@@ -1214,11 +1354,23 @@ fn parse_alternate_content_into_paragraph(
     Ok(())
 }
 
+/// Result of parsing a `<w:drawing>` element.
+enum DrawingResult {
+    /// An image was found (has `<a:blip r:embed="..."/>`).
+    Image(Box<ImageInfo>),
+    /// A non-image drawing (chart, DrawingML shape, etc.) captured as raw XML.
+    RawXml(String),
+}
+
 /// Parse `<w:drawing>` — extract image info from inline or anchor drawings.
+///
+/// If the drawing contains an image blip, returns `DrawingResult::Image`.
+/// Otherwise (charts, DrawingML shapes, etc.), captures the raw XML for
+/// round-trip preservation and returns `DrawingResult::RawXml`.
 fn parse_drawing(
     reader: &mut Reader<&[u8]>,
     ctx: &ParseContext,
-) -> Result<Option<ImageInfo>, DocxError> {
+) -> Result<Option<DrawingResult>, DocxError> {
     let mut embed_rid: Option<String> = None;
     let mut width_pts: Option<f64> = None;
     let mut height_pts: Option<f64> = None;
@@ -1231,6 +1383,9 @@ fn parse_drawing(
     let mut v_relative_from: Option<String> = None;
     let mut dist_from_text: Option<(i64, i64, i64, i64)> = None;
 
+    // Capture raw XML alongside normal parsing for non-image drawings
+    let mut raw_xml = String::from("<w:drawing>");
+
     let mut depth = 1u32;
     // Track whether we're inside positionH or positionV to capture posOffset text
     let mut in_position_h = false;
@@ -1242,6 +1397,11 @@ fn parse_drawing(
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 depth += 1;
+                // Capture raw XML
+                raw_xml.push('<');
+                raw_xml.push_str(std::str::from_utf8(&e).unwrap_or("?"));
+                raw_xml.push('>');
+
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"anchor" => {
@@ -1314,7 +1474,10 @@ fn parse_drawing(
                     _ => {}
                 }
             }
-            Ok(Event::Text(t)) => {
+            Ok(Event::Text(ref t)) => {
+                // Capture raw XML text
+                raw_xml.push_str(std::str::from_utf8(t.as_ref()).unwrap_or(""));
+
                 if in_pos_offset {
                     if let Ok(s) = t.unescape() {
                         pos_offset_text.push_str(&s);
@@ -1322,6 +1485,11 @@ fn parse_drawing(
                 }
             }
             Ok(Event::Empty(e)) => {
+                // Capture raw XML
+                raw_xml.push('<');
+                raw_xml.push_str(std::str::from_utf8(&e).unwrap_or("?"));
+                raw_xml.push_str("/>");
+
                 let name = e.local_name().as_ref().to_vec();
                 match name.as_slice() {
                     b"wrapSquare" => {
@@ -1385,10 +1553,20 @@ fn parse_drawing(
                     }
                     _ => {}
                 }
+                // Capture raw XML
+                raw_xml.push_str("</");
+                raw_xml.push_str(std::str::from_utf8(e.name().as_ref()).unwrap_or("?"));
+                raw_xml.push('>');
+
                 depth -= 1;
                 if depth == 0 {
                     break;
                 }
+            }
+            Ok(Event::CData(ref cd)) => {
+                raw_xml.push_str("<![CDATA[");
+                raw_xml.push_str(std::str::from_utf8(cd.as_ref()).unwrap_or(""));
+                raw_xml.push_str("]]>");
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -1396,28 +1574,28 @@ fn parse_drawing(
         }
     }
 
-    // Resolve rId to target path
-    let rel_target = match embed_rid {
-        Some(rid) => match ctx.rels.get(&rid) {
-            Some(target) => target.clone(),
-            None => return Ok(None), // Can't resolve — skip image
-        },
-        None => return Ok(None), // No embed — skip
-    };
+    // If we found an image blip, resolve and return as image
+    if let Some(rid) = embed_rid {
+        if let Some(target) = ctx.rels.get(&rid) {
+            return Ok(Some(DrawingResult::Image(Box::new(ImageInfo {
+                rel_target: target.clone(),
+                width_pts,
+                height_pts,
+                alt_text,
+                is_floating,
+                wrap_type,
+                h_offset,
+                v_offset,
+                h_relative_from,
+                v_relative_from,
+                dist_from_text,
+            }))));
+        }
+    }
 
-    Ok(Some(ImageInfo {
-        rel_target,
-        width_pts,
-        height_pts,
-        alt_text,
-        is_floating,
-        wrap_type,
-        h_offset,
-        v_offset,
-        h_relative_from,
-        v_relative_from,
-        dist_from_text,
-    }))
+    // No image blip — this is a chart, DrawingML shape, or other non-image drawing.
+    // Preserve the raw XML for round-trip fidelity.
+    Ok(Some(DrawingResult::RawXml(raw_xml)))
 }
 
 /// Create an Image node from parsed drawing info and store media in the model.
@@ -1697,6 +1875,32 @@ fn insert_shape_node(
     );
 
     doc.insert_node(para_id, *child_index, shape_node)
+        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+    *child_index += 1;
+
+    Ok(())
+}
+
+/// Create a Drawing node from raw DrawingML XML (charts, shapes without image blip, etc.).
+fn insert_drawing_xml_node(
+    doc: &mut DocumentModel,
+    para_id: NodeId,
+    child_index: &mut usize,
+    raw_xml: &str,
+) -> Result<(), DocxError> {
+    let drawing_id = doc.next_id();
+    let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+
+    drawing_node.attributes.set(
+        AttributeKey::ShapeType,
+        AttributeValue::String("drawing".to_string()),
+    );
+    drawing_node.attributes.set(
+        AttributeKey::ShapeRawXml,
+        AttributeValue::String(raw_xml.to_string()),
+    );
+
+    doc.insert_node(para_id, *child_index, drawing_node)
         .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
     *child_index += 1;
 
@@ -4145,6 +4349,284 @@ mod tests {
             para.children.len(),
             0,
             "no shape should be created for OLE-only pict"
+        );
+    }
+
+    // ─── DrawingML chart/shape raw XML round-trip ───────────────────────
+
+    #[test]
+    fn parse_drawing_chart_preserved_as_raw_xml() {
+        // A <w:drawing> containing a chart reference (no <a:blip>)
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:inline>
+                <wp:extent cx="5486400" cy="3200400"/>
+                <wp:docPr id="1" name="Chart 1"/>
+                <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                    <c:chart r:id="rId8"/>
+                </a:graphicData></a:graphic>
+            </wp:inline></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have a Drawing node (not an Image)
+        assert_eq!(para.children.len(), 1, "paragraph should have one child");
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        // Should have shape type "drawing"
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("drawing")
+        );
+
+        // Should have raw XML containing the chart reference
+        let raw = drawing
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .expect("should have raw XML");
+        assert!(
+            raw.contains("<w:drawing>"),
+            "raw XML should start with <w:drawing>"
+        );
+        assert!(
+            raw.contains("c:chart"),
+            "raw XML should contain chart reference"
+        );
+        assert!(
+            raw.contains("</w:drawing>"),
+            "raw XML should end with </w:drawing>"
+        );
+    }
+
+    #[test]
+    fn parse_drawingml_shape_preserved_as_raw_xml() {
+        // A <w:drawing> containing a DrawingML shape (wps:wsp), no image blip
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300">
+                <wp:extent cx="1828800" cy="914400"/>
+                <wp:docPr id="2" name="Rectangle 1"/>
+                <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                    <wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp>
+                </a:graphicData></a:graphic>
+            </wp:anchor></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        assert_eq!(para.children.len(), 1);
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        let raw = drawing
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .expect("should have raw XML");
+        assert!(
+            raw.contains("wps:wsp"),
+            "raw XML should contain the shape element"
+        );
+        assert!(raw.contains("prstGeom"), "raw XML should contain geometry");
+    }
+
+    #[test]
+    fn parse_drawing_chart_in_alternate_content() {
+        // Chart wrapped in mc:AlternateContent
+        let xml = wrap_doc(
+            r#"<w:p><w:r>
+                <mc:AlternateContent>
+                    <mc:Choice Requires="cx">
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="5486400" cy="3200400"/>
+                            <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                                <c:chart r:id="rId10"/>
+                            </a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Choice>
+                    <mc:Fallback/>
+                </mc:AlternateContent>
+            </w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have exactly one Drawing node from the Choice branch
+        assert_eq!(para.children.len(), 1);
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        let raw = drawing
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .expect("should have raw XML");
+        assert!(raw.contains("c:chart"), "raw XML should contain chart");
+    }
+
+    #[test]
+    fn parse_drawing_chart_at_paragraph_level_alternate_content() {
+        // mc:AlternateContent as direct child of paragraph (not inside w:r)
+        let xml = wrap_doc(
+            r#"<w:p>
+                <mc:AlternateContent>
+                    <mc:Choice Requires="cx">
+                        <w:drawing><wp:inline>
+                            <wp:extent cx="5486400" cy="3200400"/>
+                            <a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart">
+                                <c:chart r:id="rId11"/>
+                            </a:graphicData></a:graphic>
+                        </wp:inline></w:drawing>
+                    </mc:Choice>
+                    <mc:Fallback/>
+                </mc:AlternateContent>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        assert_eq!(para.children.len(), 1);
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+    }
+
+    // ─── Move tracking (w:moveTo / w:moveFrom) ─────────────────────────
+
+    #[test]
+    fn parse_move_to_block_level() {
+        let xml = wrap_doc(
+            r#"<w:moveTo w:id="1" w:author="Alice" w:date="2024-05-01T10:00:00Z">
+                <w:p><w:r><w:t>moved here</w:t></w:r></w:p>
+            </w:moveTo>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1);
+
+        let para = doc.node(body.children[0]).unwrap();
+        // The paragraph should have a run child
+        assert!(!para.children.is_empty());
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(run.node_type, NodeType::Run);
+
+        // The run should be tagged with MoveTo revision
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("MoveTo")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Alice")
+        );
+    }
+
+    #[test]
+    fn parse_move_from_block_level() {
+        let xml = wrap_doc(
+            r#"<w:moveFrom w:id="2" w:author="Bob" w:date="2024-05-01T11:00:00Z">
+                <w:p><w:r><w:t>moved from here</w:t></w:r></w:p>
+            </w:moveFrom>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("MoveFrom")
+        );
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Bob")
+        );
+    }
+
+    #[test]
+    fn parse_move_to_inline_level() {
+        // Inline moveTo inside a paragraph
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:r><w:t>before </w:t></w:r>
+                <w:moveTo w:id="3" w:author="Carol">
+                    <w:r><w:t>moved text</w:t></w:r>
+                </w:moveTo>
+                <w:r><w:t> after</w:t></w:r>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        // Should have 3 runs: "before ", "moved text", " after"
+        assert_eq!(para.children.len(), 3);
+
+        // First run — no revision
+        let run1 = doc.node(para.children[0]).unwrap();
+        assert!(run1
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+
+        // Second run — MoveTo
+        let run2 = doc.node(para.children[1]).unwrap();
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionType),
+            Some("MoveTo")
+        );
+        assert_eq!(
+            run2.attributes.get_string(&AttributeKey::RevisionAuthor),
+            Some("Carol")
+        );
+
+        // Third run — no revision
+        let run3 = doc.node(para.children[2]).unwrap();
+        assert!(run3
+            .attributes
+            .get_string(&AttributeKey::RevisionType)
+            .is_none());
+    }
+
+    #[test]
+    fn parse_move_from_inline_level() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:moveFrom w:id="4" w:author="Dave">
+                    <w:r><w:t>originally here</w:t></w:r>
+                </w:moveFrom>
+            </w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+        assert_eq!(
+            run.attributes.get_string(&AttributeKey::RevisionType),
+            Some("MoveFrom")
         );
     }
 }

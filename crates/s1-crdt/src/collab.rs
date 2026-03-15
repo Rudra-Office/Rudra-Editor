@@ -497,6 +497,84 @@ impl CollabDocument {
             false
         }
     }
+
+    /// Force-GC tombstones that exceed a maximum count.
+    ///
+    /// Safety valve for when a slow replica prevents normal GC. Removes the
+    /// oldest tombstones even if not all replicas have acknowledged them.
+    /// Returns the number of tombstones removed.
+    pub fn gc_tombstones_excess(&mut self, max_count: usize) -> usize {
+        self.resolver.gc_tombstones_excess(max_count)
+    }
+
+    /// Estimate the in-memory size of the CRDT state in bytes.
+    ///
+    /// This is a rough estimate including the op log, tombstones, and resolver
+    /// state. Useful for monitoring and triggering compaction when the state
+    /// exceeds a size threshold.
+    pub fn estimated_size_bytes(&self) -> usize {
+        // Op log: ~100 bytes per operation (rough estimate)
+        let op_log_size = self.op_log.len() * 100;
+        // Tombstone tracking overhead
+        let tombstone_size = self.resolver.tombstone_count() * 48;
+        // State vector: 16 bytes per replica entry
+        let state_size = self.state.entries().len() * 16;
+        op_log_size + tombstone_size + state_size
+    }
+
+    /// Compact the CRDT state if the estimated size exceeds the given byte threshold.
+    ///
+    /// Performs op log compaction, then tombstone GC, then snapshot-and-truncate
+    /// if the state is still over the threshold. Returns `true` if compaction was
+    /// triggered.
+    pub fn compact_if_oversized(
+        &mut self,
+        max_bytes: usize,
+        min_state: Option<&StateVector>,
+        max_tombstones: usize,
+    ) -> bool {
+        if self.estimated_size_bytes() <= max_bytes {
+            return false;
+        }
+        // Step 1: Compact op log
+        self.compact_op_log();
+        // Step 2: GC tombstones
+        if let Some(ms) = min_state {
+            self.resolver.gc_tombstones(ms);
+        }
+        self.resolver.gc_tombstones_excess(max_tombstones);
+        // Step 3: If still oversized, truncate op log
+        if self.estimated_size_bytes() > max_bytes {
+            self.op_log.clear();
+        }
+        true
+    }
+
+    /// Run maintenance: compact the op log and cap tombstones.
+    ///
+    /// Call this periodically (e.g., every 60 seconds or every 1000 operations).
+    /// - Compacts the op log if it exceeds `op_log_threshold`.
+    /// - GCs tombstones against `min_state` if provided.
+    /// - Force-GCs excess tombstones above `max_tombstones`.
+    pub fn maintenance(
+        &mut self,
+        op_log_threshold: usize,
+        min_state: Option<&StateVector>,
+        max_tombstones: usize,
+    ) {
+        // Compact op log
+        if self.op_log.len() >= op_log_threshold {
+            self.compact_op_log();
+        }
+
+        // GC tombstones against min state
+        if let Some(ms) = min_state {
+            self.resolver.gc_tombstones(ms);
+        }
+
+        // Force-GC excess tombstones
+        self.resolver.gc_tombstones_excess(max_tombstones);
+    }
 }
 
 /// A document snapshot for initial synchronization.
@@ -1018,5 +1096,52 @@ mod tests {
 
         // Text is unchanged
         assert_eq!(doc.to_plain_text(), text_before);
+    }
+
+    #[test]
+    fn estimated_size_bytes() {
+        let mut doc = CollabDocument::new(1);
+
+        // Empty doc should have small estimated size
+        let empty_size = doc.estimated_size_bytes();
+        assert!(empty_size < 1000, "empty doc size should be small: {empty_size}");
+
+        // Add some operations via setup_text_doc
+        let text_id = setup_text_doc(&mut doc);
+        doc.apply_local(Operation::insert_text(text_id, 0, "a".repeat(100)))
+            .unwrap();
+
+        let size_with_ops = doc.estimated_size_bytes();
+        assert!(size_with_ops > empty_size, "size should grow with operations");
+    }
+
+    #[test]
+    fn compact_if_oversized() {
+        let mut doc = CollabDocument::new(1);
+        let text_id = setup_text_doc(&mut doc);
+
+        // Insert many single-char operations to build up op log
+        for i in 0..200 {
+            doc.apply_local(Operation::insert_text(text_id, i, "x".to_string()))
+                .unwrap();
+        }
+
+        let size_before = doc.op_log_size();
+        assert!(size_before >= 200);
+
+        // Set a very low threshold to trigger compaction
+        let compacted = doc.compact_if_oversized(100, None, 10_000);
+        assert!(compacted, "compaction should have been triggered");
+
+        let size_after = doc.op_log_size();
+        assert!(size_after < size_before, "op log should be smaller after compaction");
+    }
+
+    #[test]
+    fn compact_if_not_oversized() {
+        let mut doc = CollabDocument::new(1);
+        // Very large threshold — should not compact
+        let compacted = doc.compact_if_oversized(10_000_000, None, 10_000);
+        assert!(!compacted, "compaction should not be triggered for small doc");
     }
 }

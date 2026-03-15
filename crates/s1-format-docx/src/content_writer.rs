@@ -222,7 +222,11 @@ fn write_paragraph(
                 {
                     // Tracked change — group consecutive runs with same revision
                     let rev_type = rev_type.to_string();
-                    if rev_type == "Insert" || rev_type == "Delete" {
+                    if rev_type == "Insert"
+                        || rev_type == "Delete"
+                        || rev_type == "MoveTo"
+                        || rev_type == "MoveFrom"
+                    {
                         let rev_id = child.attributes.get_i64(&AttributeKey::RevisionId);
                         let rev_author = child
                             .attributes
@@ -250,7 +254,13 @@ fn write_paragraph(
                         }
 
                         // Write tracked change wrapper
-                        let tag = if rev_type == "Insert" { "ins" } else { "del" };
+                        let tag = match rev_type.as_str() {
+                            "Insert" => "ins",
+                            "Delete" => "del",
+                            "MoveTo" => "moveTo",
+                            "MoveFrom" => "moveFrom",
+                            _ => "ins", // fallback
+                        };
                         let mut wrapper = format!("<w:{tag}");
                         if let Some(id) = rev_id {
                             wrapper.push_str(&format!(r#" w:id="{id}""#));
@@ -505,6 +515,11 @@ fn write_table_properties(attrs: &s1_model::AttributeMap) -> String {
         tpr.push_str("</w:tblBorders>");
     }
 
+    // Table property change tracking (tblPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("tblPrChange", "tblPr", attrs, &mut tpr);
+    }
+
     tpr
 }
 
@@ -522,6 +537,14 @@ fn write_table_row(
     };
 
     xml.push_str("<w:tr>");
+
+    // Row properties (header row, property change tracking)
+    let trpr = write_row_properties(&row.attributes);
+    if !trpr.is_empty() {
+        xml.push_str("<w:trPr>");
+        xml.push_str(&trpr);
+        xml.push_str("</w:trPr>");
+    }
 
     let children: Vec<NodeId> = row.children.clone();
     for child_id in children {
@@ -653,7 +676,29 @@ fn write_cell_properties(attrs: &s1_model::AttributeMap) -> String {
         tcp.push_str("</w:tcBorders>");
     }
 
+    // Cell property change tracking (tcPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("tcPrChange", "tcPr", attrs, &mut tcp);
+    }
+
     tcp
+}
+
+/// Generate row properties XML.
+fn write_row_properties(attrs: &s1_model::AttributeMap) -> String {
+    let mut trp = String::new();
+
+    // Header row
+    if attrs.get_bool(&AttributeKey::TableHeaderRow) == Some(true) {
+        trp.push_str("<w:tblHeader/>");
+    }
+
+    // Row property change tracking (trPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("trPrChange", "trPr", attrs, &mut trp);
+    }
+
+    trp
 }
 
 /// Write border sides (top, bottom, left, right) shared between table and cell borders.
@@ -955,6 +1000,9 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
     if attrs.get_bool(&AttributeKey::Bidi) == Some(true) {
         ppr.push_str("<w:bidi/>");
     }
+    if attrs.get_bool(&AttributeKey::SuppressAutoHyphens) == Some(true) {
+        ppr.push_str("<w:suppressAutoHyphens/>");
+    }
 
     // Tab stops
     if let Some(AttributeValue::TabStops(tab_stops)) = attrs.get(&AttributeKey::TabStops) {
@@ -1003,7 +1051,41 @@ pub fn write_paragraph_properties_from_attrs(attrs: &s1_model::AttributeMap) -> 
         ));
     }
 
+    // Paragraph property change tracking (pPrChange)
+    if attrs.get_string(&AttributeKey::RevisionType) == Some("PropertyChange") {
+        write_property_change_element("pPrChange", "pPr", attrs, &mut ppr);
+    }
+
     ppr
+}
+
+/// Write a property change element (`pPrChange`, `tcPrChange`, `trPrChange`, `tblPrChange`).
+///
+/// Emits `<w:{tag} w:id="..." w:author="..." w:date="..."><w:{inner_tag}/></w:{tag}>`.
+fn write_property_change_element(
+    tag: &str,
+    inner_tag: &str,
+    attrs: &s1_model::AttributeMap,
+    xml: &mut String,
+) {
+    let id = attrs
+        .get_i64(&AttributeKey::RevisionId)
+        .unwrap_or(0);
+    let author = attrs
+        .get_string(&AttributeKey::RevisionAuthor)
+        .unwrap_or_default();
+    let date = attrs
+        .get_string(&AttributeKey::RevisionDate)
+        .unwrap_or_default();
+
+    xml.push_str(&format!(
+        r#"<w:{tag} w:id="{id}" w:author="{}" w:date="{}">"#,
+        escape_xml(author),
+        escape_xml(date),
+    ));
+    // Write empty old properties element (original formatting not stored)
+    xml.push_str(&format!("<w:{inner_tag}/>"));
+    xml.push_str(&format!("</w:{tag}>"));
 }
 
 /// Public wrapper for write_run (for use by header/footer writer).
@@ -1050,7 +1132,10 @@ fn write_run(doc: &DocumentModel, run_id: NodeId, xml: &mut String) {
         None => return,
     };
 
-    let is_delete = run.attributes.get_string(&AttributeKey::RevisionType) == Some("Delete");
+    let is_delete = matches!(
+        run.attributes.get_string(&AttributeKey::RevisionType),
+        Some("Delete") | Some("MoveFrom")
+    );
 
     xml.push_str("<w:r>");
 
@@ -1954,6 +2039,23 @@ mod tests {
     }
 
     #[test]
+    fn write_suppress_auto_hyphens() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::SuppressAutoHyphens,
+            AttributeValue::Bool(true),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _rels, _hyp_rels) = write_document_xml(&doc);
+        assert!(xml.contains("<w:suppressAutoHyphens/>"));
+    }
+
+    #[test]
     fn write_character_spacing() {
         let mut doc = DocumentModel::new();
         let body_id = doc.body_id().unwrap();
@@ -2361,5 +2463,249 @@ mod tests {
         // Should use wp:inline, not wp:anchor
         assert!(xml.contains("<wp:inline"), "should contain wp:inline");
         assert!(!xml.contains("<wp:anchor"), "should not contain wp:anchor");
+    }
+
+    #[test]
+    fn write_drawing_xml_roundtrip() {
+        // Test that a Drawing node with DrawingML raw XML is written correctly
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let drawing_id = doc.next_id();
+        let mut drawing = Node::new(drawing_id, NodeType::Drawing);
+        drawing.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String("drawing".to_string()),
+        );
+        let raw = r#"<w:drawing><wp:inline><wp:extent cx="5486400" cy="3200400"/><a:graphic><a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/chart"><c:chart r:id="rId8"/></a:graphicData></a:graphic></wp:inline></w:drawing>"#;
+        drawing.attributes.set(
+            AttributeKey::ShapeRawXml,
+            AttributeValue::String(raw.to_string()),
+        );
+        doc.insert_node(para_id, 0, drawing).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        // Should wrap the drawing XML in a run
+        assert!(
+            xml.contains("<w:r><w:drawing>"),
+            "should wrap drawing in run"
+        );
+        assert!(xml.contains("c:chart"), "should preserve chart reference");
+        assert!(
+            xml.contains("</w:drawing></w:r>"),
+            "should close run after drawing"
+        );
+    }
+
+    #[test]
+    fn write_move_to_revision() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run_node = Node::new(run_id, NodeType::Run);
+        run_node.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("MoveTo".to_string()),
+        );
+        run_node
+            .attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(5));
+        run_node.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Alice".to_string()),
+        );
+        doc.insert_node(para_id, 0, run_node).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "moved"))
+            .unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:moveTo w:id="5""#),
+            "should output moveTo wrapper: {xml}"
+        );
+        assert!(xml.contains(r#"w:author="Alice""#), "should include author");
+        assert!(xml.contains("</w:moveTo>"), "should close moveTo");
+        // MoveTo should use <w:t>, not <w:delText>
+        assert!(
+            xml.contains("<w:t xml:space=\"preserve\">moved</w:t>"),
+            "moveTo should use w:t"
+        );
+    }
+
+    #[test]
+    fn write_move_from_revision() {
+        let mut doc = DocumentModel::new();
+        let para_id = doc.next_id();
+        doc.insert_node(
+            doc.body_id().unwrap(),
+            0,
+            Node::new(para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+
+        let run_id = doc.next_id();
+        let mut run_node = Node::new(run_id, NodeType::Run);
+        run_node.attributes.set(
+            AttributeKey::RevisionType,
+            AttributeValue::String("MoveFrom".to_string()),
+        );
+        run_node
+            .attributes
+            .set(AttributeKey::RevisionId, AttributeValue::Int(6));
+        run_node.attributes.set(
+            AttributeKey::RevisionAuthor,
+            AttributeValue::String("Bob".to_string()),
+        );
+        doc.insert_node(para_id, 0, run_node).unwrap();
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "moved away"))
+            .unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:moveFrom w:id="6""#),
+            "should output moveFrom wrapper: {xml}"
+        );
+        assert!(xml.contains("</w:moveFrom>"), "should close moveFrom");
+        // MoveFrom should use <w:delText> like Delete
+        assert!(
+            xml.contains("<w:delText xml:space=\"preserve\">moved away</w:delText>"),
+            "moveFrom should use w:delText: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_ppr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(AttributeKey::Alignment, AttributeValue::Alignment(Alignment::Center));
+        para.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        para.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(50));
+        para.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Alice".into()));
+        para.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-01-01T12:00:00Z".into()));
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:pPrChange w:id="50" w:author="Alice" w:date="2026-01-01T12:00:00Z">"#),
+            "should output pPrChange: {xml}"
+        );
+        assert!(xml.contains("</w:pPrChange>"), "should close pPrChange");
+    }
+
+    #[test]
+    fn write_tcpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table)).unwrap();
+
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow)).unwrap();
+
+        let cell_id = doc.next_id();
+        let mut cell = Node::new(cell_id, NodeType::TableCell);
+        cell.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        cell.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(60));
+        cell.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Bob".into()));
+        cell.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-02-15T08:00:00Z".into()));
+        doc.insert_node(row_id, 0, cell).unwrap();
+
+        // Add a paragraph inside the cell (required for valid DOCX)
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:tcPrChange w:id="60" w:author="Bob" w:date="2026-02-15T08:00:00Z">"#),
+            "should output tcPrChange: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_trpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+        let table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(table_id, NodeType::Table)).unwrap();
+
+        let row_id = doc.next_id();
+        let mut row = Node::new(row_id, NodeType::TableRow);
+        row.attributes.set(AttributeKey::TableHeaderRow, AttributeValue::Bool(true));
+        row.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        row.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(70));
+        row.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Carol".into()));
+        row.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-03-10T10:00:00Z".into()));
+        doc.insert_node(table_id, 0, row).unwrap();
+
+        // Add a cell + paragraph inside
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell)).unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains("<w:tblHeader/>"),
+            "should output tblHeader: {xml}"
+        );
+        assert!(
+            xml.contains(r#"<w:trPrChange w:id="70" w:author="Carol" w:date="2026-03-10T10:00:00Z">"#),
+            "should output trPrChange: {xml}"
+        );
+    }
+
+    #[test]
+    fn write_tblpr_change() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let table_id = doc.next_id();
+        let mut table = Node::new(table_id, NodeType::Table);
+        table.attributes.set(AttributeKey::TableAlignment, AttributeValue::Alignment(Alignment::Center));
+        table.attributes.set(AttributeKey::RevisionType, AttributeValue::String("PropertyChange".into()));
+        table.attributes.set(AttributeKey::RevisionId, AttributeValue::Int(80));
+        table.attributes.set(AttributeKey::RevisionAuthor, AttributeValue::String("Dave".into()));
+        table.attributes.set(AttributeKey::RevisionDate, AttributeValue::String("2026-03-12T14:00:00Z".into()));
+        doc.insert_node(body_id, 0, table).unwrap();
+
+        // Add row/cell/paragraph
+        let row_id = doc.next_id();
+        doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow)).unwrap();
+        let cell_id = doc.next_id();
+        doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell)).unwrap();
+        let para_id = doc.next_id();
+        doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph)).unwrap();
+
+        let (xml, _, _) = write_document_xml(&doc);
+
+        assert!(
+            xml.contains(r#"<w:tblPrChange w:id="80" w:author="Dave" w:date="2026-03-12T14:00:00Z">"#),
+            "should output tblPrChange: {xml}"
+        );
     }
 }

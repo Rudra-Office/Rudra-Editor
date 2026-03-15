@@ -65,7 +65,10 @@ async function boot() {
           const name = saved.name || 'Untitled Document';
           const mins = Math.round(age / 60000);
           const timeStr = mins < 1 ? 'just now' : mins < 60 ? `${mins}m ago` : `${Math.round(mins / 60)}h ago`;
-          if (confirm(`Recover unsaved document "${name}" (saved ${timeStr})?`)) {
+          // Check checksum integrity
+          const integrityOk = saved._checksumValid !== false;
+          const warning = integrityOk ? '' : '\n\nWarning: checksum mismatch detected — this file may be corrupted.';
+          if (confirm(`Recover unsaved document "${name}" (saved ${timeStr})?${warning}`)) {
             openFile(new Uint8Array(saved.bytes), name + '.docx');
             // Restore comment thread replies if they were persisted
             if (saved.commentReplies) {

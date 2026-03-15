@@ -3,12 +3,13 @@ import { state, $ } from './state.js';
 import {
   getSelectionInfo, getActiveElement, getCursorOffset,
   setCursorAtOffset, setCursorAtStart, isCursorAtStart, isCursorAtEnd,
+  getEditableText,
 } from './selection.js';
 import { renderDocument, renderNodeById, syncParagraphText, syncAllText, debouncedSync } from './render.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction, renderUndoHistory } from './toolbar.js';
 import { deleteSelectedImage, setupImages } from './images.js';
 import { updatePageBreaks } from './pagination.js';
-import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar } from './file.js';
+import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
 import { broadcastOp } from './collab.js';
 import { setZoomLevel } from './toolbar-handlers.js';
 
@@ -18,6 +19,11 @@ export function initInput() {
   // ─── E-01 fix: Capture cursor offset before text insertion for pending formats ───
   page.addEventListener('beforeinput', (e) => {
     if (state.ignoreInput) return;
+    // Block browser-native drag-drop text insertion (we handle moves via WASM)
+    if (e.inputType === 'insertFromDrop') {
+      e.preventDefault();
+      return;
+    }
     // Prevent deletion into non-editable elements (page headers/footers)
     if (e.inputType && e.inputType.startsWith('delete') && e.getTargetRanges) {
       const ranges = e.getTargetRanges();
@@ -85,7 +91,7 @@ export function initInput() {
 
     // ── Slash menu: detect "/" or update filter ──
     if (state.slashMenuOpen) {
-      const text = el?.textContent || '';
+      const text = el ? getEditableText(el) : '';
       const offset = getCursorOffset(el);
       // Find the "/" that triggered the menu
       // offset is in codepoints, so convert text to codepoint array for slicing
@@ -102,7 +108,7 @@ export function initInput() {
       // Open menu if "/" is at start of paragraph or after whitespace
       if (el) {
         const offset = getCursorOffset(el);
-        const text = el.textContent || '';
+        const text = getEditableText(el);
         // offset is in codepoints, so index into codepoint array
         const codepoints = [...text];
         const charBefore = offset >= 2 ? codepoints[offset - 2] : null;
@@ -116,15 +122,18 @@ export function initInput() {
   // ─── Copy — write both plain text and HTML to clipboard via WASM ───
   page.addEventListener('copy', e => {
     if (!state.doc) return;
+
+    // Use select-all info if active, otherwise check native selection
+    const info = state._selectAll ? state.lastSelInfo : getSelectionInfo();
     const sel = window.getSelection();
-    if (!sel || sel.isCollapsed) return;
+    const isSyntheticSelection = state._selectAll || (info && !info.collapsed && info.startNodeId !== info.endNodeId &&
+      info.startEl?.closest?.('.page-content') !== info.endEl?.closest?.('.page-content'));
+    if (!isSyntheticSelection && (!sel || sel.isCollapsed)) return;
 
     e.preventDefault();
-    const text = sel.toString();
+    syncAllText();
 
     // E2.1: Generate clean semantic HTML from WASM model (no data attributes, no node IDs)
-    syncAllText();
-    const info = getSelectionInfo();
     let html = '';
     if (info && info.startNodeId && info.endNodeId) {
       try {
@@ -140,14 +149,128 @@ export function initInput() {
       html = getSelectionHtml();
     }
 
+    // Get plain text: for cross-page/select-all selections, extract from HTML
+    // since window.getSelection().toString() only covers one contentEditable
+    let text = '';
+    if (state._selectAll) {
+      try { text = state.doc.to_plain_text(); } catch (_) { text = sel ? sel.toString() : ''; }
+    } else if (isSyntheticSelection && html) {
+      text = htmlToPlainText(html);
+    } else {
+      text = sel ? sel.toString() : '';
+    }
+
     e.clipboardData.setData('text/plain', text);
     e.clipboardData.setData('text/html', html);
+  });
+
+  // ─── Clear select-all on click, and handle shift-click cross-page selection ───
+  page.addEventListener('mousedown', (e) => {
+    if (e.shiftKey && state.lastSelInfo && !state._selectAll) {
+      // Shift-click: extend selection from current cursor to click target
+      const clickTarget = e.target.closest('[data-node-id]');
+      if (clickTarget) {
+        const targetPageContent = clickTarget.closest('.page-content');
+        const currentPageContent = state.lastSelInfo.startEl?.closest('.page-content');
+        if (targetPageContent && currentPageContent && targetPageContent !== currentPageContent) {
+          // Cross-page shift-click — create synthetic selection
+          e.preventDefault();
+          const targetNodeId = clickTarget.dataset.nodeId;
+          const targetOffset = Array.from(getEditableText(clickTarget)).length; // click at end
+
+          // Determine order: which comes first in the document?
+          const allNodes = [];
+          for (const pageEl of state.pageElements) {
+            const content = pageEl.querySelector('.page-content');
+            if (!content) continue;
+            content.querySelectorAll(':scope > [data-node-id]').forEach(el => allNodes.push(el));
+          }
+          const startIdx = allNodes.findIndex(el => el.dataset.nodeId === state.lastSelInfo.startNodeId);
+          const endIdx = allNodes.findIndex(el => el.dataset.nodeId === targetNodeId);
+
+          if (startIdx >= 0 && endIdx >= 0) {
+            const isForward = endIdx >= startIdx;
+            const startNodeId = isForward ? state.lastSelInfo.startNodeId : targetNodeId;
+            const startOffset = isForward ? state.lastSelInfo.startOffset : 0;
+            const endNodeId = isForward ? targetNodeId : state.lastSelInfo.startNodeId;
+            const endOffset = isForward ? targetOffset : state.lastSelInfo.startOffset;
+            const startEl = allNodes[isForward ? startIdx : endIdx];
+            const endEl = allNodes[isForward ? endIdx : startIdx];
+
+            state.lastSelInfo = {
+              startNodeId, startOffset, endNodeId, endOffset,
+              collapsed: false, startEl, endEl,
+            };
+
+            // Visual highlight across pages
+            for (const pageEl of state.pageElements) {
+              const content = pageEl.querySelector('.page-content') || pageEl;
+              let inRange = false;
+              for (const el of content.children) {
+                if (!el.dataset?.nodeId) continue;
+                const nid = el.dataset.nodeId;
+                if (nid === startNodeId) inRange = true;
+                if (inRange) el.classList.add('select-all-highlight');
+                if (nid === endNodeId) { inRange = false; break; }
+              }
+            }
+          }
+          return;
+        }
+      }
+    }
+    clearSelectAll();
   });
 
   // ─── Keydown ────────────────────────────────────
   page.addEventListener('keydown', e => {
     if (!state.doc) return;
     const doc = state.doc;
+
+    // Clear select-all on any non-modifier key (except Cmd+X/C/A/Z/Y which use it)
+    if (state._selectAll && !(e.ctrlKey || e.metaKey)) {
+      // If the user types a printable character, delete the entire selection first
+      // so typing replaces the selected content (like in any standard editor)
+      if (e.key.length === 1 && !e.altKey) {
+        e.preventDefault();
+        const selectInfo = state.lastSelInfo;
+        clearSelectAll();
+        if (selectInfo && doc) {
+          clearTimeout(state.syncTimer);
+          syncAllText();
+          try {
+            doc.delete_selection(selectInfo.startNodeId, selectInfo.startOffset, selectInfo.endNodeId, selectInfo.endOffset);
+            renderDocument();
+            // Insert the typed character at the start of where the selection was
+            const el = $('pageContainer')?.querySelector(`[data-node-id="${selectInfo.startNodeId}"]`);
+            if (el) {
+              doc.insert_text_in_paragraph(selectInfo.startNodeId, selectInfo.startOffset, e.key);
+              broadcastOp({ action: 'insertText', nodeId: selectInfo.startNodeId, offset: selectInfo.startOffset, text: e.key });
+              const updated = renderNodeById(selectInfo.startNodeId);
+              if (updated) setCursorAtOffset(updated, selectInfo.startOffset + Array.from(e.key).length);
+            } else {
+              // Start node was deleted, find first available
+              const first = $('pageContainer')?.querySelector('[data-node-id]');
+              if (first) {
+                doc.insert_text_in_paragraph(first.dataset.nodeId, 0, e.key);
+                broadcastOp({ action: 'insertText', nodeId: first.dataset.nodeId, offset: 0, text: e.key });
+                const updated = renderNodeById(first.dataset.nodeId);
+                if (updated) setCursorAtOffset(updated, Array.from(e.key).length);
+              } else {
+                doc.append_paragraph(e.key);
+                renderDocument();
+              }
+            }
+            recordUndoAction('Replace selection');
+            updateUndoRedo();
+            markDirty();
+          } catch (err) { console.error('select-all replace:', err); }
+        }
+        return;
+      }
+      // For non-printable keys (arrows, etc.), just clear the highlight
+      clearSelectAll();
+    }
 
     // ── Slash menu navigation ──
     if (state.slashMenuOpen) {
@@ -190,7 +313,7 @@ export function initInput() {
           setTimeout(() => {
             if (!state.slashMenuOpen) return;
             const activeEl = getActiveElement();
-            const text = activeEl?.textContent || '';
+            const text = activeEl ? getEditableText(activeEl) : '';
             const cursorOff = activeEl ? getCursorOffset(activeEl) : 0;
             // cursorOff is in codepoints, so slice codepoint array
             const before = [...text].slice(0, cursorOff).join('');
@@ -251,7 +374,7 @@ export function initInput() {
               if (lastNode) {
                 e.preventDefault();
                 prevPageContent.focus();
-                setCursorAtOffset(lastNode, Array.from(lastNode.textContent || '').length);
+                setCursorAtOffset(lastNode, Array.from(getEditableText(lastNode)).length);
                 return;
               }
             }
@@ -274,25 +397,8 @@ export function initInput() {
         case 'c': /* handled by copy event above */ return;
         case 'v': /* handled by paste event */ return;
         case 'a': {
-          // Select all: if multiple pages, select from first node to last node across all pages
-          if (state.pageElements.length > 1) {
-            e.preventDefault();
-            const allNodes = page.querySelectorAll('[data-node-id]');
-            if (allNodes.length >= 2) {
-              const first = allNodes[0];
-              const last = allNodes[allNodes.length - 1];
-              try {
-                const range = document.createRange();
-                range.setStartBefore(first);
-                range.setEndAfter(last);
-                const sel = window.getSelection();
-                sel.removeAllRanges();
-                sel.addRange(range);
-              } catch (_) {
-                // Fallback: select within current page
-              }
-            }
-          }
+          e.preventDefault();
+          selectAll();
           return;
         }
         case 's': e.preventDefault(); saveToLocal(); return;
@@ -308,21 +414,38 @@ export function initInput() {
     }
 
     // ── Delete/Backspace with selection ──
-    if ((e.key === 'Delete' || e.key === 'Backspace') && info && !info.collapsed) {
+    const deleteInfo = state._selectAll ? state.lastSelInfo : info;
+    if ((e.key === 'Delete' || e.key === 'Backspace') && deleteInfo && !deleteInfo.collapsed) {
       e.preventDefault();
+      clearSelectAll();
       clearTimeout(state.syncTimer);
       syncAllText();
+      // Clear pending formats after deletion — new text should use document defaults
+      state.pendingFormats = {};
       try {
-        doc.delete_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset);
+        doc.delete_selection(deleteInfo.startNodeId, deleteInfo.startOffset, deleteInfo.endNodeId, deleteInfo.endOffset);
         renderDocument();
-        // Try to place cursor at the start of the deletion point
-        let el = page.querySelector(`[data-node-id="${info.startNodeId}"]`);
+        // Try to place cursor at the start of the deletion point (search all pages)
+        let el = null;
+        for (const pg of (state.pageElements.length > 0 ? state.pageElements : [page])) {
+          const content = pg.querySelector?.('.page-content') || pg;
+          el = content.querySelector(`[data-node-id="${deleteInfo.startNodeId}"]`);
+          if (el) break;
+        }
         if (el) {
-          setCursorAtOffset(el, info.startOffset);
+          const content = el.closest('.page-content');
+          if (content) content.focus();
+          setCursorAtOffset(el, deleteInfo.startOffset);
         } else {
-          // The start node was deleted — find any remaining paragraph
-          el = page.querySelector('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id]');
+          // The start node was deleted — find any remaining paragraph across all pages
+          for (const pg of (state.pageElements.length > 0 ? state.pageElements : [page])) {
+            const content = pg.querySelector?.('.page-content') || pg;
+            el = content.querySelector('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id]');
+            if (el) break;
+          }
           if (el) {
+            const content = el.closest('.page-content');
+            if (content) content.focus();
             setCursorAtStart(el);
           } else {
             // Document is completely empty — create a new paragraph
@@ -337,15 +460,35 @@ export function initInput() {
         }
         recordUndoAction('Delete selection');
         updateUndoRedo();
-        broadcastOp({ action: 'deleteSelection', startNode: info.startNodeId, startOffset: info.startOffset, endNode: info.endNodeId, endOffset: info.endOffset });
+        broadcastOp({ action: 'deleteSelection', startNode: deleteInfo.startNodeId, startOffset: deleteInfo.startOffset, endNode: deleteInfo.endNodeId, endOffset: deleteInfo.endOffset });
       } catch (err) { console.error('delete selection:', err); }
       return;
     }
 
     const el = getActiveElement();
 
-    // ── Tab — table navigation ──
+    // ── Tab — list indent or table navigation ──
     if (e.key === 'Tab') {
+      // List indent/outdent: Tab increases level, Shift+Tab decreases
+      if (el && !el.closest?.('td, th')) {
+        const isListItem = el.querySelector('.list-marker') !== null || !!el.dataset.listType;
+        if (isListItem) {
+          e.preventDefault();
+          const nodeId = el.dataset.nodeId;
+          const currentLevel = parseInt(el.dataset.listLevel || '0', 10);
+          const listType = el.dataset.listType || 'bullet';
+          const newLevel = e.shiftKey ? Math.max(0, currentLevel - 1) : Math.min(8, currentLevel + 1);
+          try {
+            doc.set_list_format(nodeId, listType, newLevel);
+            broadcastOp({ action: 'setListFormat', nodeId, format: listType, level: newLevel });
+            const updated = renderNodeById(nodeId);
+            if (updated) setCursorAtStart(updated);
+            recordUndoAction(e.shiftKey ? 'Outdent list item' : 'Indent list item');
+            state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
+          } catch (err) { console.error('list indent:', err); }
+          return;
+        }
+      }
       const cell = el?.closest?.('td, th');
       if (cell) {
         e.preventDefault();
@@ -408,7 +551,7 @@ export function initInput() {
       return;
     }
 
-    // ── Enter — split paragraph ──
+    // ── Enter — split paragraph (with list handling) ──
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       state._typingBatch = null; // E3.1: End typing session on Enter
@@ -416,6 +559,26 @@ export function initInput() {
       const nodeId = el.dataset.nodeId;
       const offset = getCursorOffset(el);
       clearTimeout(state.syncTimer); syncParagraphText(el);
+
+      // Check if this is a list item (has a list marker element or data attribute)
+      const isListItem = el.querySelector('.list-marker') !== null || !!el.dataset.listType;
+      // For empty check, exclude the list marker span text
+      const contentText = getEditableText(el);
+      const isEmpty = contentText.replace(/[\u200B\s]/g, '').length === 0;
+
+      // Enter on empty list item → exit the list (remove list formatting)
+      if (isListItem && isEmpty) {
+        try {
+          doc.set_list_format(nodeId, 'none', 0);
+          broadcastOp({ action: 'setListFormat', nodeId, format: 'none', level: 0 });
+          const updated = renderNodeById(nodeId);
+          if (updated) setCursorAtStart(updated);
+          recordUndoAction('Exit list');
+          state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
+        } catch (err) { console.error('exit list:', err); }
+        return;
+      }
+
       try {
         const newId = doc.split_paragraph(nodeId, offset);
         renderNodeById(nodeId);
@@ -426,6 +589,11 @@ export function initInput() {
           if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
           const orig = page.querySelector(`[data-node-id="${nodeId}"]`);
           if (orig) orig.after(newEl);
+          // Register new element in nodeIdToElement map
+          state.nodeIdToElement.set(newId, newEl);
+          newEl.querySelectorAll('[data-node-id]').forEach(child => {
+            state.nodeIdToElement.set(child.dataset.nodeId, child);
+          });
           setupImages(newEl);
           setCursorAtStart(newEl);
         }
@@ -448,8 +616,23 @@ export function initInput() {
       }
     }
 
-    // ── Backspace at start — merge prev (including cross-page) ──
+    // ── Backspace at start of list item — remove list formatting first ──
     if (e.key === 'Backspace' && el && isCursorAtStart(el)) {
+      const isListItem = el.querySelector('.list-marker') !== null || el.dataset.listType;
+      if (isListItem) {
+        e.preventDefault();
+        const nodeId = el.dataset.nodeId;
+        try {
+          doc.set_list_format(nodeId, 'none', 0);
+          broadcastOp({ action: 'setListFormat', nodeId, format: 'none', level: 0 });
+          const updated = renderNodeById(nodeId);
+          if (updated) setCursorAtStart(updated);
+          recordUndoAction('Remove list formatting');
+          state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
+        } catch (err) { console.error('remove list:', err); }
+        return;
+      }
+
       let prev = el.previousElementSibling;
       // Skip non-model elements
       while (prev && !prev.dataset?.nodeId) prev = prev.previousElementSibling;
@@ -473,7 +656,7 @@ export function initInput() {
       if (prev?.dataset?.nodeId) {
         e.preventDefault();
         clearTimeout(state.syncTimer); syncParagraphText(el); syncParagraphText(prev);
-        const cursorPos = Array.from(prev.textContent || '').length;
+        const cursorPos = Array.from(getEditableText(prev)).length;
         const nodeId1 = prev.dataset.nodeId;
         const nodeId2 = el.dataset.nodeId;
         try {
@@ -516,7 +699,7 @@ export function initInput() {
       if (next?.dataset?.nodeId) {
         e.preventDefault();
         clearTimeout(state.syncTimer); syncParagraphText(el); syncParagraphText(next);
-        const cursorPos = Array.from(el.textContent || '').length;
+        const cursorPos = Array.from(getEditableText(el)).length;
         const nodeId1 = el.dataset.nodeId;
         const nodeId2 = next.dataset.nodeId;
         try {
@@ -593,23 +776,18 @@ export function initInput() {
     const text = e.clipboardData.getData('text/plain');
     const html = e.clipboardData.getData('text/html');
 
-    // E2.2: Try rich paste (HTML → formatted runs via WASM) first
-    if (html && text) {
+    // E2.2: Try rich paste (HTML → structured content via WASM)
+    if (html) {
       const parsed = parseClipboardHtml(html);
-      if (parsed && parsed.paragraphs.length > 0) {
-        try {
-          const runsJson = JSON.stringify(parsed);
-          doc.paste_formatted_runs_json(info.startNodeId, info.startOffset, runsJson);
-          broadcastOp({ action: 'pasteFormattedRuns', nodeId: info.startNodeId, offset: info.startOffset, runsJson });
-          renderDocument();
-          placeCursorAfterPaste(page, text);
-          recordUndoAction('Paste formatted text');
-          updateUndoRedo();
-          markDirty();
-          return;
-        } catch (err) {
-          console.warn('Rich paste failed, falling back to plain text:', err);
-        }
+      if (parsed && parsed.elements.length > 0) {
+        // pasteStructuredContent handles errors internally per-element
+        pasteStructuredContent(doc, info, parsed, page);
+        renderDocument();
+        placeCursorAfterPaste(page, text || '', info.startNodeId, info.startOffset);
+        recordUndoAction('Paste formatted content');
+        updateUndoRedo();
+        markDirty();
+        return;
       }
     }
 
@@ -620,7 +798,7 @@ export function initInput() {
         doc.paste_plain_text(info.startNodeId, info.startOffset, text);
         broadcastOp({ action: 'pasteText', nodeId: info.startNodeId, offset: info.startOffset, text });
         renderDocument();
-        placeCursorAfterPaste(page, text);
+        placeCursorAfterPaste(page, text, info.startNodeId, info.startOffset);
         recordUndoAction('Paste text');
         updateUndoRedo();
         markDirty();
@@ -763,7 +941,7 @@ export function initInput() {
             adjustedOffset = src.startOffset;
           }
         }
-        const maxLen = [...(newDrop.textContent || '')].length;
+        const maxLen = Array.from(getEditableText(newDrop)).length;
         adjustedOffset = Math.min(adjustedOffset, maxLen);
 
         doc.insert_text_in_paragraph(dropNodeId, adjustedOffset, text);
@@ -843,6 +1021,220 @@ export function initInput() {
       return;
     }
   });
+
+  // ─── Right-Click Context Menu ────────────────────
+  page.addEventListener('contextmenu', e => {
+    // Only intercept in editor view on content areas
+    if (state.currentView !== 'editor') return;
+    const target = e.target.closest('.page-content');
+    if (!target) return;
+    e.preventDefault();
+
+    // Remove any existing context menu
+    const existing = document.querySelector('.context-menu');
+    if (existing) existing.remove();
+
+    const sel = window.getSelection();
+    const info = getSelectionInfo();
+    const hasSelection = (sel && !sel.isCollapsed) || (info && !info.collapsed);
+
+    // Check if right-clicked on a table cell
+    const cell = e.target.closest('td, th');
+    const table = cell ? cell.closest('table') : null;
+
+    // Check if right-clicked on an image (img may be inside a paragraph with data-node-id)
+    const img = e.target.closest('img');
+
+    const menu = document.createElement('div');
+    menu.className = 'context-menu';
+    menu.setAttribute('role', 'menu');
+
+    const addItem = (label, shortcut, action, disabled) => {
+      const item = document.createElement('button');
+      item.className = 'ctx-item';
+      item.setAttribute('role', 'menuitem');
+      if (disabled) item.disabled = true;
+      item.innerHTML = `<span>${label}</span>${shortcut ? `<span class="ctx-shortcut">${shortcut}</span>` : ''}`;
+      item.addEventListener('click', () => { menu.remove(); action(); });
+      menu.appendChild(item);
+    };
+    const addSep = () => {
+      const sep = document.createElement('div');
+      sep.className = 'ctx-sep';
+      menu.appendChild(sep);
+    };
+
+    // Standard edit operations — use WASM-backed operations (not deprecated execCommand)
+    addItem('Cut', '\u2318X', () => {
+      doCut();
+    }, !hasSelection);
+    addItem('Copy', '\u2318C', () => {
+      // Trigger the programmatic copy path — only copy selected text, not full document
+      if (info && state.doc) {
+        try {
+          syncAllText();
+          let html = '';
+          try {
+            html = state.doc.export_selection_html(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset);
+          } catch (_) {}
+          // Get plain text: extract from HTML for cross-page, else from selection
+          const isCrossPage = info.startEl?.closest?.('.page-content') !== info.endEl?.closest?.('.page-content');
+          const selText = (isCrossPage && html) ? htmlToPlainText(html) : (window.getSelection()?.toString() || '');
+          if (html) {
+            const htmlBlob = new Blob([html], { type: 'text/html' });
+            const textBlob = new Blob([selText], { type: 'text/plain' });
+            navigator.clipboard.write([new ClipboardItem({ 'text/html': htmlBlob, 'text/plain': textBlob })]).catch(() => {
+              navigator.clipboard.writeText(selText).catch(() => {});
+            });
+          } else {
+            navigator.clipboard.writeText(selText).catch(() => {});
+          }
+        } catch (_) {}
+      }
+    }, !hasSelection);
+    addItem('Paste', '\u2318V', async () => {
+      try {
+        const items = await navigator.clipboard.read();
+        for (const item of items) {
+          if (item.types.includes('text/html')) {
+            const blob = await item.getType('text/html');
+            const html = await blob.text();
+            const parsed = parseClipboardHtml(html);
+            if (parsed && parsed.elements.length > 0) {
+              const freshInfo = getSelectionInfo();
+              if (freshInfo && state.doc) {
+                pasteStructuredContent(state.doc, freshInfo, parsed, page);
+                renderDocument();
+                recordUndoAction('Paste');
+                updateUndoRedo();
+                markDirty();
+              }
+              return;
+            }
+          }
+          if (item.types.includes('text/plain')) {
+            const blob = await item.getType('text/plain');
+            const text = await blob.text();
+            const freshInfo = getSelectionInfo();
+            if (text && freshInfo && state.doc) {
+              state.doc.paste_plain_text(freshInfo.startNodeId, freshInfo.startOffset, text);
+              renderDocument();
+              recordUndoAction('Paste');
+              updateUndoRedo();
+              markDirty();
+            }
+            return;
+          }
+        }
+      } catch (_) {
+        // Fallback: read plain text
+        try {
+          const text = await navigator.clipboard.readText();
+          const freshInfo = getSelectionInfo();
+          if (text && freshInfo && state.doc) {
+            state.doc.paste_plain_text(freshInfo.startNodeId, freshInfo.startOffset, text);
+            renderDocument();
+            recordUndoAction('Paste');
+            updateUndoRedo();
+            markDirty();
+          }
+        } catch (_2) {}
+      }
+    });
+
+    addSep();
+
+    // Formatting shortcuts
+    if (hasSelection) {
+      addItem('Bold', '\u2318B', () => toggleFormat('bold'));
+      addItem('Italic', '\u2318I', () => toggleFormat('italic'));
+      addItem('Underline', '\u2318U', () => toggleFormat('underline'));
+      addSep();
+    }
+
+    // Table operations
+    if (table && table.dataset.nodeId) {
+      const tableId = table.dataset.nodeId;
+      addItem('Insert row above', '', () => {
+        const rowIdx = cell ? Array.from(cell.closest('tr').parentNode.children).indexOf(cell.closest('tr')) : 0;
+        try { state.doc.insert_table_row(tableId, rowIdx); broadcastOp({ action: 'insertTableRow', tableNodeId: tableId, rowIndex: rowIdx }); renderDocument(); recordUndoAction('Insert row'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addItem('Insert row below', '', () => {
+        const rowIdx = cell ? Array.from(cell.closest('tr').parentNode.children).indexOf(cell.closest('tr')) + 1 : 1;
+        try { state.doc.insert_table_row(tableId, rowIdx); broadcastOp({ action: 'insertTableRow', tableNodeId: tableId, rowIndex: rowIdx }); renderDocument(); recordUndoAction('Insert row'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addItem('Delete row', '', () => {
+        const rowIdx = cell ? Array.from(cell.closest('tr').parentNode.children).indexOf(cell.closest('tr')) : 0;
+        try { state.doc.delete_table_row(tableId, rowIdx); broadcastOp({ action: 'deleteTableRow', tableNodeId: tableId, rowIndex: rowIdx }); renderDocument(); recordUndoAction('Delete row'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addSep();
+      addItem('Insert column left', '', () => {
+        const colIdx = cell ? Array.from(cell.parentNode.children).indexOf(cell) : 0;
+        try { state.doc.insert_table_column(tableId, colIdx); broadcastOp({ action: 'insertTableColumn', tableNodeId: tableId, colIndex: colIdx }); renderDocument(); recordUndoAction('Insert column'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addItem('Insert column right', '', () => {
+        const colIdx = cell ? Array.from(cell.parentNode.children).indexOf(cell) + 1 : 1;
+        try { state.doc.insert_table_column(tableId, colIdx); broadcastOp({ action: 'insertTableColumn', tableNodeId: tableId, colIndex: colIdx }); renderDocument(); recordUndoAction('Insert column'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addItem('Delete column', '', () => {
+        const colIdx = cell ? Array.from(cell.parentNode.children).indexOf(cell) : 0;
+        try { state.doc.delete_table_column(tableId, colIdx); broadcastOp({ action: 'deleteTableColumn', tableNodeId: tableId, colIndex: colIdx }); renderDocument(); recordUndoAction('Delete column'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addSep();
+    }
+
+    // Image operations
+    if (img) {
+      // Image node ID could be on the img itself or on its parent paragraph
+      const imgNodeEl = img.closest('[data-node-id]');
+      const imgNodeId = imgNodeEl?.dataset?.nodeId;
+      if (imgNodeId) {
+        addItem('Delete image', '', () => {
+          try { state.doc.delete_image(imgNodeId); broadcastOp({ action: 'deleteNode', nodeId: imgNodeId }); renderDocument(); recordUndoAction('Delete image'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+        });
+        addItem('Set alt text', '', () => {
+          const alt = prompt('Alt text:', img.alt || '');
+          if (alt !== null) {
+            try { state.doc.set_image_alt_text(imgNodeId, alt); broadcastOp({ action: 'setImageAltText', nodeId: imgNodeId, alt }); recordUndoAction('Set alt text'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+          }
+        });
+        addSep();
+      }
+    }
+
+    // Select All
+    addItem('Select All', '\u2318A', () => selectAll());
+
+    // Position menu
+    let left = e.clientX;
+    let top = e.clientY;
+    document.body.appendChild(menu);
+    const rect = menu.getBoundingClientRect();
+    if (left + rect.width > window.innerWidth - 8) left = window.innerWidth - rect.width - 8;
+    if (top + rect.height > window.innerHeight - 8) top = window.innerHeight - rect.height - 8;
+    menu.style.left = left + 'px';
+    menu.style.top = top + 'px';
+
+    // Close on click outside or Escape
+    const closeMenu = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener('mousedown', closeMenu);
+        document.removeEventListener('keydown', escClose);
+      }
+    };
+    const escClose = (ev) => {
+      if (ev.key === 'Escape') {
+        menu.remove();
+        document.removeEventListener('mousedown', closeMenu);
+        document.removeEventListener('keydown', escClose);
+      }
+    };
+    setTimeout(() => {
+      document.addEventListener('mousedown', closeMenu);
+      document.addEventListener('keydown', escClose);
+    }, 0);
+  });
 }
 
 // ─── Internal Clipboard System ─────────────────────
@@ -869,46 +1261,427 @@ function getSelectionHtml() {
   return div.innerHTML;
 }
 
+/** Extract plain text from HTML (for cross-page copy where sel.toString() fails) */
+function htmlToPlainText(html) {
+  const div = document.createElement('div');
+  div.innerHTML = html;
+  // Replace block-level elements with newlines
+  div.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, tr, li').forEach(el => {
+    el.insertAdjacentText('afterend', '\n');
+  });
+  div.querySelectorAll('br').forEach(el => {
+    el.replaceWith('\n');
+  });
+  div.querySelectorAll('td, th').forEach((el, i) => {
+    if (el.nextElementSibling) el.insertAdjacentText('afterend', '\t');
+  });
+  return div.textContent?.replace(/\n{3,}/g, '\n\n').trim() || '';
+}
+
 // insertTextAtCursor removed — all text insertion must go through WASM to maintain model consistency
 
-// ─── E2.2: Parse clipboard HTML into structured runs for WASM ─────
-// Converts HTML from clipboard (Google Docs, Word, LibreOffice, etc.) into
-// the JSON format expected by paste_formatted_runs_json:
-// { paragraphs: [{ runs: [{ text, bold, italic, ... }] }] }
+// ─── E2.2: Parse clipboard HTML into structured content for WASM ─────
+// Returns { elements: [ {type:'paragraph', runs:[...], ...}, {type:'image', src, width, height}, {type:'table', rows:[...]} ] }
 function parseClipboardHtml(html) {
   try {
+    // Strip MS Office conditional comments (<!--[if ...]>...<![endif]-->)
+    // and XML processing instructions that can confuse parsing
+    let cleaned = html
+      .replace(/<!--\[if[\s\S]*?<!\[endif\]-->/gi, '')
+      .replace(/<!\[if[\s\S]*?<!\[endif\]>/gi, '')
+      .replace(/<\?xml[\s\S]*?\?>/gi, '')
+      .replace(/<o:p>[\s\S]*?<\/o:p>/gi, '');
+
     const parser = new DOMParser();
-    const doc = parser.parseFromString(html, 'text/html');
+    const doc = parser.parseFromString(cleaned, 'text/html');
     const body = doc.body;
     if (!body || !body.childNodes.length) return null;
 
-    const paragraphs = [];
-    // Walk top-level block elements
-    const blocks = body.querySelectorAll('p, h1, h2, h3, h4, h5, h6, div, li, tr');
-    if (blocks.length === 0) {
-      // No block elements — treat entire body as one paragraph
-      const runs = extractRunsFromElement(body);
-      if (runs.length > 0) paragraphs.push({ runs });
-    } else {
-      for (const block of blocks) {
-        // Skip nested blocks (e.g., div inside p)
-        if (block.closest('li') && block.tagName !== 'LI') continue;
-        if (block.closest('td') && block.tagName !== 'TD' && block.tagName !== 'TR') continue;
-        const runs = extractRunsFromElement(block);
-        if (runs.length > 0) paragraphs.push({ runs });
-      }
-    }
+    // Google Docs wraps pasted content in a <b> with id="docs-internal-guid-..."
+    // Unwrap it so the actual paragraphs inside get processed correctly
+    const gdocsWrapper = body.querySelector('b[id^="docs-internal-guid-"]');
+    const walkRoot = gdocsWrapper || body;
 
-    if (paragraphs.length === 0) {
-      // Last resort: extract all text
+    // Remove style tags (MS Word injects <style> blocks into clipboard HTML)
+    walkRoot.querySelectorAll('style').forEach(s => s.remove());
+
+    const elements = [];
+
+    // Walk all top-level children
+    walkBlockElements(walkRoot, elements);
+
+    if (elements.length === 0) {
+      // Fallback: treat body as a single paragraph with formatted inline content
+      const runs = extractRunsFromElement(walkRoot);
+      if (runs.length > 0) {
+        return { elements: [{ type: 'paragraph', runs }] };
+      }
+      // Last resort: extract all text as plain
       const text = body.textContent || '';
-      if (text) return { paragraphs: [{ runs: [{ text }] }] };
+      if (text) return { elements: [{ type: 'paragraph', runs: [{ text }] }] };
       return null;
     }
 
-    return { paragraphs };
+    return { elements };
   } catch (_) {
     return null;
+  }
+}
+
+/** Walk block-level children and produce structured elements */
+function walkBlockElements(container, elements) {
+  for (const child of container.childNodes) {
+    if (child.nodeType === 3) {
+      // Text node at top level
+      const text = child.textContent;
+      if (text && text.trim()) {
+        elements.push({ type: 'paragraph', runs: [{ text }] });
+      }
+      continue;
+    }
+    if (child.nodeType !== 1) continue;
+    const tag = child.tagName.toLowerCase();
+
+    // Skip MS Office namespace elements, style/meta/link tags
+    if (tag.includes(':') || tag === 'style' || tag === 'meta' || tag === 'link' || tag === 'script') continue;
+
+    // Inline-only elements at block level (span, b, i, a, etc.) — treat as paragraph
+    if (/^(span|b|strong|i|em|u|a|font|mark|small|big|code|kbd|abbr|cite|q|var|samp)$/.test(tag)) {
+      const runs = extractRunsFromElement(child);
+      if (runs.length > 0) {
+        const para = { type: 'paragraph', runs };
+        elements.push(para);
+      }
+      continue;
+    }
+
+    // Images
+    if (tag === 'img') {
+      const imgEl = extractImageElement(child);
+      if (imgEl) elements.push(imgEl);
+      continue;
+    }
+
+    // Tables
+    if (tag === 'table') {
+      const tbl = extractTableElement(child);
+      if (tbl) elements.push(tbl);
+      continue;
+    }
+
+    // Block elements that contain paragraphs (divs, sections)
+    if (tag === 'div' || tag === 'section' || tag === 'article' || tag === 'main') {
+      // Check if it contains block children or is just a wrapper for inline content
+      const hasBlocks = child.querySelector('p, h1, h2, h3, h4, h5, h6, div, table, img, ul, ol, li');
+      if (hasBlocks) {
+        walkBlockElements(child, elements);
+      } else {
+        const runs = extractRunsFromElement(child);
+        if (runs.length > 0) {
+          const para = { type: 'paragraph', runs };
+          extractParagraphFormat(child, para);
+          elements.push(para);
+        }
+      }
+      continue;
+    }
+
+    // Lists
+    if (tag === 'ul' || tag === 'ol') {
+      const items = child.querySelectorAll(':scope > li');
+      items.forEach((li, idx) => {
+        // Check for images inside list items
+        const imgs = li.querySelectorAll('img');
+        const runs = extractRunsFromElement(li);
+        if (runs.length > 0) {
+          elements.push({ type: 'paragraph', runs });
+        }
+        imgs.forEach(img => {
+          const imgEl = extractImageElement(img);
+          if (imgEl) elements.push(imgEl);
+        });
+      });
+      continue;
+    }
+
+    // Paragraphs and headings
+    if (/^(p|h[1-6])$/.test(tag)) {
+      // Check for images inside the paragraph
+      const imgs = child.querySelectorAll('img');
+      const runs = extractRunsFromElement(child);
+      if (runs.length > 0) {
+        const para = { type: 'paragraph', runs };
+        extractParagraphFormat(child, para);
+        elements.push(para);
+      }
+      // Add any images found inside the paragraph as separate elements
+      imgs.forEach(img => {
+        const imgEl = extractImageElement(img);
+        if (imgEl) elements.push(imgEl);
+      });
+      continue;
+    }
+
+    // Horizontal rules
+    if (tag === 'hr') {
+      elements.push({ type: 'hr' });
+      continue;
+    }
+
+    // Fallback: treat as paragraph
+    const runs = extractRunsFromElement(child);
+    if (runs.length > 0) {
+      const para = { type: 'paragraph', runs };
+      extractParagraphFormat(child, para);
+      elements.push(para);
+    }
+  }
+}
+
+/** Extract image data from an <img> element */
+function extractImageElement(img) {
+  // Prefer getAttribute to avoid URL resolution by DOMParser
+  const src = img.getAttribute('src') || img.src;
+  if (!src) return null;
+  const style = img.style || {};
+  let width = parseFloat(style.width) || img.naturalWidth || img.width || 200;
+  let height = parseFloat(style.height) || img.naturalHeight || img.height || 200;
+  // Convert px to pt if needed
+  if (style.width && style.width.endsWith('px')) width = width * 0.75;
+  else if (style.width && style.width.endsWith('pt')) { /* already pt */ }
+  if (style.height && style.height.endsWith('px')) height = height * 0.75;
+  else if (style.height && style.height.endsWith('pt')) { /* already pt */ }
+  const alt = img.alt || '';
+  return { type: 'image', src, width, height, alt };
+}
+
+/** Extract table structure from a <table> element */
+function extractTableElement(tableEl) {
+  const rows = [];
+  const trs = tableEl.querySelectorAll('tr');
+  for (const tr of trs) {
+    const cells = [];
+    for (const td of tr.querySelectorAll('td, th')) {
+      cells.push(td.textContent || '');
+    }
+    if (cells.length > 0) rows.push(cells);
+  }
+  if (rows.length === 0) return null;
+  return { type: 'table', rows };
+}
+
+/** Paste structured content (paragraphs, images, tables) into the document */
+function pasteStructuredContent(doc, info, parsed, page) {
+  const elements = parsed.elements;
+  if (!elements || elements.length === 0) return;
+
+  // Collect consecutive paragraph runs and batch-paste them
+  let lastNodeId = info.startNodeId;
+  let firstParaHandled = false;
+
+  // Helper: find a body-level parent for insert_image/insert_table/insert_hr
+  // (these WASM methods require a body-level node)
+  const getBodyNodeId = (nodeId) => {
+    // If this node is in body, return it. Otherwise find the closest body-level ancestor.
+    try {
+      const el = page.querySelector(`[data-node-id="${nodeId}"]`);
+      if (!el) return nodeId;
+      // Walk up to find a body-level node (direct child of .page-content)
+      let n = el;
+      while (n && n.parentElement) {
+        if (n.parentElement.classList?.contains('page-content') ||
+            n.parentElement.id === 'pageContainer') {
+          return n.dataset?.nodeId || nodeId;
+        }
+        n = n.parentElement;
+      }
+    } catch (_) {}
+    return nodeId;
+  };
+
+  for (let i = 0; i < elements.length; i++) {
+    const el = elements[i];
+
+    if (el.type === 'paragraph') {
+      try {
+        if (!firstParaHandled) {
+          // First batch: collect all consecutive paragraphs
+          firstParaHandled = true;
+          const textParas = [];
+          let j = i;
+          while (j < elements.length && elements[j].type === 'paragraph') {
+            textParas.push(elements[j]);
+            j++;
+          }
+          if (textParas.length > 0) {
+            const pasteJson = JSON.stringify({ paragraphs: textParas.map(p => ({ runs: p.runs || [], ...extractParaFmtForJson(p) })) });
+            doc.paste_formatted_runs_json(info.startNodeId, info.startOffset, pasteJson);
+            broadcastOp({ action: 'pasteFormattedRuns', nodeId: info.startNodeId, offset: info.startOffset, runsJson: pasteJson });
+            i = j - 1; // skip pasted paragraphs
+          }
+          // After paste, get fresh last paragraph ID from DOM
+          renderDocument();
+          lastNodeId = findLastParagraphId(page) || info.startNodeId;
+        } else {
+          // Subsequent paragraphs after non-paragraph elements
+          const bodyId = getBodyNodeId(lastNodeId);
+          const text = el.runs ? el.runs.map(r => r.text).join('') : '';
+          // Split at end of last paragraph to insert a new one
+          const lastEl = page.querySelector(`[data-node-id="${bodyId}"]`);
+          if (lastEl) {
+            const lastLen = Array.from(getEditableText(lastEl)).length;
+            const newId = doc.split_paragraph(bodyId, lastLen);
+            if (text) doc.insert_text_in_paragraph(newId, 0, text);
+            lastNodeId = newId;
+          }
+        }
+      } catch (e) { console.warn('paste paragraph:', e); }
+      continue;
+    }
+
+    if (!firstParaHandled) {
+      // Need a paragraph before we can insert non-paragraph elements
+      firstParaHandled = true;
+    }
+
+    if (el.type === 'image') {
+      try {
+        const imgData = dataUrlToBytes(el.src);
+        if (imgData) {
+          const bodyId = getBodyNodeId(lastNodeId);
+          const newId = doc.insert_image(bodyId, imgData.bytes, imgData.contentType, el.width || 200, el.height || 200);
+          if (el.alt) {
+            try { doc.set_image_alt_text(newId, el.alt); } catch (_) {}
+          }
+          lastNodeId = newId;
+        }
+      } catch (e) { console.warn('paste image:', e); }
+      continue;
+    }
+
+    if (el.type === 'table') {
+      try {
+        const bodyId = getBodyNodeId(lastNodeId);
+        const rows = el.rows.length;
+        const cols = el.rows[0] ? el.rows[0].length : 1;
+        const tableId = doc.insert_table(bodyId, rows, cols);
+        const dims = JSON.parse(doc.get_table_dimensions(tableId));
+        for (let r = 0; r < el.rows.length && r < dims.rows; r++) {
+          for (let c = 0; c < el.rows[r].length && c < dims.cols; c++) {
+            try {
+              const cellId = doc.get_cell_id(tableId, r, c);
+              if (cellId && el.rows[r][c]) {
+                doc.set_cell_text(cellId, el.rows[r][c]);
+              }
+            } catch (_) {}
+          }
+        }
+        lastNodeId = tableId;
+      } catch (e) { console.warn('paste table:', e); }
+      continue;
+    }
+
+    if (el.type === 'hr') {
+      try {
+        const bodyId = getBodyNodeId(lastNodeId);
+        const newId = doc.insert_horizontal_rule(bodyId);
+        lastNodeId = newId;
+      } catch (e) { console.warn('paste hr:', e); }
+      continue;
+    }
+  }
+}
+
+/** Extract paragraph format fields into a flat object for JSON */
+function extractParaFmtForJson(para) {
+  const fmt = {};
+  if (para.alignment) fmt.alignment = para.alignment;
+  if (para.spacingBefore) fmt.spacingBefore = para.spacingBefore;
+  if (para.spacingAfter) fmt.spacingAfter = para.spacingAfter;
+  if (para.lineSpacing) fmt.lineSpacing = para.lineSpacing;
+  if (para.indentLeft) fmt.indentLeft = para.indentLeft;
+  if (para.indentRight) fmt.indentRight = para.indentRight;
+  if (para.indentFirstLine) fmt.indentFirstLine = para.indentFirstLine;
+  if (para.headingLevel) fmt.headingLevel = para.headingLevel;
+  return fmt;
+}
+
+/** Convert a data URL to { bytes: Uint8Array, contentType: string } */
+function dataUrlToBytes(dataUrl) {
+  if (!dataUrl) return null;
+  // Handle data URLs
+  const match = dataUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (match) {
+    const contentType = match[1];
+    const b64 = match[2];
+    const binary = atob(b64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return { bytes, contentType };
+  }
+  return null;
+}
+
+/** Find the last paragraph node ID in the editor */
+function findLastParagraphId(page) {
+  const pages = state.pageElements.length > 0 ? state.pageElements : [page];
+  for (let i = pages.length - 1; i >= 0; i--) {
+    const content = pages[i].querySelector('.page-content') || pages[i];
+    const nodes = content.querySelectorAll(':scope > [data-node-id]');
+    if (nodes.length > 0) return nodes[nodes.length - 1].dataset.nodeId;
+  }
+  return null;
+}
+
+/** Extract paragraph-level formatting from a block element. */
+function extractParagraphFormat(block, para) {
+  const tag = block.tagName.toLowerCase();
+  // Heading level
+  const hMatch = tag.match(/^h([1-6])$/);
+  if (hMatch) para.headingLevel = parseInt(hMatch[1]);
+
+  const style = block.style;
+  if (!style) return;
+
+  // Text alignment
+  if (style.textAlign) {
+    const align = style.textAlign.toLowerCase();
+    if (['left', 'center', 'right', 'justify'].includes(align)) {
+      para.alignment = align;
+    }
+  }
+
+  // Spacing (margins → paragraph spacing in pt)
+  if (style.marginTop) {
+    const v = parseFloat(style.marginTop);
+    if (v > 0) para.spacingBefore = style.marginTop.endsWith('px') ? v * 0.75 : v;
+  }
+  if (style.marginBottom) {
+    const v = parseFloat(style.marginBottom);
+    if (v > 0) para.spacingAfter = style.marginBottom.endsWith('px') ? v * 0.75 : v;
+  }
+
+  // Line spacing
+  if (style.lineHeight) {
+    const lh = style.lineHeight;
+    if (lh === '1.5' || lh === '150%') para.lineSpacing = '1.5';
+    else if (lh === '2' || lh === '200%') para.lineSpacing = '2';
+  }
+
+  // Indentation
+  if (style.paddingLeft || style.marginLeft) {
+    const raw = style.paddingLeft || style.marginLeft;
+    const v = parseFloat(raw);
+    if (v > 0) para.indentLeft = raw.endsWith('px') ? v * 0.75 : v;
+  }
+  if (style.paddingRight || style.marginRight) {
+    const raw = style.paddingRight || style.marginRight;
+    const v = parseFloat(raw);
+    if (v > 0) para.indentRight = raw.endsWith('px') ? v * 0.75 : v;
+  }
+  if (style.textIndent) {
+    const v = parseFloat(style.textIndent);
+    if (v !== 0) para.indentFirstLine = style.textIndent.endsWith('px') ? v * 0.75 : v;
   }
 }
 
@@ -943,11 +1716,14 @@ function walkInline(node, inherited, runs) {
   // Skip non-inline block elements nested inside (we handle blocks at top level)
   const tag = node.tagName.toLowerCase();
 
+  // Skip MS Office namespace elements and empty marker elements
+  if (tag.includes(':') || tag === 'meta' || tag === 'link' || tag === 'style') return;
+
   // Build formatting from this element
   const fmt = { ...inherited };
   if (tag === 'b' || tag === 'strong') fmt.bold = true;
   if (tag === 'i' || tag === 'em') fmt.italic = true;
-  if (tag === 'u') fmt.underline = true;
+  if (tag === 'u' || tag === 'ins') fmt.underline = true;
   if (tag === 's' || tag === 'strike' || tag === 'del') fmt.strikethrough = true;
   if (tag === 'sup') fmt.superscript = true;
   if (tag === 'sub') fmt.subscript = true;
@@ -960,16 +1736,22 @@ function walkInline(node, inherited, runs) {
   // Parse inline styles
   const style = node.style;
   if (style) {
-    if (style.fontWeight === 'bold' || parseInt(style.fontWeight) >= 700) fmt.bold = true;
+    const fw = style.fontWeight;
+    if (fw === 'bold' || fw === 'bolder' || (parseInt(fw) >= 700 && !isNaN(parseInt(fw)))) fmt.bold = true;
+    // Allow style to override tag-based bold (e.g. Google Docs <b> with font-weight:normal)
+    if (fw === 'normal' || fw === '400') fmt.bold = inherited.bold || false;
     if (style.fontStyle === 'italic') fmt.italic = true;
-    if (style.textDecoration?.includes('underline')) fmt.underline = true;
-    if (style.textDecoration?.includes('line-through')) fmt.strikethrough = true;
+    if (style.fontStyle === 'normal' && (tag === 'i' || tag === 'em')) fmt.italic = false;
+    const td = style.textDecoration || style.textDecorationLine || '';
+    if (td.includes('underline')) fmt.underline = true;
+    if (td.includes('line-through')) fmt.strikethrough = true;
     if (style.fontSize) {
       const size = parseFloat(style.fontSize);
       if (size > 0) {
-        // Convert px to pt (rough: 1pt ≈ 1.333px)
+        // Convert px to pt (1pt = 1.333px)
         if (style.fontSize.endsWith('px')) fmt.fontSize = Math.round(size * 0.75 * 10) / 10;
         else if (style.fontSize.endsWith('pt')) fmt.fontSize = size;
+        else if (style.fontSize.endsWith('em') || style.fontSize.endsWith('rem')) fmt.fontSize = Math.round(size * 12);
       }
     }
     if (style.fontFamily) {
@@ -978,8 +1760,22 @@ function walkInline(node, inherited, runs) {
     }
     if (style.color) {
       const hex = colorToHex(style.color);
-      if (hex) fmt.color = hex;
+      if (hex && hex !== '000000') fmt.color = hex;
     }
+    if (style.backgroundColor) {
+      const hex = colorToHex(style.backgroundColor);
+      if (hex && hex !== 'FFFFFF' && hex !== 'TRANSPARENT') fmt.highlightColor = hex;
+    }
+    if (style.verticalAlign === 'super') fmt.superscript = true;
+    if (style.verticalAlign === 'sub') fmt.subscript = true;
+  }
+
+  // Check for class-based formatting (some editors use classes)
+  const cls = node.className || '';
+  if (typeof cls === 'string') {
+    if (cls.includes('bold') || cls.includes('font-weight-bold')) fmt.bold = true;
+    if (cls.includes('italic')) fmt.italic = true;
+    if (cls.includes('underline')) fmt.underline = true;
   }
 
   for (const child of node.childNodes) {
@@ -992,9 +1788,12 @@ function sameFormatting(a, b) {
     !!a.italic === !!b.italic &&
     !!a.underline === !!b.underline &&
     !!a.strikethrough === !!b.strikethrough &&
+    !!a.superscript === !!b.superscript &&
+    !!a.subscript === !!b.subscript &&
     (a.fontSize || null) === (b.fontSize || null) &&
     (a.fontFamily || null) === (b.fontFamily || null) &&
-    (a.color || null) === (b.color || null);
+    (a.color || null) === (b.color || null) &&
+    (a.highlightColor || null) === (b.highlightColor || null);
 }
 
 function colorToHex(cssColor) {
@@ -1017,19 +1816,53 @@ function colorToHex(cssColor) {
 }
 
 // Place cursor at end of pasted content
-function placeCursorAfterPaste(page, text) {
-  const lines = text.split('\n');
-  const lastLine = lines[lines.length - 1];
-  const allEls = Array.from(page.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]'));
-  let targetEl = null;
-  for (let i = allEls.length - 1; i >= 0; i--) {
-    if ((allEls[i].textContent || '').endsWith(lastLine)) {
-      targetEl = allEls[i];
-      break;
+// pasteNodeId + pasteOffset: where paste started
+function placeCursorAfterPaste(page, text, pasteNodeId, pasteOffset) {
+  // Helper to find element by node ID across all pages
+  const findNodeEl = (nodeId) => {
+    // Search across all pages, not just one
+    for (const pageEl of (state.pageElements.length > 0 ? state.pageElements : [page])) {
+      const content = pageEl.querySelector?.('.page-content') || pageEl;
+      const el = content.querySelector(`[data-node-id="${nodeId}"]`);
+      if (el) return el;
+    }
+    return page.querySelector(`[data-node-id="${nodeId}"]`);
+  };
+
+  // Try to find where pasted content ends by using WASM paragraph list
+  if (pasteNodeId && state.doc) {
+    try {
+      const allIds = JSON.parse(state.doc.paragraph_ids_json());
+      const startIdx = allIds.indexOf(pasteNodeId);
+      if (startIdx >= 0) {
+        const newlineCount = text ? (text.match(/\n/g) || []).length : 0;
+        const targetIdx = Math.min(startIdx + newlineCount, allIds.length - 1);
+        const targetId = allIds[targetIdx];
+        const el = findNodeEl(targetId);
+        if (el) {
+          const content = el.closest('.page-content');
+          if (content) content.focus();
+          const len = Array.from(getEditableText(el)).length;
+          setCursorAtOffset(el, len);
+          return;
+        }
+      }
+    } catch (_) {}
+  }
+  // Fallback: place at end of last paragraph across all pages
+  const pages = state.pageElements.length > 0 ? state.pageElements : [page];
+  for (let i = pages.length - 1; i >= 0; i--) {
+    const content = pages[i].querySelector?.('.page-content') || pages[i];
+    const nodes = content.querySelectorAll(':scope > [data-node-id]');
+    if (nodes.length > 0) {
+      const lastEl = nodes[nodes.length - 1];
+      const pc = lastEl.closest('.page-content');
+      if (pc) pc.focus();
+      const len = Array.from(getEditableText(lastEl)).length;
+      setCursorAtOffset(lastEl, len);
+      return;
     }
   }
-  if (!targetEl && allEls.length > 0) targetEl = allEls[allEls.length - 1];
-  if (targetEl) setCursorAtOffset(targetEl, [...(targetEl.textContent || '')].length);
 }
 
 function doUndo() {
@@ -1061,6 +1894,8 @@ function doUndo() {
 
 function doRedo() {
   if (!state.doc) return;
+  clearTimeout(state.syncTimer);
+  syncAllText();
   try {
     state.doc.redo();
     // E3.2: Move undo history position back
@@ -1073,37 +1908,51 @@ function doRedo() {
 }
 
 function doCut() {
-  const info = getSelectionInfo();
+  // Use select-all info if active, otherwise resolve from DOM
+  const info = state._selectAll ? state.lastSelInfo : getSelectionInfo();
   if (!info || info.collapsed || !state.doc) return;
+
+  const wasSelectAll = state._selectAll;
+  const isCrossPage = !wasSelectAll && info.startNodeId !== info.endNodeId &&
+    info.startEl?.closest?.('.page-content') !== info.endEl?.closest?.('.page-content');
+  clearSelectAll();
 
   // E2.3: Copy via WASM then delete
   syncAllText();
 
   // Generate clean HTML from WASM model
-  const sel = window.getSelection();
-  if (sel) {
-    const text = sel.toString();
-    let html = '';
-    try {
-      html = state.doc.export_selection_html(
-        info.startNodeId, info.startOffset,
-        info.endNodeId, info.endOffset
-      );
-    } catch (err) {
-      console.warn('WASM export_selection_html failed in cut, falling back:', err);
-      html = getSelectionHtml();
-    }
-    try {
-      const blob = new Blob([html], { type: 'text/html' });
-      const textBlob = new Blob([text], { type: 'text/plain' });
-      navigator.clipboard.write([
-        new ClipboardItem({ 'text/html': blob, 'text/plain': textBlob })
-      ]).catch(() => {
-        navigator.clipboard.writeText(text).catch(() => {});
-      });
-    } catch (_) {
+  let html = '';
+  try {
+    html = state.doc.export_selection_html(
+      info.startNodeId, info.startOffset,
+      info.endNodeId, info.endOffset
+    );
+  } catch (err) {
+    console.warn('WASM export_selection_html failed in cut, falling back:', err);
+    html = getSelectionHtml();
+  }
+
+  // Get text: from WASM if was select-all, extract from HTML for cross-page, else from selection
+  let text = '';
+  if (wasSelectAll) {
+    try { text = state.doc.to_plain_text(); } catch (_) { text = window.getSelection()?.toString() || ''; }
+  } else if (isCrossPage && html) {
+    text = htmlToPlainText(html);
+  } else {
+    text = window.getSelection()?.toString() || '';
+  }
+
+  // Write to clipboard
+  try {
+    const blob = new Blob([html], { type: 'text/html' });
+    const textBlob = new Blob([text], { type: 'text/plain' });
+    navigator.clipboard.write([
+      new ClipboardItem({ 'text/html': blob, 'text/plain': textBlob })
+    ]).catch(() => {
       navigator.clipboard.writeText(text).catch(() => {});
-    }
+    });
+  } catch (_) {
+    navigator.clipboard.writeText(text).catch(() => {});
   }
 
   // Delete the selection
@@ -1129,30 +1978,43 @@ function saveToLocal() {
     syncAllText();
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
-    const req = indexedDB.open('FolioAutosave', 2);
-    req.onupgradeneeded = () => {
-      const db = req.result;
-      if (!db.objectStoreNames.contains('documents')) {
-        db.createObjectStore('documents', { keyPath: 'id' });
-      }
-      if (!db.objectStoreNames.contains('versions')) {
-        db.createObjectStore('versions', { keyPath: 'id', autoIncrement: true });
-      }
-    };
-    req.onsuccess = () => {
-      const db = req.result;
+    const now = Date.now();
+    // CRC32 checksum for integrity verification
+    const checksum = _crc32Local(bytes);
+    const commentReplies = state.commentReplies && state.commentReplies.length > 0
+      ? JSON.stringify(state.commentReplies) : null;
+    openAutosaveDB().then(db => {
       const tx = db.transaction('documents', 'readwrite');
-      tx.objectStore('documents').put({ id: 'current', name, bytes, timestamp: Date.now() });
+      const store = tx.objectStore('documents');
+      store.put({ id: 'current', name, bytes, timestamp: now, tabId: state.tabId, commentReplies, checksum });
+      state.lastSaveTimestamp = now;
       state.dirty = false;
       updateDirtyIndicator();
       const info = $('statusInfo');
       info._userMsg = true;
       info.textContent = 'Saved';
       setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
-    };
+    }).catch(e => console.error('save:', e));
     // Also save a version snapshot on manual save
     saveVersion('Manual save');
   } catch (e) { console.error('save:', e); }
+}
+
+// Lightweight CRC32 for manual save (same algorithm as file.js)
+const _crc32LocalTable = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+function _crc32Local(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) crc = _crc32LocalTable[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
 
 // ─── Slash Command Menu ─────────────────────────────
@@ -1292,11 +2154,11 @@ function executeSlashCommand(cmdId) {
       broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: len, key, value });
     };
     switch (cmdId) {
-      case 'heading1': doc.set_heading_level(nodeId, 1); broadcastOp({ action: 'setHeading', nodeId, level: 1 }); renderDocument(); break;
-      case 'heading2': doc.set_heading_level(nodeId, 2); broadcastOp({ action: 'setHeading', nodeId, level: 2 }); renderDocument(); break;
-      case 'heading3': doc.set_heading_level(nodeId, 3); broadcastOp({ action: 'setHeading', nodeId, level: 3 }); renderDocument(); break;
-      case 'bullet':   doc.set_list_format(nodeId, 'bullet', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'bullet', level: 0 }); renderDocument(); break;
-      case 'numbered': doc.set_list_format(nodeId, 'decimal', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'decimal', level: 0 }); renderDocument(); break;
+      case 'heading1': doc.set_heading_level(nodeId, 1); broadcastOp({ action: 'setHeading', nodeId, level: 1 }); renderDocument(); restoreCursorAfterRender(nodeId); break;
+      case 'heading2': doc.set_heading_level(nodeId, 2); broadcastOp({ action: 'setHeading', nodeId, level: 2 }); renderDocument(); restoreCursorAfterRender(nodeId); break;
+      case 'heading3': doc.set_heading_level(nodeId, 3); broadcastOp({ action: 'setHeading', nodeId, level: 3 }); renderDocument(); restoreCursorAfterRender(nodeId); break;
+      case 'bullet':   doc.set_list_format(nodeId, 'bullet', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'bullet', level: 0 }); renderDocument(); restoreCursorAfterRender(nodeId); break;
+      case 'numbered': doc.set_list_format(nodeId, 'decimal', 0); broadcastOp({ action: 'setListFormat', nodeId, format: 'decimal', level: 0 }); renderDocument(); restoreCursorAfterRender(nodeId); break;
       case 'table':
         doc.insert_table(nodeId, 3, 3);
         broadcastOp({ action: 'insertTable', afterNodeId: nodeId, rows: 3, cols: 3 });
@@ -1318,7 +2180,7 @@ function executeSlashCommand(cmdId) {
       case 'quote': {
         doc.set_heading_level(nodeId, 0);
         broadcastOp({ action: 'setHeading', nodeId, level: 0 });
-        const textLen = el ? Array.from(el.textContent || '').length : 0;
+        const textLen = el ? Array.from(getEditableText(el)).length : 0;
         if (textLen > 0) {
           bcastFmt('italic', 'true', textLen);
           bcastFmt('color', '666666', textLen);
@@ -1329,7 +2191,7 @@ function executeSlashCommand(cmdId) {
       case 'code': {
         doc.set_heading_level(nodeId, 0);
         broadcastOp({ action: 'setHeading', nodeId, level: 0 });
-        const codeLen = el ? Array.from(el.textContent || '').length : 0;
+        const codeLen = el ? Array.from(getEditableText(el)).length : 0;
         if (codeLen > 0) {
           bcastFmt('fontFamily', 'Courier New', codeLen);
           bcastFmt('fontSize', '11', codeLen);
@@ -1352,6 +2214,72 @@ export { closeSlashMenu };
 
 // Expose for toolbar buttons
 export { doUndo, doRedo };
+
+// ─── Restore cursor after re-render ────────────────
+function restoreCursorAfterRender(nodeId) {
+  const page = $('pageContainer');
+  if (!page) return;
+  const el = page.querySelector(`[data-node-id="${nodeId}"]`);
+  if (el) setCursorAtStart(el);
+}
+
+// ─── Select All (cross-page) ────────────────────────
+function selectAll() {
+  const page = $('pageContainer');
+  if (!page || !state.doc) return;
+
+  // Collect all paragraph-level elements across all pages
+  const allNodes = [];
+  const pages = state.pageElements.length > 0 ? state.pageElements : [page];
+  for (const pageEl of pages) {
+    const content = pageEl.querySelector('.page-content') || pageEl;
+    content.querySelectorAll(':scope > [data-node-id]').forEach(el => allNodes.push(el));
+  }
+  if (allNodes.length === 0) return;
+
+  const firstEl = allNodes[0];
+  const lastEl = allNodes[allNodes.length - 1];
+  const lastLen = Array.from(getEditableText(lastEl)).length;
+
+  // Store synthetic full-document selection
+  state.lastSelInfo = {
+    startNodeId: firstEl.dataset.nodeId,
+    startOffset: 0,
+    endNodeId: lastEl.dataset.nodeId,
+    endOffset: lastLen,
+    collapsed: false,
+    startEl: firstEl,
+    endEl: lastEl,
+  };
+  state._selectAll = true;
+
+  // Visual: highlight ALL page-content areas and their child nodes across all pages
+  for (const pageEl of pages) {
+    const content = pageEl.querySelector('.page-content') || pageEl;
+    content.classList.add('select-all-highlight');
+    content.querySelectorAll('[data-node-id]').forEach(el => el.classList.add('select-all-highlight'));
+  }
+
+  // Set native selection on the first page for keyboard events to work
+  const firstContent = firstEl.closest('.page-content');
+  if (firstContent) {
+    try {
+      firstContent.focus();
+      const range = document.createRange();
+      range.selectNodeContents(firstContent);
+      const sel = window.getSelection();
+      sel.removeAllRanges(); sel.addRange(range);
+    } catch (_) {}
+  }
+}
+
+function clearSelectAll() {
+  state._selectAll = false;
+  const page = $('pageContainer');
+  if (page) {
+    page.querySelectorAll('.select-all-highlight').forEach(el => el.classList.remove('select-all-highlight'));
+  }
+}
 
 // E10.2: Zoom via keyboard (Ctrl+=/Ctrl+-/Ctrl+0)
 function adjustEditorZoom(delta) {

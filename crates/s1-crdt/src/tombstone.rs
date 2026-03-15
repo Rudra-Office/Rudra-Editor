@@ -91,6 +91,55 @@ impl TombstoneTracker {
     pub fn tombstoned_tree_nodes(&self) -> HashSet<NodeId> {
         self.tree_tombstones.keys().copied().collect()
     }
+
+    /// Total number of tombstones (text + tree).
+    pub fn total_count(&self) -> usize {
+        self.text_tombstones.len() + self.tree_tombstones.len()
+    }
+
+    /// Force-GC the oldest tombstones when the count exceeds `max_count`.
+    ///
+    /// This is a safety valve for when a slow replica prevents normal GC.
+    /// It removes the `excess` oldest tombstones (by their deleting OpId's
+    /// lamport timestamp), even if not all replicas have acknowledged them.
+    /// Returns the number of tombstones removed.
+    pub fn gc_excess(&mut self, max_count: usize) -> usize {
+        let total = self.total_count();
+        if total <= max_count {
+            return 0;
+        }
+        let excess = total - max_count;
+
+        // Collect all tombstones with their lamport timestamps for sorting
+        let mut all_tombstones: Vec<(u64, bool, (NodeId, OpId))> = Vec::new();
+
+        for (&(node_id, char_id), &deleted_by) in &self.text_tombstones {
+            all_tombstones.push((deleted_by.lamport, true, (node_id, char_id)));
+        }
+        for (&node_id, &deleted_by) in &self.tree_tombstones {
+            all_tombstones.push((
+                deleted_by.lamport,
+                false,
+                (node_id, OpId::new(0, 0)),
+            ));
+        }
+
+        // Sort by lamport timestamp (oldest first)
+        all_tombstones.sort_by_key(|(lamport, _, _)| *lamport);
+
+        // Remove the oldest `excess` tombstones
+        let mut removed = 0;
+        for (_, is_text, (node_id, char_id)) in all_tombstones.into_iter().take(excess) {
+            if is_text {
+                self.text_tombstones.remove(&(node_id, char_id));
+            } else {
+                self.tree_tombstones.remove(&node_id);
+            }
+            removed += 1;
+        }
+
+        removed
+    }
 }
 
 impl Default for TombstoneTracker {

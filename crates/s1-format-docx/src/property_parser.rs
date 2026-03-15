@@ -207,6 +207,26 @@ pub fn parse_paragraph_properties(reader: &mut Reader<&[u8]>) -> Result<Attribut
                         // Default run properties for the paragraph — skip for now
                         skip_to_end(reader)?;
                     }
+                    b"pPrChange" => {
+                        // Track changes — paragraph property change revision
+                        attrs.set(
+                            AttributeKey::RevisionType,
+                            AttributeValue::String("PropertyChange".into()),
+                        );
+                        if let Some(id) = get_attr(&e, b"id") {
+                            if let Ok(id_val) = id.parse::<i64>() {
+                                attrs.set(AttributeKey::RevisionId, AttributeValue::Int(id_val));
+                            }
+                        }
+                        if let Some(author) = get_attr(&e, b"author") {
+                            attrs.set(AttributeKey::RevisionAuthor, AttributeValue::String(author));
+                        }
+                        if let Some(date) = get_attr(&e, b"date") {
+                            attrs.set(AttributeKey::RevisionDate, AttributeValue::String(date));
+                        }
+                        // Skip the inner <w:pPr> (old formatting)
+                        skip_to_end(reader)?;
+                    }
                     _ => {
                         skip_to_end(reader)?;
                     }
@@ -310,6 +330,12 @@ pub fn parse_paragraph_properties(reader: &mut Reader<&[u8]>) -> Result<Attribut
                     b"bidi" => {
                         attrs.set(AttributeKey::Bidi, AttributeValue::Bool(is_toggle_on(&e)));
                     }
+                    b"suppressAutoHyphens" => {
+                        attrs.set(
+                            AttributeKey::SuppressAutoHyphens,
+                            AttributeValue::Bool(is_toggle_on(&e)),
+                        );
+                    }
                     b"shd" => {
                         // Paragraph shading/background color
                         if let Some(fill) = get_attr(&e, b"fill") {
@@ -348,6 +374,26 @@ pub fn parse_table_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap
                     b"tblBorders" => {
                         let borders = parse_borders(reader, b"tblBorders")?;
                         attrs.set(AttributeKey::TableBorders, AttributeValue::Borders(borders));
+                    }
+                    b"tblPrChange" => {
+                        // Track changes — table property change revision
+                        attrs.set(
+                            AttributeKey::RevisionType,
+                            AttributeValue::String("PropertyChange".into()),
+                        );
+                        if let Some(id) = get_attr(&e, b"id") {
+                            if let Ok(id_val) = id.parse::<i64>() {
+                                attrs.set(AttributeKey::RevisionId, AttributeValue::Int(id_val));
+                            }
+                        }
+                        if let Some(author) = get_attr(&e, b"author") {
+                            attrs.set(AttributeKey::RevisionAuthor, AttributeValue::String(author));
+                        }
+                        if let Some(date) = get_attr(&e, b"date") {
+                            attrs.set(AttributeKey::RevisionDate, AttributeValue::String(date));
+                        }
+                        // Skip the inner <w:tblPr> (old table properties)
+                        skip_to_end(reader)?;
                     }
                     _ => {
                         skip_to_end(reader)?;
@@ -398,6 +444,26 @@ pub fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap,
                     b"tcBorders" => {
                         let borders = parse_borders(reader, b"tcBorders")?;
                         attrs.set(AttributeKey::CellBorders, AttributeValue::Borders(borders));
+                    }
+                    b"tcPrChange" => {
+                        // Track changes — table cell property change revision
+                        attrs.set(
+                            AttributeKey::RevisionType,
+                            AttributeValue::String("PropertyChange".into()),
+                        );
+                        if let Some(id) = get_attr(&e, b"id") {
+                            if let Ok(id_val) = id.parse::<i64>() {
+                                attrs.set(AttributeKey::RevisionId, AttributeValue::Int(id_val));
+                            }
+                        }
+                        if let Some(author) = get_attr(&e, b"author") {
+                            attrs.set(AttributeKey::RevisionAuthor, AttributeValue::String(author));
+                        }
+                        if let Some(date) = get_attr(&e, b"date") {
+                            attrs.set(AttributeKey::RevisionDate, AttributeValue::String(date));
+                        }
+                        // Skip the inner <w:tcPr> (old cell properties)
+                        skip_to_end(reader)?;
                     }
                     _ => {
                         skip_to_end(reader)?;
@@ -462,6 +528,59 @@ pub fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap,
                 }
             }
             Ok(Event::End(e)) if e.local_name().as_ref() == b"tcPr" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(attrs)
+}
+
+/// Parse `<w:trPr>` — table row formatting properties.
+pub fn parse_row_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap, DocxError> {
+    let mut attrs = AttributeMap::new();
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) => {
+                let name = e.local_name().as_ref().to_vec();
+                match name.as_slice() {
+                    b"trPrChange" => {
+                        // Track changes — table row property change revision
+                        attrs.set(
+                            AttributeKey::RevisionType,
+                            AttributeValue::String("PropertyChange".into()),
+                        );
+                        if let Some(id) = get_attr(&e, b"id") {
+                            if let Ok(id_val) = id.parse::<i64>() {
+                                attrs.set(AttributeKey::RevisionId, AttributeValue::Int(id_val));
+                            }
+                        }
+                        if let Some(author) = get_attr(&e, b"author") {
+                            attrs.set(AttributeKey::RevisionAuthor, AttributeValue::String(author));
+                        }
+                        if let Some(date) = get_attr(&e, b"date") {
+                            attrs.set(AttributeKey::RevisionDate, AttributeValue::String(date));
+                        }
+                        // Skip the inner <w:trPr> (old row properties)
+                        skip_to_end(reader)?;
+                    }
+                    _ => {
+                        skip_to_end(reader)?;
+                    }
+                }
+            }
+            Ok(Event::Empty(e)) => {
+                if e.local_name().as_ref() == b"tblHeader" {
+                    // Row is a table header row
+                    attrs.set(
+                        AttributeKey::TableHeaderRow,
+                        AttributeValue::Bool(true),
+                    );
+                }
+            }
+            Ok(Event::End(e)) if e.local_name().as_ref() == b"trPr" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
             _ => {}
@@ -920,6 +1039,24 @@ mod tests {
         assert_eq!(attrs.get_string(&AttributeKey::StyleId), Some("Heading1"));
     }
 
+    #[test]
+    fn parse_suppress_auto_hyphens() {
+        let xml = r#"<w:pPr><w:suppressAutoHyphens/></w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        loop {
+            match reader.read_event() {
+                Ok(Event::Start(e)) if e.local_name().as_ref() == b"pPr" => break,
+                Ok(Event::Eof) => panic!("unexpected EOF"),
+                _ => {}
+            }
+        }
+        let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        assert_eq!(
+            attrs.get_bool(&AttributeKey::SuppressAutoHyphens),
+            Some(true)
+        );
+    }
+
     // ─── Table property tests ─────────────────────────────────────────
 
     fn skip_to_start(reader: &mut Reader<&[u8]>, tag: &[u8]) {
@@ -1115,5 +1252,56 @@ mod tests {
         skip_to_start(&mut reader, b"pPr");
         let attrs = parse_paragraph_properties(&mut reader).unwrap();
         assert!(attrs.get(&AttributeKey::ListInfo).is_none());
+    }
+
+    #[test]
+    fn parse_ppr_change() {
+        let xml = r#"<w:pPr><w:jc w:val="center"/><w:pPrChange w:id="10" w:author="Alice" w:date="2026-01-01T12:00:00Z"><w:pPr><w:jc w:val="left"/></w:pPr></w:pPrChange></w:pPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"pPr");
+        let attrs = parse_paragraph_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionType).as_deref(), Some("PropertyChange"));
+        assert_eq!(attrs.get_i64(&AttributeKey::RevisionId), Some(10));
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionAuthor).as_deref(), Some("Alice"));
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionDate).as_deref(), Some("2026-01-01T12:00:00Z"));
+        // Current alignment should still be parsed
+        assert_eq!(attrs.get_alignment(&AttributeKey::Alignment), Some(Alignment::Center));
+    }
+
+    #[test]
+    fn parse_tcpr_change() {
+        let xml = r#"<w:tcPr><w:tcW w:w="2880" w:type="dxa"/><w:tcPrChange w:id="20" w:author="Bob" w:date="2026-02-15T08:00:00Z"><w:tcPr><w:tcW w:w="1440" w:type="dxa"/></w:tcPr></w:tcPrChange></w:tcPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tcPr");
+        let attrs = parse_cell_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionType).as_deref(), Some("PropertyChange"));
+        assert_eq!(attrs.get_i64(&AttributeKey::RevisionId), Some(20));
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionAuthor).as_deref(), Some("Bob"));
+        // Cell width should still be parsed
+        assert!(attrs.get(&AttributeKey::CellWidth).is_some());
+    }
+
+    #[test]
+    fn parse_tblpr_change() {
+        let xml = r#"<w:tblPr><w:jc w:val="center"/><w:tblPrChange w:id="30" w:author="Carol" w:date="2026-03-10T10:00:00Z"><w:tblPr><w:jc w:val="left"/></w:tblPr></w:tblPrChange></w:tblPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"tblPr");
+        let attrs = parse_table_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionType).as_deref(), Some("PropertyChange"));
+        assert_eq!(attrs.get_i64(&AttributeKey::RevisionId), Some(30));
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionAuthor).as_deref(), Some("Carol"));
+        assert_eq!(attrs.get_alignment(&AttributeKey::TableAlignment), Some(Alignment::Center));
+    }
+
+    #[test]
+    fn parse_trpr_change() {
+        let xml = r#"<w:trPr><w:tblHeader/><w:trPrChange w:id="40" w:author="Dave" w:date="2026-03-12T14:00:00Z"><w:trPr/></w:trPrChange></w:trPr>"#;
+        let mut reader = Reader::from_str(xml);
+        skip_to_start(&mut reader, b"trPr");
+        let attrs = parse_row_properties(&mut reader).unwrap();
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionType).as_deref(), Some("PropertyChange"));
+        assert_eq!(attrs.get_i64(&AttributeKey::RevisionId), Some(40));
+        assert_eq!(attrs.get_string(&AttributeKey::RevisionAuthor).as_deref(), Some("Dave"));
+        assert_eq!(attrs.get_bool(&AttributeKey::TableHeaderRow), Some(true));
     }
 }

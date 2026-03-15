@@ -194,6 +194,43 @@ fn write_body(
                 close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
                 write_toc_odt(doc, child_id, &mut xml, auto_styles, counter, images);
             }
+            NodeType::PageBreak => {
+                close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
+                // Emit a paragraph with break-before page style
+                let style_name = get_or_create_auto_style(
+                    auto_styles,
+                    counter,
+                    AutoStyleKey {
+                        text_props: String::new(),
+                        para_props: r#"<style:paragraph-properties fo:break-before="page"/>"#
+                            .to_string(),
+                        cell_props: String::new(),
+                        family: "paragraph".to_string(),
+                    },
+                );
+                xml.push_str(&format!(
+                    r#"<text:p text:style-name="{}"/>"#,
+                    style_name
+                ));
+            }
+            NodeType::ColumnBreak => {
+                close_list_stack(&mut list_depth, &mut list_item_open, &mut xml);
+                let style_name = get_or_create_auto_style(
+                    auto_styles,
+                    counter,
+                    AutoStyleKey {
+                        text_props: String::new(),
+                        para_props: r#"<style:paragraph-properties fo:break-before="column"/>"#
+                            .to_string(),
+                        cell_props: String::new(),
+                        family: "paragraph".to_string(),
+                    },
+                );
+                xml.push_str(&format!(
+                    r#"<text:p text:style-name="{}"/>"#,
+                    style_name
+                ));
+            }
             _ => {}
         }
     }
@@ -374,6 +411,40 @@ fn write_paragraph_children(
                     ));
                 }
             }
+            NodeType::FootnoteRef => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                write_footnote(doc, child, xml, auto_styles, counter, images);
+            }
+            NodeType::EndnoteRef => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                write_endnote(doc, child, xml, auto_styles, counter, images);
+            }
+            NodeType::PageBreak => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                // ODF uses a paragraph with page-break style
+                // Inline page breaks inside paragraphs are not directly supported in ODF,
+                // but we can insert a soft page break marker
+            }
+            NodeType::ColumnBreak => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                // Column breaks are not directly expressible inline in ODF
+            }
+            NodeType::Drawing => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                // Emit raw XML if stored, otherwise skip
+                if let Some(raw) = child.attributes.get_string(&AttributeKey::ShapeRawXml) {
+                    xml.push_str(raw);
+                }
+            }
+            NodeType::Equation => {
+                close_hyperlink(&mut current_hyperlink_url, xml);
+                // Equations can be stored as raw source
+                if let Some(eq_src) = child.attributes.get_string(&AttributeKey::EquationSource) {
+                    xml.push_str("<text:span>[");
+                    xml.push_str(&escape_xml(eq_src));
+                    xml.push_str("]</text:span>");
+                }
+            }
             _ => {}
         }
     }
@@ -464,6 +535,107 @@ fn write_annotation_inline(doc: &DocumentModel, node_id: s1_model::NodeId, xml: 
         }
         _ => {}
     }
+}
+
+/// Write a footnote reference and its body as `<text:note>`.
+fn write_footnote(
+    doc: &DocumentModel,
+    ref_node: &s1_model::Node,
+    xml: &mut String,
+    auto_styles: &mut HashMap<AutoStyleKey, String>,
+    counter: &mut u32,
+    images: &mut Vec<ImageEntry>,
+) {
+    write_note(doc, ref_node, "footnote", NodeType::FootnoteBody, xml, auto_styles, counter, images);
+}
+
+/// Write an endnote reference and its body as `<text:note>`.
+fn write_endnote(
+    doc: &DocumentModel,
+    ref_node: &s1_model::Node,
+    xml: &mut String,
+    auto_styles: &mut HashMap<AutoStyleKey, String>,
+    counter: &mut u32,
+    images: &mut Vec<ImageEntry>,
+) {
+    write_note(doc, ref_node, "endnote", NodeType::EndnoteBody, xml, auto_styles, counter, images);
+}
+
+/// Write a footnote or endnote as `<text:note>`.
+#[allow(clippy::too_many_arguments)]
+fn write_note(
+    doc: &DocumentModel,
+    ref_node: &s1_model::Node,
+    note_class: &str,
+    body_type: NodeType,
+    xml: &mut String,
+    auto_styles: &mut HashMap<AutoStyleKey, String>,
+    counter: &mut u32,
+    images: &mut Vec<ImageEntry>,
+) {
+    let note_num_key = if note_class == "footnote" {
+        AttributeKey::FootnoteNumber
+    } else {
+        AttributeKey::EndnoteNumber
+    };
+
+    let note_number = ref_node
+        .attributes
+        .get(&note_num_key)
+        .and_then(|v| if let AttributeValue::Int(n) = v { Some(*n) } else { None })
+        .unwrap_or(1);
+
+    // Find the matching body node under the document root
+    let root_id = doc.root_id();
+    let root = match doc.node(root_id) {
+        Some(n) => n,
+        None => return,
+    };
+
+    let mut body_node = None;
+    for &child_id in &root.children {
+        let child = match doc.node(child_id) {
+            Some(n) => n,
+            None => continue,
+        };
+        if child.node_type == body_type {
+            let child_num = child
+                .attributes
+                .get(&note_num_key)
+                .and_then(|v| if let AttributeValue::Int(n) = v { Some(*n) } else { None })
+                .unwrap_or(0);
+            if child_num == note_number {
+                body_node = Some(child);
+                break;
+            }
+        }
+    }
+
+    xml.push_str(&format!(
+        r#"<text:note text:note-class="{}">"#,
+        note_class
+    ));
+    xml.push_str(&format!(
+        "<text:note-citation>{}</text:note-citation>",
+        note_number
+    ));
+    xml.push_str("<text:note-body>");
+
+    if let Some(body) = body_node {
+        for &para_id in &body.children {
+            if let Some(para) = doc.node(para_id) {
+                if para.node_type == NodeType::Paragraph {
+                    write_paragraph(doc, para_id, xml, auto_styles, counter, images);
+                }
+            }
+        }
+    } else {
+        // No body found — emit empty paragraph to be valid ODF
+        xml.push_str("<text:p/>");
+    }
+
+    xml.push_str("</text:note-body>");
+    xml.push_str("</text:note>");
 }
 
 /// Write a run as `<text:span>` (or bare text if no formatting).
@@ -751,20 +923,35 @@ fn write_table(
             cell_tag.push('>');
             xml.push_str(&cell_tag);
 
-            // Cell contents (paragraphs)
-            if cell.children.is_empty() {
-                // ODF requires at least one <text:p/> in a cell
-                xml.push_str("<text:p/>");
-            } else {
-                for &cc_id in &cell.children {
-                    let cc = match doc.node(cc_id) {
-                        Some(n) => n,
-                        None => continue,
-                    };
-                    if cc.node_type == NodeType::Paragraph {
+            // Cell contents — handle paragraphs, nested tables, and images.
+            // ODF requires at least one <text:p/> in every cell.
+            let mut cell_has_content = false;
+            for &cc_id in &cell.children {
+                let cc = match doc.node(cc_id) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                match cc.node_type {
+                    NodeType::Paragraph => {
                         write_paragraph(doc, cc_id, xml, auto_styles, counter, images);
+                        cell_has_content = true;
                     }
+                    NodeType::Table => {
+                        write_table(doc, cc_id, xml, auto_styles, counter, images, table_counter);
+                        cell_has_content = true;
+                    }
+                    NodeType::Image => {
+                        // Wrap standalone image in a <text:p> as required by ODF
+                        xml.push_str("<text:p>");
+                        write_image(doc, cc, xml, images);
+                        xml.push_str("</text:p>");
+                        cell_has_content = true;
+                    }
+                    _ => {}
                 }
+            }
+            if !cell_has_content {
+                xml.push_str("<text:p/>");
             }
 
             xml.push_str("</table:table-cell>");
@@ -777,6 +964,21 @@ fn write_table(
 }
 
 /// Get or create a paragraph-level auto-style. Returns `None` if no formatting needed.
+/// Get or create an auto-style from a pre-built `AutoStyleKey`.
+fn get_or_create_auto_style(
+    auto_styles: &mut HashMap<AutoStyleKey, String>,
+    counter: &mut u32,
+    key: AutoStyleKey,
+) -> String {
+    auto_styles
+        .entry(key)
+        .or_insert_with(|| {
+            *counter += 1;
+            format!("P{}", *counter)
+        })
+        .clone()
+}
+
 fn get_or_create_paragraph_auto_style(
     attrs: &AttributeMap,
     auto_styles: &mut HashMap<AutoStyleKey, String>,

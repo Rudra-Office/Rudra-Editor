@@ -4,6 +4,7 @@ import { renderDocument, syncAllText, renderPages, renderText, applyPageDimensio
 import { insertImage } from './images.js';
 import { renderRuler } from './ruler.js';
 import { broadcastOp } from './collab.js';
+import { showToast } from './toolbar-handlers.js';
 
 let detect_format_fn = null;
 
@@ -13,6 +14,54 @@ export function setDetectFormat(fn) { detect_format_fn = fn; }
 const AUTOSAVE_INTERVAL = 30000; // 30 seconds
 const DB_NAME = 'FolioAutosave';
 const DB_VERSION = 2;
+
+// ─── CRC32 Checksum ──────────────────────────────
+// Lightweight CRC32 for data integrity verification on save/load.
+const _crc32Table = (() => {
+  const t = new Uint32Array(256);
+  for (let i = 0; i < 256; i++) {
+    let c = i;
+    for (let j = 0; j < 8; j++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+    t[i] = c;
+  }
+  return t;
+})();
+
+function crc32(bytes) {
+  const data = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < data.length; i++) {
+    crc = _crc32Table[(crc ^ data[i]) & 0xFF] ^ (crc >>> 8);
+  }
+  return (crc ^ 0xFFFFFFFF) >>> 0;
+}
+
+// ─── BroadcastChannel Multi-Tab Coordination ─────
+let _saveChannel = null;
+try {
+  _saveChannel = new BroadcastChannel('folio-autosave');
+} catch (_) {
+  // BroadcastChannel not available (e.g., older browsers, file:// protocol)
+}
+
+if (_saveChannel) {
+  _saveChannel.onmessage = (e) => {
+    if (!e.data) return;
+    if (e.data.type === 'save-complete' && e.data.tabId !== state.tabId) {
+      // Another tab saved — update our timestamp so we don't overwrite
+      state.lastSaveTimestamp = Math.max(state.lastSaveTimestamp, e.data.timestamp);
+    }
+    if (e.data.type === 'tab-closing' && e.data.tabId !== state.tabId) {
+      // Another tab is closing — we may want to take over saving
+    }
+  };
+  // Notify other tabs when this tab closes
+  window.addEventListener('beforeunload', () => {
+    try {
+      _saveChannel.postMessage({ type: 'tab-closing', tabId: state.tabId });
+    } catch (_) {}
+  });
+}
 
 export function openAutosaveDB() {
   return new Promise((resolve, reject) => {
@@ -45,8 +94,9 @@ function doAutosave() {
     syncAllText();
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
+    const checksum = crc32(bytes);
     openAutosaveDB().then(db => {
-      // Single readwrite transaction — atomic read+check+write (no race between tabs)
+      // Atomic write: write to temp key first, then swap to 'current'
       const tx = db.transaction('documents', 'readwrite');
       const store = tx.objectStore('documents');
       const getReq = store.get('current');
@@ -60,17 +110,27 @@ function doAutosave() {
           setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
           return;
         }
-        // Safe to save — write within same transaction (atomic)
         const now = Date.now();
-        // Include comment thread replies so they persist across reloads
         const commentReplies = state.commentReplies && state.commentReplies.length > 0
           ? JSON.stringify(state.commentReplies) : null;
+        // Write to temp key first (atomic write pattern)
+        const tempId = '_temp_' + now;
         store.put({
-          id: 'current', name, bytes, timestamp: now, tabId: state.tabId, commentReplies
+          id: tempId, name, bytes, timestamp: now, tabId: state.tabId, commentReplies, checksum
         });
+        // Now write to 'current' (same transaction = atomic)
+        store.put({
+          id: 'current', name, bytes, timestamp: now, tabId: state.tabId, commentReplies, checksum
+        });
+        // Clean up temp key
+        store.delete(tempId);
         state.lastSaveTimestamp = now;
         state.dirty = false;
         updateDirtyIndicator();
+        // Broadcast to other tabs
+        if (_saveChannel) {
+          try { _saveChannel.postMessage({ type: 'save-complete', tabId: state.tabId, timestamp: now }); } catch (_) {}
+        }
         const info = $('statusInfo');
         info._userMsg = true;
         info.textContent = 'Auto-saved';
@@ -78,6 +138,17 @@ function doAutosave() {
       };
     }).catch(() => {});
   } catch (_) {}
+}
+
+/**
+ * Verify a saved document entry's integrity using its CRC32 checksum.
+ * Returns true if valid or if no checksum exists (backwards compatibility).
+ */
+export function verifyChecksum(entry) {
+  if (!entry || !entry.bytes) return false;
+  if (entry.checksum === undefined || entry.checksum === null) return true; // no checksum = legacy entry
+  const computed = crc32(entry.bytes);
+  return computed === entry.checksum;
 }
 
 // ─── Version History ──────────────────────────────
@@ -234,7 +305,14 @@ export function checkAutoRecover() {
     return new Promise(resolve => {
       const tx = db.transaction('documents', 'readonly');
       const req = tx.objectStore('documents').get('current');
-      req.onsuccess = () => resolve(req.result || null);
+      req.onsuccess = () => {
+        const entry = req.result || null;
+        if (entry) {
+          // Verify checksum integrity
+          entry._checksumValid = verifyChecksum(entry);
+        }
+        resolve(entry);
+      };
       req.onerror = () => resolve(null);
     });
   }).catch(() => null);
@@ -317,7 +395,7 @@ export function openFile(bytes, name) {
     startAutosave();
     startVersionTimer();
   } catch (e) {
-    alert('Failed to open: ' + e.message);
+    showToast('Failed to open: ' + e.message, 'error');
     console.error(e);
   }
 }
@@ -339,7 +417,7 @@ export function exportDoc(format) {
     const a = document.createElement('a');
     a.href = url; a.download = ($('docName').value || 'document') + '.' + format; a.click();
     URL.revokeObjectURL(url);
-  } catch (e) { alert('Export failed: ' + e.message); }
+  } catch (e) { showToast('Export failed: ' + e.message, 'error'); }
 }
 
 function activateEditor() {

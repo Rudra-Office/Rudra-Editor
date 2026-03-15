@@ -5,6 +5,7 @@ import { repaginate } from './pagination.js';
 import { updateUndoRedo } from './toolbar.js';
 import { markDirty, updateTrackChanges, updateStatusBar } from './file.js';
 import { broadcastTextSync, broadcastOp } from './collab.js';
+import { getEditableText } from './selection.js';
 
 // ═══════════════════════════════════════════════════
 // E8.4: Large-document warning threshold
@@ -101,6 +102,14 @@ export function renderDocument() {
       const header = document.createElement('div');
       header.className = 'page-header';
       header.contentEditable = 'false';
+      if (state.docHeaderHtml) {
+        header.innerHTML = state.docHeaderHtml;
+        // Substitute page number fields for page 1 of 1
+        header.querySelectorAll('[data-field]').forEach(el => {
+          if (el.dataset.field === 'PageNumber' || el.dataset.field === 'PAGE') el.textContent = '1';
+          else if (el.dataset.field === 'PageCount' || el.dataset.field === 'NUMPAGES') el.textContent = '1';
+        });
+      }
       pageEl.appendChild(header);
 
       const content = document.createElement('div');
@@ -118,7 +127,14 @@ export function renderDocument() {
       const footer = document.createElement('div');
       footer.className = 'page-footer';
       footer.contentEditable = 'false';
-      footer.innerHTML = '<span style="display:block;text-align:center;color:#5f6368;font-size:9pt">1</span>';
+      if (state.docFooterHtml) {
+        footer.innerHTML = state.docFooterHtml;
+        // Substitute page number fields for page 1 of 1
+        footer.querySelectorAll('[data-field]').forEach(el => {
+          if (el.dataset.field === 'PageNumber' || el.dataset.field === 'PAGE') el.textContent = '1';
+          else if (el.dataset.field === 'PageCount' || el.dataset.field === 'NUMPAGES') el.textContent = '1';
+        });
+      }
       pageEl.appendChild(footer);
 
       container.appendChild(pageEl);
@@ -330,7 +346,7 @@ export function renderNodeById(nodeIdStr) {
     // avoids serializing the wrapper element's tag and attributes).
     const newInner = newEl.innerHTML;
     if (el.innerHTML === newInner) {
-      state.syncedTextCache.set(nodeIdStr, el.textContent || '');
+      state.syncedTextCache.set(nodeIdStr, getEditableText(el));
       return el;
     }
 
@@ -340,7 +356,7 @@ export function renderNodeById(nodeIdStr) {
       state.nodeIdToElement.set(child.dataset.nodeId, child);
     });
     setupImages(newEl);
-    state.syncedTextCache.set(nodeIdStr, newEl.textContent || '');
+    state.syncedTextCache.set(nodeIdStr, getEditableText(newEl));
     return newEl;
   } catch (e) { console.error('renderNode error:', e); }
   return null;
@@ -371,7 +387,7 @@ export function cacheAllText() {
       if (!el.dataset?.nodeId || el.classList.contains('vs-placeholder')) continue;
       const tag = el.tagName.toLowerCase();
       if (tag === 'p' || /^h[1-6]$/.test(tag)) {
-        state.syncedTextCache.set(el.dataset.nodeId, el.textContent || '');
+        state.syncedTextCache.set(el.dataset.nodeId, getEditableText(el));
       }
     }
   }
@@ -382,7 +398,8 @@ export function syncParagraphText(el) {
   if (!doc || state.ignoreInput || !el) return;
   const nodeId = el.dataset?.nodeId;
   if (!nodeId) return;
-  const newText = el.textContent || '';
+  // Use getEditableText to exclude list marker text from sync
+  const newText = getEditableText(el);
   if (syncedTextCache.get(nodeId) === newText) return;
   try {
     doc.set_paragraph_text(nodeId, newText);
@@ -664,7 +681,7 @@ function restoreBlock(entry, idx) {
 
   if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
   setupImages(newEl);
-  if (entry.nodeId) state.syncedTextCache.set(entry.nodeId, newEl.textContent || '');
+  if (entry.nodeId) state.syncedTextCache.set(entry.nodeId, getEditableText(newEl));
 }
 
 function teardownVirtualScroll() {

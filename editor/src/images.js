@@ -50,7 +50,8 @@ function onImageDragStart(e) {
   if (!nodeEl) { e.preventDefault(); return; }
   _draggedImgNodeId = nodeEl.dataset.nodeId;
   e.dataTransfer.effectAllowed = 'move';
-  e.dataTransfer.setData('text/plain', _draggedImgNodeId);
+  // Use a custom type so plain text isn't polluted with node IDs
+  e.dataTransfer.setData('application/x-s1-image', _draggedImgNodeId);
   img.style.opacity = '0.5';
   img.addEventListener('dragend', () => {
     img.style.opacity = '';
@@ -117,8 +118,8 @@ function onDrop(e) {
 
 function findDropTarget(e) {
   const page = $('pageContainer');
-  // Only consider body-level block elements (not header/footer content)
-  const els = page.querySelectorAll(':scope > [data-node-id]');
+  // Consider block elements across all pages (not just direct children)
+  const els = page.querySelectorAll('.page-content > [data-node-id], :scope > [data-node-id]');
   let closest = null;
   let closestDist = Infinity;
   els.forEach(el => {
@@ -195,6 +196,7 @@ function persistResizeDuringDrag(img) {
   if (!nodeEl || !state.doc) return;
   const imgNodeId = nodeEl.dataset.nodeId;
   if (!imgNodeId) return;
+  // offsetWidth/Height are already in CSS pixels (pre-zoom), convert to pt
   const wPt = img.offsetWidth * 0.75;
   const hPt = img.offsetHeight * 0.75;
   try {
@@ -205,8 +207,11 @@ function persistResizeDuringDrag(img) {
 function doResize(e) {
   const r = state.resizing;
   if (!r) return;
-  const dx = e.clientX - r.startX;
-  const dy = e.clientY - r.startY;
+  // Account for CSS zoom — mouse deltas are in screen pixels, but element
+  // dimensions are in CSS pixels which are scaled by zoom
+  const zoom = (state.zoomLevel || 100) / 100;
+  const dx = (e.clientX - r.startX) / zoom;
+  const dy = (e.clientY - r.startY) / zoom;
   let newW = r.startW, newH = r.startH;
   if (r.handle.includes('r')) newW = r.startW + dx;
   if (r.handle.includes('l')) newW = r.startW - dx;
@@ -396,6 +401,59 @@ export function initImageContextMenu() {
   document.getElementById('altTextInput').addEventListener('keydown', e => {
     if (e.key === 'Enter') { e.preventDefault(); document.getElementById('altTextSaveBtn').click(); }
     if (e.key === 'Escape') document.getElementById('altTextModal').classList.remove('show');
+  });
+
+  // Replace image from context menu
+  document.getElementById('imReplace').addEventListener('click', () => {
+    document.getElementById('imageContextMenu').style.display = 'none';
+    if (!state._ctxImageNodeId || !state.doc) return;
+    // Reuse the hidden file input to pick a new image
+    const input = document.getElementById('imageInput');
+    const nodeId = state._ctxImageNodeId;
+    const onReplace = (e) => {
+      input.removeEventListener('change', onReplace);
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const bytes = new Uint8Array(reader.result);
+        const type = file.type || 'image/png';
+        const img = new Image();
+        const url = URL.createObjectURL(file);
+        img.onload = () => {
+          const pxToPt = 72 / 96;
+          let w = img.naturalWidth * pxToPt, h = img.naturalHeight * pxToPt;
+          if (w > 468) { h *= 468 / w; w = 468; }
+          try {
+            state.doc.replace_image(nodeId, bytes, type, w, h);
+            broadcastOp({ action: 'replaceImage', nodeId });
+            deselectImage();
+            renderDocument();
+            updateUndoRedo();
+          } catch (err) {
+            // Fallback: delete old, insert new after previous sibling
+            console.warn('replace_image not available, using delete+insert:', err);
+            try {
+              state.doc.delete_image(nodeId);
+              state.doc.insert_image(nodeId, bytes, type, w, h);
+              deselectImage();
+              renderDocument();
+              updateUndoRedo();
+            } catch (e2) { console.error('replace image fallback:', e2); }
+          }
+          URL.revokeObjectURL(url);
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+          console.error('Failed to load replacement image');
+        };
+        img.src = url;
+      };
+      reader.readAsArrayBuffer(file);
+      input.value = '';
+    };
+    input.addEventListener('change', onReplace);
+    input.click();
   });
 
   // Delete image from context menu

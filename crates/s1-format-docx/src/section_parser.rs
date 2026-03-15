@@ -72,6 +72,9 @@ pub fn parse_section_properties(
                         {
                             props.column_spacing = space;
                         }
+                        if let Some(eq) = get_attr(&e, b"equalWidth") {
+                            props.equal_width = eq == "1" || eq == "true";
+                        }
                         skip_element(reader)?;
                     }
                     b"type" => {
@@ -113,6 +116,9 @@ pub fn parse_section_properties(
                             get_attr(&e, b"space").and_then(|v| twips_to_points(&v))
                         {
                             props.column_spacing = space;
+                        }
+                        if let Some(eq) = get_attr(&e, b"equalWidth") {
+                            props.equal_width = eq == "1" || eq == "true";
                         }
                     }
                     b"type" => {
@@ -285,6 +291,31 @@ mod tests {
         );
         assert_eq!(raw.props.columns, 2);
         assert!((raw.props.column_spacing - 36.0).abs() < 0.01); // 720 twips = 36pt
+                                                                 // Default equal_width is true, w:equalWidth not present keeps it true
+        assert!(raw.props.equal_width);
+    }
+
+    #[test]
+    fn parse_columns_with_equal_width() {
+        let raw = parse_sect_pr(
+            r#"<w:sectPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:cols w:num="3" w:space="360" w:equalWidth="1"/>
+            </w:sectPr>"#,
+        );
+        assert_eq!(raw.props.columns, 3);
+        assert!((raw.props.column_spacing - 18.0).abs() < 0.01); // 360 twips = 18pt
+        assert!(raw.props.equal_width);
+    }
+
+    #[test]
+    fn parse_columns_unequal_width() {
+        let raw = parse_sect_pr(
+            r#"<w:sectPr xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+                <w:cols w:num="2" w:space="720" w:equalWidth="0"/>
+            </w:sectPr>"#,
+        );
+        assert_eq!(raw.props.columns, 2);
+        assert!(!raw.props.equal_width);
     }
 
     #[test]

@@ -46,6 +46,8 @@ pub struct LayoutPage {
     pub footer: Option<LayoutBlock>,
     /// Footnote blocks laid out at the bottom of the page.
     pub footnotes: Vec<LayoutBlock>,
+    /// Floating images positioned absolutely on this page.
+    pub floating_images: Vec<LayoutBlock>,
     /// 0-based section index this page belongs to.
     pub section_index: usize,
 }
@@ -213,6 +215,56 @@ pub struct LayoutTableCell {
     pub border_left: Option<String>,
     /// Cell border right (CSS border string).
     pub border_right: Option<String>,
+}
+
+/// Text wrap type for floating images.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WrapType {
+    /// No wrapping (image behind or in front of text).
+    None,
+    /// Text wraps around rectangular bounding box.
+    Square,
+    /// Text wraps tightly around the image shape.
+    Tight,
+    /// Text wraps through the image.
+    Through,
+    /// No text beside the image — text above and below only.
+    TopAndBottom,
+}
+
+/// A floating image's exclusion zone for text wrapping.
+#[derive(Debug, Clone, Copy)]
+pub struct FloatingImageRect {
+    /// Absolute bounds on the page (in points).
+    pub bounds: Rect,
+    /// Wrap type.
+    pub wrap_type: WrapType,
+    /// Distance from text — top, in points.
+    pub dist_top: f64,
+    /// Distance from text — bottom, in points.
+    pub dist_bottom: f64,
+    /// Distance from text — left, in points.
+    pub dist_left: f64,
+    /// Distance from text — right, in points.
+    pub dist_right: f64,
+}
+
+impl FloatingImageRect {
+    /// The exclusion zone including distance-from-text padding.
+    pub fn exclusion_rect(&self) -> Rect {
+        Rect::new(
+            self.bounds.x - self.dist_left,
+            self.bounds.y - self.dist_top,
+            self.bounds.width + self.dist_left + self.dist_right,
+            self.bounds.height + self.dist_top + self.dist_bottom,
+        )
+    }
+
+    /// Check if this float's exclusion zone overlaps a vertical range.
+    pub fn overlaps_y(&self, y_top: f64, y_bottom: f64) -> bool {
+        let ex = self.exclusion_rect();
+        ex.y < y_bottom && ex.bottom() > y_top
+    }
 }
 
 /// A rectangle with position and size.

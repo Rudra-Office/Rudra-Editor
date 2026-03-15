@@ -118,6 +118,9 @@ function _updateToolbarStateImpl() {
     setToggle('btnAlignC', paraFmt.alignment === 'center');
     setToggle('btnAlignR', paraFmt.alignment === 'right');
     setToggle('btnAlignJ', paraFmt.alignment === 'justify');
+    // List button active state
+    setToggle('btnBulletList', paraFmt.listFormat === 'bullet');
+    setToggle('btnNumberList', paraFmt.listFormat === 'decimal');
   } catch (_) {}
 }
 
@@ -178,7 +181,7 @@ export function renderUndoHistory() {
 }
 
 function escapeHistoryHtml(str) {
-  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 export function applyFormat(key, value) {
@@ -228,10 +231,24 @@ export function applyFormat(key, value) {
     const newStartEl = rendered.get(info.startNodeId);
     const newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
 
-    page.focus();
-    if (newStartEl) setSelectionRange(newStartEl, info.startOffset, newEndEl || newStartEl, info.endOffset);
-
-    if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+    // Restore selection — for cross-page select-all, re-apply highlight
+    if (state._selectAll) {
+      // Update lastSelInfo with fresh DOM elements
+      if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+      // Re-apply visual highlight across all pages
+      for (const pageEl of state.pageElements) {
+        const content = pageEl.querySelector('.page-content') || pageEl;
+        content.classList.add('select-all-highlight');
+        content.querySelectorAll('[data-node-id]').forEach(el => el.classList.add('select-all-highlight'));
+      }
+    } else {
+      // Focus the page-content that contains the start element
+      const targetContent = (newStartEl || startEl)?.closest?.('.page-content');
+      if (targetContent) targetContent.focus();
+      else page.focus();
+      if (newStartEl) setSelectionRange(newStartEl, info.startOffset, newEndEl || newStartEl, info.endOffset);
+      if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+    }
     state.pagesRendered = false;
     updatePageBreaks();
     updateToolbarState();
@@ -329,14 +346,28 @@ function applyFormatPair(clearKey, clearVal, setKey, setVal, info, startEl, endE
     doc.format_selection(sn, so, en, eo, clearKey, clearVal);
     doc.format_selection(sn, so, en, eo, setKey, setVal);
 
+    // E3.4: Record formatting action
+    const friendlyKey = setKey.charAt(0).toUpperCase() + setKey.slice(1);
+    recordUndoAction(`Apply ${friendlyKey}`);
+
     // Re-render ALL affected nodes (not just start + end)
     const rendered = renderNodesById(allNodeIds);
     const newStartEl = rendered.get(info.startNodeId);
     let newEndEl = info.endNodeId !== info.startNodeId ? rendered.get(info.endNodeId) : null;
 
-    page.focus();
-    if (newStartEl) setSelectionRange(newStartEl, so, newEndEl || newStartEl, eo);
-    if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+    // Restore selection — for cross-page select-all, re-apply highlight
+    if (state._selectAll) {
+      if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+      for (const pageEl of state.pageElements) {
+        const content = pageEl.querySelector('.page-content') || pageEl;
+        content.classList.add('select-all-highlight');
+        content.querySelectorAll('[data-node-id]').forEach(el => el.classList.add('select-all-highlight'));
+      }
+    } else {
+      page.focus();
+      if (newStartEl) setSelectionRange(newStartEl, so, newEndEl || newStartEl, eo);
+      if (newStartEl) state.lastSelInfo = { ...info, startEl: newStartEl, endEl: newEndEl || newStartEl };
+    }
 
     state.pagesRendered = false;
     updatePageBreaks();
@@ -346,3 +377,194 @@ function applyFormatPair(clearKey, clearVal, setKey, setVal, info, startEl, endE
     broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key: setKey, value: setVal });
   } catch (e) { console.error('format pair error:', e); }
 }
+
+// ─── Floating Selection Toolbar ──────────────────────────
+// Shows a compact formatting bar above the selection, similar to Google Docs.
+
+let _floatingEl = null;
+let _floatingHideTimer = null;
+
+function ensureFloatingToolbar() {
+  if (_floatingEl) return _floatingEl;
+  const el = document.createElement('div');
+  el.className = 'floating-toolbar';
+  el.setAttribute('role', 'toolbar');
+  el.setAttribute('aria-label', 'Selection formatting');
+  el.innerHTML = `
+    <button class="ft-btn" data-fmt="bold" title="Bold (Ctrl+B)"><b>B</b></button>
+    <button class="ft-btn" data-fmt="italic" title="Italic (Ctrl+I)"><i>I</i></button>
+    <button class="ft-btn" data-fmt="underline" title="Underline (Ctrl+U)"><u>U</u></button>
+    <button class="ft-btn" data-fmt="strikethrough" title="Strikethrough"><s>S</s></button>
+    <span class="ft-sep"></span>
+    <button class="ft-btn" data-fmt="superscript" title="Superscript"><span style="font-size:10px;vertical-align:super">A</span><sup style="font-size:8px">2</sup></button>
+    <button class="ft-btn" data-fmt="subscript" title="Subscript"><span style="font-size:10px">A</span><sub style="font-size:8px">2</sub></button>
+    <span class="ft-sep"></span>
+    <button class="ft-btn ft-color" data-action="color" title="Text color">
+      <span style="font-weight:600">A</span>
+      <span class="ft-color-bar" id="ftColorBar"></span>
+    </button>
+    <button class="ft-btn ft-color" data-action="highlight" title="Highlight color">
+      <span style="font-weight:600;background:#ffeb3b;padding:0 3px;border-radius:2px">A</span>
+    </button>
+    <span class="ft-sep"></span>
+    <button class="ft-btn" data-action="link" title="Insert link">
+      <span style="text-decoration:underline;color:var(--accent)">Link</span>
+    </button>
+    <button class="ft-btn" data-action="comment" title="Add comment">
+      <span style="font-size:11px">Comment</span>
+    </button>
+  `;
+  // Prevent toolbar clicks from stealing focus/selection
+  el.addEventListener('mousedown', e => {
+    e.preventDefault();
+    e.stopPropagation();
+  });
+  // Handle button clicks
+  el.addEventListener('click', e => {
+    const btn = e.target.closest('.ft-btn');
+    if (!btn) return;
+    const fmt = btn.dataset.fmt;
+    const action = btn.dataset.action;
+    if (fmt) {
+      // Toggle formatting
+      const info = getSelectionInfo();
+      if (!info || info.collapsed) return;
+      toggleFormat(fmt);
+    } else if (action === 'color') {
+      const picker = document.createElement('input');
+      picker.type = 'color';
+      picker.value = '#' + ($('colorSwatch')?.style.background ? '000000' : '000000');
+      picker.style.position = 'absolute';
+      picker.style.opacity = '0';
+      picker.style.pointerEvents = 'none';
+      document.body.appendChild(picker);
+      picker.addEventListener('input', () => {
+        const hex = picker.value.replace('#', '').toUpperCase();
+        applyFormat('color', hex);
+      });
+      picker.addEventListener('change', () => {
+        if (picker.parentNode) picker.remove();
+      });
+      // Clean up on blur too (user clicked away without selecting)
+      picker.addEventListener('blur', () => {
+        setTimeout(() => { if (picker.parentNode) picker.remove(); }, 100);
+      });
+      picker.click();
+    } else if (action === 'highlight') {
+      applyFormat('highlightColor', 'FFFF00');
+    } else if (action === 'link') {
+      const url = prompt('Enter URL:');
+      if (url && url.trim()) {
+        try {
+          new URL(url.trim().startsWith('http') ? url.trim() : 'https://' + url.trim());
+          applyFormat('hyperlinkUrl', url.trim());
+        } catch (_) { alert('Invalid URL'); }
+      }
+    } else if (action === 'comment') {
+      const text = prompt('Add comment:');
+      if (text && text.trim()) {
+        const info = getSelectionInfo();
+        if (info && !info.collapsed && state.doc) {
+          try {
+            state.doc.insert_comment(info.startNodeId, info.endNodeId, 'User', text.trim());
+            import('./render.js').then(m => m.renderDocument());
+          } catch (e) { console.error('insert comment:', e); }
+        }
+      }
+    }
+  });
+  document.body.appendChild(el);
+  _floatingEl = el;
+  return el;
+}
+
+export function updateFloatingToolbar() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed || state.currentView !== 'editor' || !state.doc) {
+    hideFloatingToolbar();
+    return;
+  }
+  // Ensure selection is within editor
+  const range = sel.getRangeAt(0);
+  const container = $('pageContainer');
+  if (!container || !container.contains(range.commonAncestorContainer)) {
+    hideFloatingToolbar();
+    return;
+  }
+  // Don't show if selection is very small (less than 2 chars)
+  const text = sel.toString();
+  if (text.length < 2) {
+    hideFloatingToolbar();
+    return;
+  }
+
+  clearTimeout(_floatingHideTimer);
+  const ft = ensureFloatingToolbar();
+
+  // Position above selection
+  const rect = range.getBoundingClientRect();
+  const ftWidth = 420;
+  let left = rect.left + (rect.width / 2) - (ftWidth / 2);
+  let top = rect.top - 44;
+
+  // Keep within viewport
+  if (left < 8) left = 8;
+  if (left + ftWidth > window.innerWidth - 8) left = window.innerWidth - ftWidth - 8;
+  if (top < 8) top = rect.bottom + 8;
+
+  ft.style.left = left + 'px';
+  ft.style.top = top + 'px';
+  ft.classList.add('visible');
+
+  // Update active states on floating toolbar buttons
+  const info = state.lastSelInfo;
+  if (info && !info.collapsed) {
+    try {
+      const fmt = JSON.parse(state.doc.get_selection_formatting_json(
+        info.startNodeId, info.startOffset, info.endNodeId, info.endOffset));
+      ft.querySelectorAll('.ft-btn[data-fmt]').forEach(btn => {
+        const key = btn.dataset.fmt;
+        btn.classList.toggle('active', fmt[key] === true);
+      });
+    } catch (_) {}
+  }
+}
+
+function hideFloatingToolbar() {
+  if (_floatingEl) {
+    _floatingEl.classList.remove('visible');
+  }
+}
+
+// Show floating toolbar after a small delay on mouseup (like Google Docs)
+let _floatingMouseUpTimer = null;
+document.addEventListener('mouseup', () => {
+  clearTimeout(_floatingMouseUpTimer);
+  _floatingMouseUpTimer = setTimeout(() => {
+    updateFloatingToolbar();
+  }, 200);
+});
+document.addEventListener('keyup', (e) => {
+  // Show on shift+arrow key selection
+  if (e.shiftKey && (e.key.startsWith('Arrow') || e.key === 'Home' || e.key === 'End')) {
+    clearTimeout(_floatingMouseUpTimer);
+    _floatingMouseUpTimer = setTimeout(() => {
+      updateFloatingToolbar();
+    }, 300);
+  }
+});
+// Hide on scroll/click elsewhere
+document.addEventListener('mousedown', (e) => {
+  if (_floatingEl && !_floatingEl.contains(e.target)) {
+    hideFloatingToolbar();
+  }
+});
+document.addEventListener('scroll', () => {
+  hideFloatingToolbar();
+}, true);
+// Hide when typing
+document.addEventListener('keydown', (e) => {
+  if (!e.shiftKey && !e.ctrlKey && !e.metaKey && !e.altKey && e.key.length === 1) {
+    hideFloatingToolbar();
+  }
+});

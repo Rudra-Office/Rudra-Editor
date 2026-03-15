@@ -68,6 +68,8 @@ pub struct SectionProperties {
     pub columns: u32,
     /// Column spacing in points.
     pub column_spacing: f64,
+    /// Whether all columns have equal width (default: true).
+    pub equal_width: bool,
     /// Section break type. `None` for the final section.
     pub break_type: Option<SectionBreakType>,
     /// Header references for this section.
@@ -93,6 +95,7 @@ impl Default for SectionProperties {
             footer_distance: 36.0,
             columns: 1,
             column_spacing: 36.0,
+            equal_width: true,
             break_type: None,
             headers: Vec::new(),
             footers: Vec::new(),
@@ -136,10 +139,23 @@ mod tests {
         assert_eq!(props.orientation, PageOrientation::Portrait);
         assert!((props.margin_top - 72.0).abs() < 0.01);
         assert_eq!(props.columns, 1);
+        assert!((props.column_spacing - 36.0).abs() < 0.01);
+        assert!(props.equal_width);
         assert!(props.break_type.is_none());
         assert!(!props.title_page);
         assert!(props.headers.is_empty());
         assert!(props.footers.is_empty());
+    }
+
+    #[test]
+    fn multi_column_properties() {
+        let mut props = SectionProperties::default();
+        props.columns = 3;
+        props.column_spacing = 18.0;
+        props.equal_width = false;
+        assert_eq!(props.columns, 3);
+        assert!((props.column_spacing - 18.0).abs() < 0.01);
+        assert!(!props.equal_width);
     }
 
     #[test]

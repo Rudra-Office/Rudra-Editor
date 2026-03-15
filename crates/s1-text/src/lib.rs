@@ -17,12 +17,15 @@
 //! - `fontdb` — System font discovery and indexing
 //! - `unicode-bidi` — Unicode Bidirectional Algorithm
 //! - `unicode-linebreak` — Unicode Line Breaking Algorithm
+//! - `hyphenation` — Knuth-Liang hyphenation (English US embedded)
 
 pub mod bidi;
 pub mod error;
 pub mod font;
 pub mod font_db;
+pub mod hyphenation;
 pub mod linebreak;
+pub mod script;
 pub mod shaping;
 pub mod types;
 
@@ -31,7 +34,9 @@ pub use bidi::{bidi_resolve, paragraph_direction};
 pub use error::TextError;
 pub use font::Font;
 pub use font_db::FontDatabase;
+pub use hyphenation::hyphenate_word;
 pub use linebreak::line_break_opportunities;
+pub use script::{default_shaping_features, split_by_script, ScriptRun};
 pub use shaping::{measure_shaped_width, shape_text};
 pub use types::{
     BidiRun, BreakOpportunity, Direction, FontFeature, FontId, FontMetrics, ShapedGlyph,

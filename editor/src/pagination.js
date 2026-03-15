@@ -2,6 +2,7 @@
 // WASM get_page_map_json() is the single source of truth for pagination.
 import { state, $ } from './state.js';
 import { updateStatusBar as _updateStatus } from './file.js';
+import { getEditableText } from './selection.js';
 
 const PT_TO_PX = 96 / 72;
 
@@ -16,10 +17,15 @@ export function repaginate() {
   const { doc } = state;
   if (!container || !doc) return;
 
-  // Save selection before DOM reconciliation (moving nodes can invalidate selection)
+  // Preserve synthetic selection state (select-all or cross-page shift-click)
+  const wasSelectAll = state._selectAll;
+  const savedSyntheticSel = (wasSelectAll || (state.lastSelInfo && !state.lastSelInfo.collapsed))
+    ? { ...state.lastSelInfo } : null;
+
+  // Save native selection before DOM reconciliation (moving nodes can invalidate selection)
   const sel = window.getSelection();
   let savedNodeId = null, savedOffset = 0;
-  if (sel && sel.rangeCount) {
+  if (!wasSelectAll && sel && sel.rangeCount) {
     let n = sel.anchorNode;
     while (n && !n.dataset?.nodeId) n = n.parentNode;
     if (n?.dataset?.nodeId) {
@@ -114,11 +120,12 @@ export function repaginate() {
     // Update page dimensions
     applyPageStyle(pageEl, pg, dims);
 
-    // Update header/footer — first page uses first-page variants if available
-    const isFirstPage = pg.pageNum === 1;
+    // Update header/footer — use sequential index (i+1), NOT pg.pageNum from WASM
+    const pageNum = i + 1;
+    const isFirstPage = pageNum === 1;
     const hdr = (isFirstPage && hasDifferentFirst) ? firstPageHeaderHtml : defaultHeaderHtml;
     const ftr = (isFirstPage && hasDifferentFirst) ? firstPageFooterHtml : defaultFooterHtml;
-    updatePageHeaderFooter(pageEl, pg.pageNum, numPages, hdr, ftr);
+    updatePageHeaderFooter(pageEl, pageNum, numPages, hdr, ftr);
 
     // Set of nodeIds that belong on this page
     const pageNodeIds = new Set(pg.nodeIds);
@@ -180,7 +187,7 @@ export function repaginate() {
             lastInserted = newEl;
             // Update cache
             state.nodeIdToElement.set(nid, newEl);
-            state.syncedTextCache.set(nid, newEl.textContent || '');
+            state.syncedTextCache.set(nid, getEditableText(newEl));
           }
         } catch (_) {}
       }
@@ -228,8 +235,36 @@ export function repaginate() {
     });
   }
 
-  // Restore selection if it was saved before reconciliation
-  if (savedNodeId) {
+  // Restore selection after DOM reconciliation
+  if (wasSelectAll && savedSyntheticSel) {
+    // Re-apply select-all: restore state and re-highlight
+    state._selectAll = true;
+    // Update element references since DOM may have moved
+    const newStartEl = container.querySelector(`[data-node-id="${savedSyntheticSel.startNodeId}"]`);
+    const newEndEl = container.querySelector(`[data-node-id="${savedSyntheticSel.endNodeId}"]`);
+    state.lastSelInfo = {
+      ...savedSyntheticSel,
+      startEl: newStartEl || savedSyntheticSel.startEl,
+      endEl: newEndEl || savedSyntheticSel.endEl,
+    };
+    // Re-apply visual highlights
+    for (const pageEl of state.pageElements) {
+      const content = pageEl.querySelector('.page-content') || pageEl;
+      content.classList.add('select-all-highlight');
+      content.querySelectorAll('[data-node-id]').forEach(el => el.classList.add('select-all-highlight'));
+    }
+  } else if (savedSyntheticSel && !savedSyntheticSel.collapsed) {
+    // Restore cross-page synthetic selection
+    const newStartEl = container.querySelector(`[data-node-id="${savedSyntheticSel.startNodeId}"]`);
+    const newEndEl = container.querySelector(`[data-node-id="${savedSyntheticSel.endNodeId}"]`);
+    if (newStartEl && newEndEl) {
+      state.lastSelInfo = {
+        ...savedSyntheticSel,
+        startEl: newStartEl,
+        endEl: newEndEl,
+      };
+    }
+  } else if (savedNodeId) {
     const restoredEl = container.querySelector(`[data-node-id="${savedNodeId}"]`);
     if (restoredEl) {
       try {

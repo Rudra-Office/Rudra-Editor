@@ -99,12 +99,26 @@ impl<'a> LayoutEngine<'a> {
         };
         let mut current_section_idx = initial_section_idx;
         let mut page_layout = self.resolve_page_layout_for_section(current_section_idx);
-        let mut content_rect = page_layout.content_rect();
+        let full_page_content_rect = page_layout.content_rect();
+
+        // Multi-column tracking
+        let (mut column_count, mut column_spacing) =
+            self.resolve_section_columns(current_section_idx);
+        let mut current_column: u32 = 0;
+        let mut content_rect = Self::column_content_rect(
+            full_page_content_rect,
+            column_count,
+            column_spacing,
+            current_column,
+        );
 
         // Layout each block and paginate
         let mut pages: Vec<LayoutPage> = Vec::new();
         let mut current_y = content_rect.y;
         let mut page_blocks: Vec<LayoutBlock> = Vec::new();
+        let mut floating_images: Vec<LayoutBlock> = Vec::new();
+        // Floating image exclusion zones for text wrapping on the current page
+        let mut page_floats: Vec<FloatingImageRect> = Vec::new();
         let mut page_index = 0;
         // Track which section each page belongs to (for header/footer resolution)
         let mut page_section_indices: Vec<usize> = Vec::new();
@@ -126,6 +140,7 @@ impl<'a> LayoutEngine<'a> {
                     ));
                     page_section_indices.push(current_section_idx);
                     page_index += 1;
+                    page_floats.clear();
                 }
 
                 // Determine break type from the NEW section's properties
@@ -156,6 +171,7 @@ impl<'a> LayoutEngine<'a> {
                             ));
                             page_section_indices.push(current_section_idx);
                             page_index += 1;
+                    page_floats.clear();
                         }
                     }
                     SectionBreakType::OddPage => {
@@ -170,6 +186,7 @@ impl<'a> LayoutEngine<'a> {
                             ));
                             page_section_indices.push(current_section_idx);
                             page_index += 1;
+                    page_floats.clear();
                         }
                     }
                     _ => {
@@ -180,7 +197,14 @@ impl<'a> LayoutEngine<'a> {
                 // Switch to the new section's page layout
                 current_section_idx = block_section_idx;
                 page_layout = self.resolve_page_layout_for_section(current_section_idx);
-                content_rect = page_layout.content_rect();
+                let full_rect = page_layout.content_rect();
+                // Reset column tracking for the new section
+                let (cc, cs) = self.resolve_section_columns(current_section_idx);
+                column_count = cc;
+                column_spacing = cs;
+                current_column = 0;
+                content_rect =
+                    Self::column_content_rect(full_rect, column_count, column_spacing, 0);
                 current_y = content_rect.y;
             }
 
@@ -198,6 +222,15 @@ impl<'a> LayoutEngine<'a> {
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
+                        page_floats.clear();
+                        current_column = 0;
+                        let full_rect = page_layout.content_rect();
+                        content_rect = Self::column_content_rect(
+                            full_rect,
+                            column_count,
+                            column_spacing,
+                            current_column,
+                        );
                         current_y = content_rect.y;
                         prev_space_after = 0.0;
                     }
@@ -212,30 +245,68 @@ impl<'a> LayoutEngine<'a> {
                     };
                     current_y += collapsed_spacing;
 
+                    // F2.1: Text wrapping — adjust for floating images
+                    // 1. TopAndBottom floats: advance Y past them
+                    for flt in &page_floats {
+                        if flt.wrap_type == WrapType::TopAndBottom {
+                            let ex = flt.exclusion_rect();
+                            if current_y >= ex.y && current_y < ex.bottom() {
+                                current_y = ex.bottom();
+                            }
+                        }
+                    }
+
+                    // 2. Square/Tight/Through floats: narrow content rect
+                    let para_rect = Self::adjust_rect_for_floats(
+                        content_rect, current_y, &page_floats,
+                    );
+
                     let block = self.layout_paragraph_cached(
                         *node_id,
                         &para_style,
-                        content_rect,
+                        para_rect,
                         current_y,
                     )?;
 
                     let block_height = block.bounds.height;
                     let space_after = sanitize_pt(para_style.space_after);
 
-                    // Check if this block fits on the current page
+                    // Check if this block fits in the current column/page
                     if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
-                        pages.push(self.make_page(
-                            page_index,
-                            &page_layout,
-                            std::mem::take(&mut page_blocks),
-                            current_section_idx,
-                        ));
-                        page_section_indices.push(current_section_idx);
-                        page_index += 1;
-                        // At top of new page, apply full space_before (no collapse)
-                        current_y = content_rect.y + space_before;
+                        // Try next column before going to a new page
+                        if current_column + 1 < column_count {
+                            current_column += 1;
+                            let full_rect = page_layout.content_rect();
+                            content_rect = Self::column_content_rect(
+                                full_rect,
+                                column_count,
+                                column_spacing,
+                                current_column,
+                            );
+                            current_y = content_rect.y + space_before;
+                        } else {
+                            // All columns full — new page
+                            pages.push(self.make_page(
+                                page_index,
+                                &page_layout,
+                                std::mem::take(&mut page_blocks),
+                                current_section_idx,
+                            ));
+                            page_section_indices.push(current_section_idx);
+                            page_index += 1;
+                    page_floats.clear();
+                            current_column = 0;
+                            let full_rect = page_layout.content_rect();
+                            content_rect = Self::column_content_rect(
+                                full_rect,
+                                column_count,
+                                column_spacing,
+                                current_column,
+                            );
+                            current_y = content_rect.y + space_before;
+                        }
 
-                        // Re-layout at top of new page
+                        // Re-layout in the new column/page
                         let block = self.layout_paragraph_cached(
                             *node_id,
                             &para_style,
@@ -341,44 +412,114 @@ impl<'a> LayoutEngine<'a> {
                             page_blocks.push(block);
                             current_y += chunk_height;
 
-                            // If there are more rows, start a new page
+                            // If there are more rows, advance to next column or new page
                             if row_idx < all_rows.len() {
-                                pages.push(self.make_page(
-                                    page_index,
-                                    &page_layout,
-                                    std::mem::take(&mut page_blocks),
-                                    current_section_idx,
-                                ));
-                                page_section_indices.push(current_section_idx);
-                                page_index += 1;
-                                current_y = content_rect.y;
+                                if current_column + 1 < column_count {
+                                    current_column += 1;
+                                    let full_rect = page_layout.content_rect();
+                                    content_rect = Self::column_content_rect(
+                                        full_rect,
+                                        column_count,
+                                        column_spacing,
+                                        current_column,
+                                    );
+                                    current_y = content_rect.y;
+                                } else {
+                                    pages.push(self.make_page(
+                                        page_index,
+                                        &page_layout,
+                                        std::mem::take(&mut page_blocks),
+                                        current_section_idx,
+                                    ));
+                                    page_section_indices.push(current_section_idx);
+                                    page_index += 1;
+                    page_floats.clear();
+                                    current_column = 0;
+                                    let full_rect = page_layout.content_rect();
+                                    content_rect = Self::column_content_rect(
+                                        full_rect,
+                                        column_count,
+                                        column_spacing,
+                                        current_column,
+                                    );
+                                    current_y = content_rect.y;
+                                }
                                 is_first_chunk = false;
                             }
                         }
                     }
                 }
                 NodeType::Image => {
-                    let block = self.layout_image(*node_id, content_rect, current_y)?;
-                    let block_height = block.bounds.height;
+                    // Check if this is a floating image
+                    let is_floating = self
+                        .doc
+                        .node(*node_id)
+                        .and_then(|n| n.attributes.get_string(&AttributeKey::ImagePositionType))
+                        .map(|s| s == "anchor")
+                        .unwrap_or(false);
 
-                    if current_y + block_height > content_rect.bottom() && !page_blocks.is_empty() {
-                        pages.push(self.make_page(
-                            page_index,
-                            &page_layout,
-                            std::mem::take(&mut page_blocks),
-                            current_section_idx,
-                        ));
-                        page_section_indices.push(current_section_idx);
-                        page_index += 1;
-                        current_y = content_rect.y;
-
+                    if is_floating {
+                        // Floating images don't participate in normal flow.
+                        // Position them based on their offset attributes and
+                        // add to the current page's floating images list.
+                        let block =
+                            self.layout_floating_image(*node_id, &page_layout, current_y)?;
+                        // Build exclusion zone for text wrapping
+                        let float_rect = self.build_float_rect(*node_id, &block);
+                        page_floats.push(float_rect);
+                        floating_images.push(block);
+                    } else {
                         let block = self.layout_image(*node_id, content_rect, current_y)?;
                         let block_height = block.bounds.height;
-                        page_blocks.push(block);
-                        current_y += block_height;
-                    } else {
-                        page_blocks.push(block);
-                        current_y += block_height;
+
+                        if current_y + block_height > content_rect.bottom()
+                            && !page_blocks.is_empty()
+                        {
+                            // Try next column before going to a new page
+                            if current_column + 1 < column_count {
+                                current_column += 1;
+                                let full_rect = page_layout.content_rect();
+                                content_rect = Self::column_content_rect(
+                                    full_rect,
+                                    column_count,
+                                    column_spacing,
+                                    current_column,
+                                );
+                                current_y = content_rect.y;
+                            } else {
+                                // Flush floating images to the page before creating it
+                                let mut new_page = self.make_page(
+                                    page_index,
+                                    &page_layout,
+                                    std::mem::take(&mut page_blocks),
+                                    current_section_idx,
+                                );
+                                new_page.floating_images =
+                                    std::mem::take(&mut floating_images);
+                                pages.push(new_page);
+                                page_section_indices.push(current_section_idx);
+                                page_index += 1;
+                    page_floats.clear();
+                                current_column = 0;
+                                let full_rect = page_layout.content_rect();
+                                content_rect = Self::column_content_rect(
+                                    full_rect,
+                                    column_count,
+                                    column_spacing,
+                                    current_column,
+                                );
+                                current_y = content_rect.y;
+                            }
+
+                            let block =
+                                self.layout_image(*node_id, content_rect, current_y)?;
+                            let block_height = block.bounds.height;
+                            page_blocks.push(block);
+                            current_y += block_height;
+                        } else {
+                            page_blocks.push(block);
+                            current_y += block_height;
+                        }
                     }
                 }
                 NodeType::PageBreak => {
@@ -392,7 +533,52 @@ impl<'a> LayoutEngine<'a> {
                         ));
                         page_section_indices.push(current_section_idx);
                         page_index += 1;
+                    page_floats.clear();
+                        current_column = 0;
+                        let full_rect = page_layout.content_rect();
+                        content_rect = Self::column_content_rect(
+                            full_rect,
+                            column_count,
+                            column_spacing,
+                            current_column,
+                        );
                         current_y = content_rect.y;
+                    }
+                }
+                NodeType::ColumnBreak => {
+                    // Force a column break — advance to next column or next page
+                    if current_column + 1 < column_count {
+                        current_column += 1;
+                        let full_rect = page_layout.content_rect();
+                        content_rect = Self::column_content_rect(
+                            full_rect,
+                            column_count,
+                            column_spacing,
+                            current_column,
+                        );
+                        current_y = content_rect.y;
+                        prev_space_after = 0.0;
+                    } else if !page_blocks.is_empty() {
+                        // Last column — treat as page break
+                        pages.push(self.make_page(
+                            page_index,
+                            &page_layout,
+                            std::mem::take(&mut page_blocks),
+                            current_section_idx,
+                        ));
+                        page_section_indices.push(current_section_idx);
+                        page_index += 1;
+                    page_floats.clear();
+                        current_column = 0;
+                        let full_rect = page_layout.content_rect();
+                        content_rect = Self::column_content_rect(
+                            full_rect,
+                            column_count,
+                            column_spacing,
+                            current_column,
+                        );
+                        current_y = content_rect.y;
+                        prev_space_after = 0.0;
                     }
                 }
                 _ => {} // Skip other node types
@@ -401,8 +587,18 @@ impl<'a> LayoutEngine<'a> {
 
         // Flush remaining blocks
         if !page_blocks.is_empty() {
-            pages.push(self.make_page(page_index, &page_layout, page_blocks, current_section_idx));
+            let mut last_page =
+                self.make_page(page_index, &page_layout, page_blocks, current_section_idx);
+            last_page.floating_images = std::mem::take(&mut floating_images);
+            pages.push(last_page);
             page_section_indices.push(current_section_idx);
+        }
+
+        // If any floating images remain (all pages already pushed), add them to the last page
+        if !floating_images.is_empty() {
+            if let Some(last) = pages.last_mut() {
+                last.floating_images.extend(floating_images);
+            }
         }
 
         // Ensure at least one page
@@ -417,6 +613,7 @@ impl<'a> LayoutEngine<'a> {
                 header: None,
                 footer: None,
                 footnotes: Vec::new(),
+                floating_images: Vec::new(),
                 section_index: initial_section_idx,
             });
             page_section_indices.push(initial_section_idx);
@@ -465,6 +662,39 @@ impl<'a> LayoutEngine<'a> {
         } else {
             self.config.default_page_layout
         }
+    }
+
+    /// Resolve column properties for a specific section index.
+    ///
+    /// Returns `(column_count, column_spacing)`.
+    fn resolve_section_columns(&self, section_idx: usize) -> (u32, f64) {
+        let sections = self.doc.sections();
+        if let Some(sp) = sections.get(section_idx) {
+            (sp.columns.max(1), sp.column_spacing)
+        } else if let Some(sp) = sections.last() {
+            (sp.columns.max(1), sp.column_spacing)
+        } else {
+            (1, 36.0)
+        }
+    }
+
+    /// Compute the content rect for a specific column within a page.
+    ///
+    /// Given the full-page content rect, column count, spacing, and the column
+    /// index (0-based), returns the rect for that column.
+    fn column_content_rect(
+        full_content_rect: Rect,
+        column_count: u32,
+        column_spacing: f64,
+        column_index: u32,
+    ) -> Rect {
+        if column_count <= 1 {
+            return full_content_rect;
+        }
+        let n = column_count as f64;
+        let col_width = (full_content_rect.width - (n - 1.0) * column_spacing) / n;
+        let x = full_content_rect.x + column_index as f64 * (col_width + column_spacing);
+        Rect::new(x, full_content_rect.y, col_width, full_content_rect.height)
     }
 
     /// Build a mapping from block index to section index.
@@ -578,6 +808,9 @@ impl<'a> LayoutEngine<'a> {
                         NodeType::PageBreak => {
                             // Treat standalone page break as a paragraph with PageBreakBefore
                             blocks.push((child_id, NodeType::PageBreak));
+                        }
+                        NodeType::ColumnBreak => {
+                            blocks.push((child_id, NodeType::ColumnBreak));
                         }
                         _ => {}
                     }
@@ -1129,30 +1362,82 @@ impl<'a> LayoutEngine<'a> {
             }
         }
 
-        let (glyphs, metrics) = if let Some(fid) = font_id {
-            if let Some(font) = self.font_db.load_font(fid) {
-                // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
-                let has_explicit_size = self
-                    .doc
-                    .node(run_id)
-                    .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
-                    .unwrap_or(false);
-                let font_size =
-                    if (run_style.superscript || run_style.subscript) && !has_explicit_size {
-                        run_style.font_size * 0.65
-                    } else {
-                        run_style.font_size
-                    };
-
-                let glyphs = s1_text::shape_text(&text, &font, font_size, &[], None, direction)?;
-                let metrics = font.metrics(font_size);
-                (glyphs, Some(metrics))
+        // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
+        let has_explicit_size = self
+            .doc
+            .node(run_id)
+            .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
+            .unwrap_or(false);
+        let font_size =
+            if (run_style.superscript || run_style.subscript) && !has_explicit_size {
+                run_style.font_size * 0.65
             } else {
-                (synthesize_glyphs(&text, run_style.font_size), None)
+                run_style.font_size
+            };
+
+        // F1.2: Detect script for script-specific shaping
+        let script_runs = s1_text::split_by_script(&text);
+        let rb_script = script_runs
+            .first()
+            .and_then(|sr| s1_text::script::script_to_rustybuzz(sr.script));
+
+        let (mut glyphs, metrics) = if let Some(fid) = font_id {
+            if let Some(font) = self.font_db.load_font(fid) {
+                let shaped = s1_text::shaping::shape_text_with_script(
+                    &text, &font, font_size, &[], None, direction, rb_script,
+                )?;
+                let metrics = font.metrics(font_size);
+                (shaped, Some(metrics))
+            } else {
+                (synthesize_glyphs(&text, font_size), None)
             }
         } else {
-            (synthesize_glyphs(&text, run_style.font_size), None)
+            (synthesize_glyphs(&text, font_size), None)
         };
+
+        // F4.1/F4.2: Per-character font fallback with script-aware ordering
+        if font_id.is_some() && glyphs.iter().any(|g| g.glyph_id == 0) {
+            let chars: Vec<char> = text.chars().collect();
+            let char_byte_offsets: Vec<usize> = text.char_indices().map(|(i, _)| i).collect();
+            let dominant_script = script_runs
+                .first()
+                .map(|sr| sr.script)
+                .unwrap_or(unicode_script::Script::Common);
+
+            for glyph in &mut glyphs {
+                if glyph.glyph_id != 0 {
+                    continue;
+                }
+                let cluster = glyph.cluster as usize;
+                let char_idx = char_byte_offsets
+                    .iter()
+                    .position(|&off| off == cluster)
+                    .unwrap_or(0);
+
+                if char_idx < chars.len() {
+                    let ch = chars[char_idx];
+                    let ch_script = unicode_script::UnicodeScript::script(&ch);
+                    let fb_script = if ch_script != unicode_script::Script::Common
+                        && ch_script != unicode_script::Script::Inherited
+                    {
+                        ch_script
+                    } else {
+                        dominant_script
+                    };
+                    if let Some(fb_fid) = self.font_db.fallback_for_script(ch, fb_script) {
+                        if let Some(fb_font) = self.font_db.load_font(fb_fid) {
+                            if let Some(gid) = fb_font.glyph_index(ch) {
+                                glyph.glyph_id = gid;
+                                if let Some(advance) = fb_font.glyph_hor_advance(gid) {
+                                    let scale = font_size / fb_font.units_per_em() as f64;
+                                    glyph.x_advance = advance as f64 * scale;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         // Check for hyperlink URL on the run or its parent
         let hyperlink_url = self.doc.node(run_id).and_then(|run_node| {
@@ -1310,6 +1595,9 @@ impl<'a> LayoutEngine<'a> {
     }
 
     /// Shape a text segment with given run styling.
+    ///
+    /// After shaping with the primary font, checks for missing glyphs (glyph_id == 0)
+    /// and attempts per-character font fallback via `FontDatabase::fallback()`.
     fn shape_text_segment(
         &self,
         source_id: NodeId,
@@ -1319,33 +1607,94 @@ impl<'a> LayoutEngine<'a> {
         hyperlink_url: Option<String>,
         direction: s1_text::Direction,
     ) -> Result<ShapedRunInfo, LayoutError> {
-        let (glyphs, metrics) = if let Some(fid) = font_id {
-            if let Some(font) = self.font_db.load_font(fid) {
-                // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
-                let has_explicit_size = self
-                    .doc
-                    .node(source_id)
-                    .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
-                    .unwrap_or(false);
-                let font_size =
-                    if (run_style.superscript || run_style.subscript) && !has_explicit_size {
-                        run_style.font_size * 0.65
-                    } else {
-                        run_style.font_size
-                    };
-                let glyphs = s1_text::shape_text(text, &font, font_size, &[], None, direction)?;
-                let metrics = font.metrics(font_size);
-                (glyphs, Some(metrics))
+        // L-15: Only apply 65% scaling if the run doesn't have an explicit font size
+        let has_explicit_size = self
+            .doc
+            .node(source_id)
+            .map(|n| n.attributes.get(&AttributeKey::FontSize).is_some())
+            .unwrap_or(false);
+        let font_size =
+            if (run_style.superscript || run_style.subscript) && !has_explicit_size {
+                run_style.font_size * 0.65
             } else {
-                (synthesize_glyphs(text, run_style.font_size), None)
+                run_style.font_size
+            };
+
+        // F1.2: Detect script for script-specific shaping
+        let script_runs = s1_text::split_by_script(text);
+        let rb_script = script_runs
+            .first()
+            .and_then(|sr| s1_text::script::script_to_rustybuzz(sr.script));
+
+        let (mut glyphs, metrics, actual_font_id) = if let Some(fid) = font_id {
+            if let Some(font) = self.font_db.load_font(fid) {
+                let shaped = s1_text::shaping::shape_text_with_script(
+                    text, &font, font_size, &[], None, direction, rb_script,
+                )?;
+                let metrics = font.metrics(font_size);
+                (shaped, Some(metrics), Some(fid))
+            } else {
+                (synthesize_glyphs(text, font_size), None, None)
             }
         } else {
-            (synthesize_glyphs(text, run_style.font_size), None)
+            (synthesize_glyphs(text, font_size), None, None)
         };
+
+        // F4.1/F4.2: Per-character font fallback for missing glyphs (glyph_id == 0).
+        // Uses script-aware fallback: tries script-preferred fonts first, then
+        // falls back to general linear scan.
+        if actual_font_id.is_some() && glyphs.iter().any(|g| g.glyph_id == 0) {
+            let chars: Vec<char> = text.chars().collect();
+            let char_byte_offsets: Vec<usize> =
+                text.char_indices().map(|(i, _)| i).collect();
+            // Get the dominant script for script-aware fallback
+            let dominant_script = script_runs
+                .first()
+                .map(|sr| sr.script)
+                .unwrap_or(unicode_script::Script::Common);
+
+            for glyph in &mut glyphs {
+                if glyph.glyph_id != 0 {
+                    continue;
+                }
+                // Find the character for this glyph via cluster mapping
+                let cluster = glyph.cluster as usize;
+                let char_idx = char_byte_offsets
+                    .iter()
+                    .position(|&off| off == cluster)
+                    .unwrap_or(0);
+
+                if char_idx < chars.len() {
+                    let ch = chars[char_idx];
+                    // Use script-aware fallback for non-Common scripts
+                    let ch_script = unicode_script::UnicodeScript::script(&ch);
+                    let fb_script = if ch_script != unicode_script::Script::Common
+                        && ch_script != unicode_script::Script::Inherited
+                    {
+                        ch_script
+                    } else {
+                        dominant_script
+                    };
+                    let fb_fid = self.font_db.fallback_for_script(ch, fb_script);
+                    if let Some(fb_fid) = fb_fid {
+                        if let Some(fb_font) = self.font_db.load_font(fb_fid) {
+                            if let Some(gid) = fb_font.glyph_index(ch) {
+                                glyph.glyph_id = gid;
+                                if let Some(advance) = fb_font.glyph_hor_advance(gid) {
+                                    let scale =
+                                        font_size / fb_font.units_per_em() as f64;
+                                    glyph.x_advance = advance as f64 * scale;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
 
         Ok(ShapedRunInfo {
             source_id,
-            font_id,
+            font_id: actual_font_id.or(font_id),
             font_size: run_style.font_size,
             color: run_style.color,
             glyphs,
@@ -1413,16 +1762,32 @@ impl<'a> LayoutEngine<'a> {
             };
             let mut max_height: f64 = 0.0;
 
+            // Check if the line ends at a hyphenation Penalty (flagged = true)
+            let ends_with_hyphen = end > 0
+                && matches!(
+                    items.get(end.saturating_sub(1)),
+                    Some(BreakItem::Penalty { flagged: true, .. })
+                );
+
             for item in &items[start..end] {
                 match item {
                     BreakItem::Box {
                         run_idx,
                         width,
                         height,
-                        ..
+                        glyph_start,
+                        glyph_end,
+                        text_byte_start,
+                        text_byte_end,
                     } => {
                         let run_info = &runs[*run_idx];
                         let font_id = run_info.font_id.unwrap_or(FontId(fontdb::ID::dummy()));
+
+                        // Use the sub-range of glyphs and text for this box
+                        let sub_glyphs =
+                            run_info.glyphs[*glyph_start..*glyph_end].to_vec();
+                        let sub_text =
+                            run_info.text[*text_byte_start..*text_byte_end].to_string();
 
                         line_runs.push(GlyphRun {
                             source_id: run_info.source_id,
@@ -1430,10 +1795,10 @@ impl<'a> LayoutEngine<'a> {
                             font_size: run_info.font_size,
                             color: run_info.color,
                             x_offset: current_x,
-                            glyphs: run_info.glyphs.clone(),
+                            glyphs: sub_glyphs,
                             width: *width,
                             hyperlink_url: run_info.hyperlink_url.clone(),
-                            text: run_info.text.clone(),
+                            text: sub_text,
                             bold: run_info.bold,
                             italic: run_info.italic,
                             underline: run_info.underline,
@@ -1455,6 +1820,39 @@ impl<'a> LayoutEngine<'a> {
                         current_x += width;
                     }
                     BreakItem::Penalty { .. } | BreakItem::ForcedBreak { .. } => {}
+                }
+            }
+
+            // Merge consecutive sub-runs from the same source run.
+            // Hyphenation splits words into sub-boxes (e.g., "Ti" + "tle"), but if no
+            // break occurred between them, they should be a single GlyphRun for correct
+            // text output and rendering.
+            let mut merged_runs: Vec<GlyphRun> = Vec::new();
+            for run in line_runs {
+                let should_merge = merged_runs.last().is_some_and(|prev: &GlyphRun| {
+                    prev.source_id == run.source_id
+                        && prev.font_id == run.font_id
+                        && (prev.font_size - run.font_size).abs() < 0.01
+                        && prev.bold == run.bold
+                        && prev.italic == run.italic
+                });
+                if should_merge {
+                    let prev = merged_runs.last_mut().unwrap();
+                    prev.glyphs.extend(run.glyphs);
+                    prev.text.push_str(&run.text);
+                    prev.width += run.width;
+                } else {
+                    merged_runs.push(run);
+                }
+            }
+            let mut line_runs = merged_runs;
+
+            // If the line ends at a hyphenation point, append "-" to the last run's text
+            if ends_with_hyphen {
+                if let Some(last_run) = line_runs.last_mut() {
+                    last_run.text.push('-');
+                    let hyphen_width = last_run.font_size * 0.3;
+                    last_run.width += hyphen_width;
                 }
             }
 
@@ -1493,6 +1891,10 @@ impl<'a> LayoutEngine<'a> {
     }
 
     /// Build Knuth-Plass break items from shaped runs.
+    ///
+    /// Splits runs at word boundaries (spaces) so the line-breaking algorithm
+    /// can break within multi-word runs. Optionally inserts hyphenation penalty
+    /// items at valid hyphenation points within long words.
     fn build_break_items(&self, runs: &[ShapedRunInfo]) -> Vec<BreakItem> {
         let mut items: Vec<BreakItem> = Vec::new();
 
@@ -1502,28 +1904,202 @@ impl<'a> LayoutEngine<'a> {
                 continue;
             }
 
-            let glyph_advance: f64 = run_info.glyphs.iter().map(|g| g.x_advance).sum();
-            // Add character spacing contribution: spacing applies between characters,
-            // so (num_chars - 1) * spacing. Guard against empty text.
-            let num_chars = run_info.text.chars().count();
-            let spacing_contribution = if num_chars > 1 {
-                (num_chars as f64 - 1.0) * run_info.character_spacing
-            } else {
-                0.0
-            };
-            let run_width = glyph_advance + spacing_contribution;
+            // If the run is an inline image or empty, treat as atomic box
+            if run_info.inline_image.is_some() || run_info.text.is_empty() {
+                let glyph_advance: f64 = run_info.glyphs.iter().map(|g| g.x_advance).sum();
+                let run_height = run_info
+                    .metrics
+                    .map(|m| m.ascent - m.descent)
+                    .unwrap_or(run_info.font_size);
+                items.push(BreakItem::Box {
+                    run_idx,
+                    width: glyph_advance,
+                    height: run_height,
+                    glyph_start: 0,
+                    glyph_end: run_info.glyphs.len(),
+                    text_byte_start: 0,
+                    text_byte_end: run_info.text.len(),
+                });
+                items.push(BreakItem::Glue {
+                    width: 0.0,
+                    stretch: 0.0,
+                    shrink: 0.0,
+                });
+                continue;
+            }
+
             let run_height = run_info
                 .metrics
                 .map(|m| m.ascent - m.descent)
                 .unwrap_or(run_info.font_size);
 
-            items.push(BreakItem::Box {
-                run_idx,
-                width: run_width,
-                height: run_height,
-            });
+            // Split the run at word boundaries (space → non-space transitions)
+            // so the line-breaking algorithm can break within multi-word runs.
+            // Trailing spaces are included with the preceding word to preserve
+            // text content in GlyphRun output. Zero-width Glue items between
+            // word+space groups serve as break opportunities.
+            let text = &run_info.text;
+            let glyphs = &run_info.glyphs;
 
-            // Add inter-run glue (stretchable space)
+            // Build word groups: each group is "word" + optional trailing spaces.
+            // Split at non-space→space→non-space transitions: the break is between
+            // the last trailing space and the next word character.
+            let mut word_groups: Vec<(usize, usize)> = Vec::new(); // (byte_start, byte_end)
+            let bytes = text.as_bytes();
+            if !bytes.is_empty() {
+                let mut group_start: usize = 0;
+                let mut prev_was_space = bytes[0] == b' ';
+                for (byte_idx, ch) in text.char_indices().skip(1) {
+                    let is_space = ch == ' ';
+                    if !is_space && prev_was_space && byte_idx > group_start {
+                        // Transition from space back to word: end current group
+                        word_groups.push((group_start, byte_idx));
+                        group_start = byte_idx;
+                    }
+                    prev_was_space = is_space;
+                }
+                word_groups.push((group_start, text.len()));
+            }
+
+            // If only one group (no splits), keep as single Box
+            if word_groups.len() <= 1 {
+                let glyph_advance: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+                let num_chars = text.chars().count();
+                let spacing_contribution = if num_chars > 1 {
+                    (num_chars as f64 - 1.0) * run_info.character_spacing
+                } else {
+                    0.0
+                };
+
+                // Check for hyphenation on single-word runs
+                let word_text = text.trim();
+                let hyph_breaks = s1_text::hyphenation::hyphenate_word(word_text, "en-US");
+
+                if hyph_breaks.is_empty() {
+                    items.push(BreakItem::Box {
+                        run_idx,
+                        width: glyph_advance + spacing_contribution,
+                        height: run_height,
+                        glyph_start: 0,
+                        glyph_end: glyphs.len(),
+                        text_byte_start: 0,
+                        text_byte_end: text.len(),
+                    });
+                } else {
+                    // Split single word at hyphenation points
+                    let word_start = text.find(|c: char| c != ' ').unwrap_or(0);
+                    let mut prev_byte = 0;
+                    let mut prev_glyph = 0;
+
+                    for &hyph_byte_in_word in &hyph_breaks {
+                        let hyph_byte = word_start + hyph_byte_in_word;
+                        if hyph_byte >= text.len() {
+                            break;
+                        }
+
+                        let hyph_glyph = glyphs[prev_glyph..]
+                            .iter()
+                            .position(|g| (g.cluster as usize) >= hyph_byte)
+                            .map(|i| i + prev_glyph)
+                            .unwrap_or(glyphs.len());
+
+                        let sub_advance: f64 = glyphs[prev_glyph..hyph_glyph]
+                            .iter()
+                            .map(|g| g.x_advance)
+                            .sum();
+                        let sub_chars = text[prev_byte..hyph_byte].chars().count();
+                        let sub_spacing = if sub_chars > 1 {
+                            (sub_chars as f64 - 1.0) * run_info.character_spacing
+                        } else {
+                            0.0
+                        };
+
+                        items.push(BreakItem::Box {
+                            run_idx,
+                            width: sub_advance + sub_spacing,
+                            height: run_height,
+                            glyph_start: prev_glyph,
+                            glyph_end: hyph_glyph,
+                            text_byte_start: prev_byte,
+                            text_byte_end: hyph_byte,
+                        });
+                        items.push(BreakItem::Penalty {
+                            penalty: 50.0,
+                            flagged: true,
+                        });
+
+                        prev_byte = hyph_byte;
+                        prev_glyph = hyph_glyph;
+                    }
+
+                    // Remaining part
+                    let remaining_advance: f64 = glyphs[prev_glyph..]
+                        .iter()
+                        .map(|g| g.x_advance)
+                        .sum();
+                    let remaining_chars = text[prev_byte..].chars().count();
+                    let remaining_spacing = if remaining_chars > 1 {
+                        (remaining_chars as f64 - 1.0) * run_info.character_spacing
+                    } else {
+                        0.0
+                    };
+                    items.push(BreakItem::Box {
+                        run_idx,
+                        width: remaining_advance + remaining_spacing,
+                        height: run_height,
+                        glyph_start: prev_glyph,
+                        glyph_end: glyphs.len(),
+                        text_byte_start: prev_byte,
+                        text_byte_end: text.len(),
+                    });
+                }
+            } else {
+                // Multiple word groups — create Box per group with Glue between
+                for (gi, (group_start, group_end)) in word_groups.iter().enumerate() {
+                    let g_start = glyphs
+                        .iter()
+                        .position(|g| (g.cluster as usize) >= *group_start)
+                        .unwrap_or(glyphs.len());
+                    let g_end = glyphs
+                        .iter()
+                        .rposition(|g| (g.cluster as usize) < *group_end)
+                        .map(|i| i + 1)
+                        .unwrap_or(g_start);
+
+                    let group_advance: f64 = glyphs[g_start..g_end]
+                        .iter()
+                        .map(|g| g.x_advance)
+                        .sum();
+                    let group_text = &text[*group_start..*group_end];
+                    let group_chars = group_text.chars().count();
+                    let spacing_contribution = if group_chars > 1 {
+                        (group_chars as f64 - 1.0) * run_info.character_spacing
+                    } else {
+                        0.0
+                    };
+
+                    items.push(BreakItem::Box {
+                        run_idx,
+                        width: group_advance + spacing_contribution,
+                        height: run_height,
+                        glyph_start: g_start,
+                        glyph_end: g_end,
+                        text_byte_start: *group_start,
+                        text_byte_end: *group_end,
+                    });
+
+                    // Add zero-width Glue as break opportunity between groups
+                    if gi + 1 < word_groups.len() {
+                        items.push(BreakItem::Glue {
+                            width: 0.0,
+                            stretch: 0.0,
+                            shrink: 0.0,
+                        });
+                    }
+                }
+            }
+
+            // Add inter-run glue (zero-width, allows break between runs)
             items.push(BreakItem::Glue {
                 width: 0.0,
                 stretch: 0.0,
@@ -1581,6 +2157,19 @@ impl<'a> LayoutEngine<'a> {
             .max(1);
 
         let col_width = content_rect.width / num_cols as f64;
+
+        // Extract table-level borders for inheritance to cells without explicit borders
+        let table_borders = table
+            .attributes
+            .get(&AttributeKey::TableBorders)
+            .and_then(|v| {
+                if let AttributeValue::Borders(b) = v {
+                    Some(b.clone())
+                } else {
+                    None
+                }
+            });
+
         let mut rows: Vec<LayoutTableRow> = Vec::new();
         let mut cumulative_y = 0.0;
 
@@ -1666,20 +2255,34 @@ impl<'a> LayoutEngine<'a> {
                                 }
                             });
 
-                        // Extract cell borders
-                        let (border_top, border_bottom, border_left, border_right) =
-                            if let Some(AttributeValue::Borders(borders)) =
-                                cell_node.attributes.get(&AttributeKey::CellBorders)
-                            {
+                        // Extract cell borders, inheriting from table borders if needed
+                        let cell_borders = cell_node
+                            .attributes
+                            .get(&AttributeKey::CellBorders)
+                            .and_then(|v| {
+                                if let AttributeValue::Borders(b) = v {
+                                    Some(b.clone())
+                                } else {
+                                    None
+                                }
+                            });
+
+                        let (border_top, border_bottom, border_left, border_right) = {
+                            // Use cell borders if present, otherwise inherit from table
+                            let effective = cell_borders
+                                .as_ref()
+                                .or(table_borders.as_ref());
+                            if let Some(borders) = effective {
                                 (
-                                    borders.top.as_ref().map(format_border_css),
-                                    borders.bottom.as_ref().map(format_border_css),
-                                    borders.left.as_ref().map(format_border_css),
-                                    borders.right.as_ref().map(format_border_css),
+                                    borders.top.as_ref().and_then(format_border_css_opt),
+                                    borders.bottom.as_ref().and_then(format_border_css_opt),
+                                    borders.left.as_ref().and_then(format_border_css_opt),
+                                    borders.right.as_ref().and_then(format_border_css_opt),
                                 )
                             } else {
                                 (None, None, None, None)
-                            };
+                            }
+                        };
 
                         cells.push(LayoutTableCell {
                             bounds: cell_rect,
@@ -1828,6 +2431,217 @@ impl<'a> LayoutEngine<'a> {
                 content_type,
             },
         })
+    }
+
+    /// Layout a floating (anchored) image.
+    ///
+    /// Computes absolute page coordinates from the image's offset attributes.
+    /// EMU (English Metric Units): 914400 EMU = 1 inch = 72 points.
+    fn layout_floating_image(
+        &self,
+        image_id: NodeId,
+        page_layout: &PageLayout,
+        current_y: f64,
+    ) -> Result<LayoutBlock, LayoutError> {
+        let node = self.doc.node(image_id);
+        let content_rect = page_layout.content_rect();
+
+        // Get image dimensions
+        let (width, height) = node
+            .map(|n| {
+                let w = n
+                    .attributes
+                    .get(&AttributeKey::ImageWidth)
+                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                    .unwrap_or(100.0);
+                let h = n
+                    .attributes
+                    .get(&AttributeKey::ImageHeight)
+                    .and_then(|v| if let AttributeValue::Float(d) = v { Some(*d) } else { None })
+                    .unwrap_or(100.0);
+                (w, h)
+            })
+            .unwrap_or((100.0, 100.0));
+
+        // Constrain to page width
+        let scale = if width > page_layout.width { page_layout.width / width } else { 1.0 };
+        let final_w = width * scale;
+        let final_h = height * scale;
+
+        // Convert EMU offsets to points (914400 EMU = 72pt)
+        const EMU_PER_PT: f64 = 914400.0 / 72.0;
+
+        let h_offset_emu = node
+            .and_then(|n| n.attributes.get(&AttributeKey::ImageHorizontalOffset))
+            .and_then(|v| if let AttributeValue::Int(i) = v { Some(*i) } else { None })
+            .unwrap_or(0);
+        let v_offset_emu = node
+            .and_then(|n| n.attributes.get(&AttributeKey::ImageVerticalOffset))
+            .and_then(|v| if let AttributeValue::Int(i) = v { Some(*i) } else { None })
+            .unwrap_or(0);
+
+        let h_relative = node
+            .and_then(|n| n.attributes.get_string(&AttributeKey::ImageHorizontalRelativeFrom))
+            .unwrap_or("column");
+        let v_relative = node
+            .and_then(|n| n.attributes.get_string(&AttributeKey::ImageVerticalRelativeFrom))
+            .unwrap_or("paragraph");
+
+        // Compute absolute X position
+        let x = match h_relative {
+            "page" => h_offset_emu as f64 / EMU_PER_PT,
+            "margin" | "column" => content_rect.x + h_offset_emu as f64 / EMU_PER_PT,
+            "character" => content_rect.x + h_offset_emu as f64 / EMU_PER_PT,
+            _ => content_rect.x + h_offset_emu as f64 / EMU_PER_PT,
+        };
+
+        // Compute absolute Y position — use current_y for paragraph-relative
+        let y = match v_relative {
+            "page" => v_offset_emu as f64 / EMU_PER_PT,
+            "paragraph" | "line" => current_y + v_offset_emu as f64 / EMU_PER_PT,
+            "margin" => content_rect.y + v_offset_emu as f64 / EMU_PER_PT,
+            _ => content_rect.y + v_offset_emu as f64 / EMU_PER_PT,
+        };
+
+        // Get media data
+        let media_id_val = node.and_then(|n| {
+            if let Some(AttributeValue::MediaId(mid)) =
+                n.attributes.get(&AttributeKey::ImageMediaId)
+            {
+                Some(mid.0)
+            } else {
+                None
+            }
+        });
+
+        let media_id_str = media_id_val
+            .map(|id| format!("{id}"))
+            .or_else(|| {
+                node.and_then(|n| {
+                    n.attributes
+                        .get_string(&AttributeKey::ImageMediaId)
+                        .map(|s| s.to_string())
+                })
+            })
+            .unwrap_or_default();
+
+        let (image_data, content_type) = if let Some(mid) = media_id_val {
+            let media_id_key = s1_model::MediaId(mid);
+            if let Some(item) = self.doc.media().get(media_id_key) {
+                (Some(item.data.clone()), Some(item.content_type.clone()))
+            } else {
+                (None, None)
+            }
+        } else {
+            (None, None)
+        };
+
+        Ok(LayoutBlock {
+            source_id: image_id,
+            bounds: Rect::new(x, y, final_w, final_h),
+            kind: LayoutBlockKind::Image {
+                media_id: media_id_str,
+                bounds: Rect::new(0.0, 0.0, final_w, final_h),
+                image_data,
+                content_type,
+            },
+        })
+    }
+
+    /// Build a `FloatingImageRect` from a positioned floating image block.
+    fn build_float_rect(&self, image_id: NodeId, block: &LayoutBlock) -> FloatingImageRect {
+        let node = self.doc.node(image_id);
+
+        // Parse wrap type
+        let wrap_type = node
+            .and_then(|n| n.attributes.get_string(&AttributeKey::ImageWrapType))
+            .map(|s| match s {
+                "square" => WrapType::Square,
+                "tight" => WrapType::Tight,
+                "through" => WrapType::Through,
+                "topAndBottom" => WrapType::TopAndBottom,
+                _ => WrapType::None,
+            })
+            .unwrap_or(WrapType::None);
+
+        // Parse distance from text (stored as "distT,distB,distL,distR" in EMU)
+        const EMU_PER_PT: f64 = 914400.0 / 72.0;
+        let (dist_top, dist_bottom, dist_left, dist_right) = node
+            .and_then(|n| n.attributes.get_string(&AttributeKey::ImageDistanceFromText))
+            .map(|s| {
+                let parts: Vec<f64> = s
+                    .split(',')
+                    .filter_map(|p| p.trim().parse::<f64>().ok())
+                    .map(|emu| emu / EMU_PER_PT)
+                    .collect();
+                (
+                    parts.first().copied().unwrap_or(0.0),
+                    parts.get(1).copied().unwrap_or(0.0),
+                    parts.get(2).copied().unwrap_or(0.0),
+                    parts.get(3).copied().unwrap_or(0.0),
+                )
+            })
+            .unwrap_or((0.0, 0.0, 0.0, 0.0));
+
+        FloatingImageRect {
+            bounds: block.bounds,
+            wrap_type,
+            dist_top,
+            dist_bottom,
+            dist_left,
+            dist_right,
+        }
+    }
+
+    /// Adjust a content rect to avoid overlapping square/tight/through floats.
+    ///
+    /// For floats on the left side of the content area, narrows from the left.
+    /// For floats on the right side, narrows from the right.
+    fn adjust_rect_for_floats(
+        content_rect: Rect,
+        current_y: f64,
+        page_floats: &[FloatingImageRect],
+    ) -> Rect {
+        let mut adjusted = content_rect;
+
+        for flt in page_floats {
+            match flt.wrap_type {
+                WrapType::Square | WrapType::Tight | WrapType::Through => {
+                    let ex = flt.exclusion_rect();
+                    // Check if this float overlaps the paragraph's starting Y
+                    // Use a conservative check: float overlaps [current_y, page bottom]
+                    if ex.y < content_rect.bottom() && ex.bottom() > current_y {
+                        // Determine if float is on left or right side
+                        let float_center_x = ex.x + ex.width / 2.0;
+                        let content_center_x = content_rect.x + content_rect.width / 2.0;
+
+                        if float_center_x < content_center_x {
+                            // Float on left — narrow from left
+                            let new_left = ex.right();
+                            if new_left > adjusted.x && new_left < adjusted.right() {
+                                let delta = new_left - adjusted.x;
+                                adjusted.x = new_left;
+                                adjusted.width -= delta;
+                            }
+                        } else {
+                            // Float on right — narrow from right
+                            let new_right = ex.x;
+                            if new_right > adjusted.x && new_right < adjusted.right() {
+                                adjusted.width = new_right - adjusted.x;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        // Ensure minimum width
+        if adjusted.width < 36.0 {
+            adjusted.width = 36.0;
+        }
+
+        adjusted
     }
 
     /// Layout header/footer content for a page using a specific section's
@@ -2423,6 +3237,7 @@ impl<'a> LayoutEngine<'a> {
             header: None,
             footer: None,
             footnotes: Vec::new(),
+            floating_images: Vec::new(),
             section_index,
         }
     }
@@ -2543,6 +3358,14 @@ fn hash_node(doc: &DocumentModel, node_id: NodeId, hash: &mut u64) {
     }
 }
 
+/// Format a border side as a CSS border value, returning None for `BorderStyle::None`.
+fn format_border_css_opt(border: &s1_model::BorderSide) -> Option<String> {
+    if border.style == s1_model::BorderStyle::None {
+        return None;
+    }
+    Some(format_border_css(border))
+}
+
 /// Format a border side as a CSS border value.
 fn format_border_css(border: &s1_model::BorderSide) -> String {
     let style_str = match border.style {
@@ -2624,11 +3447,19 @@ fn compute_line_height(max_run_height: f64, line_spacing: &LineSpacing) -> f64 {
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 enum BreakItem {
-    /// Content with a fixed width (a shaped run).
+    /// Content with a fixed width (a shaped run or sub-range of one).
     Box {
         run_idx: usize,
         width: f64,
         height: f64,
+        /// Start glyph index within the run (inclusive).
+        glyph_start: usize,
+        /// End glyph index within the run (exclusive).
+        glyph_end: usize,
+        /// Start byte offset within the run's text.
+        text_byte_start: usize,
+        /// End byte offset within the run's text.
+        text_byte_end: usize,
     },
     /// Stretchable/shrinkable space between boxes.
     Glue {
@@ -2638,8 +3469,9 @@ enum BreakItem {
     },
     /// A possible break point with a penalty cost.
     Penalty {
-        #[allow(dead_code)]
         penalty: f64,
+        /// If true, a hyphen should be inserted when the line breaks here.
+        flagged: bool,
     },
     /// A forced line break (from LineBreak node).
     ForcedBreak {
@@ -2681,8 +3513,13 @@ fn knuth_plass_breaks(
     let mut active: Vec<usize> = vec![0]; // indices into nodes
 
     for (i, item) in items.iter().enumerate() {
-        let is_feasible_break =
-            matches!(item, BreakItem::Glue { .. } | BreakItem::ForcedBreak { .. });
+        // Determine if this item is a feasible break point and its penalty
+        let (is_feasible_break, penalty_cost) = match item {
+            BreakItem::Glue { .. } => (true, 0.0),
+            BreakItem::ForcedBreak { .. } => (true, 0.0),
+            BreakItem::Penalty { penalty, .. } => (true, *penalty),
+            _ => (false, 0.0),
+        };
 
         if !is_feasible_break {
             continue;
@@ -2728,11 +3565,11 @@ fn knuth_plass_breaks(
                 let is_forced = matches!(item, BreakItem::ForcedBreak { .. });
 
                 // Standard Knuth-Plass demerit calculation:
-                // Forced breaks get minimal demerits
+                // Forced breaks get minimal demerits, penalties add their cost
                 let demerits = if is_forced {
                     a.demerits
                 } else {
-                    (1.0 + badness).powi(2) + a.demerits
+                    (1.0 + badness + penalty_cost).powi(2) + a.demerits
                 };
 
                 match &best_node {
@@ -2856,6 +3693,9 @@ fn greedy_breaks(items: &[BreakItem], available_width: f64, first_line_indent: f
     let mut breaks = vec![0];
     let mut current_width = 0.0;
     let mut is_first_line = true;
+    // Track the last feasible break point (Glue or Penalty) for deferred breaking
+    let mut last_break_opportunity: Option<usize> = None;
+    let mut width_at_last_break: f64 = 0.0;
 
     for (i, item) in items.iter().enumerate() {
         match item {
@@ -2867,22 +3707,40 @@ fn greedy_breaks(items: &[BreakItem], available_width: f64, first_line_indent: f
                 };
 
                 if current_width + width > line_w + 0.01 && i > *breaks.last().unwrap_or(&0) {
+                    // If we have a previous break opportunity, break there instead
+                    if let Some(bp) = last_break_opportunity {
+                        if bp > *breaks.last().unwrap_or(&0) {
+                            breaks.push(bp + 1);
+                            current_width = current_width - width_at_last_break + width;
+                            is_first_line = false;
+                            last_break_opportunity = None;
+                            continue;
+                        }
+                    }
                     breaks.push(i);
                     current_width = *width;
                     is_first_line = false;
+                    last_break_opportunity = None;
                 } else {
                     current_width += width;
                 }
             }
             BreakItem::Glue { width, .. } => {
+                last_break_opportunity = Some(i);
+                width_at_last_break = current_width;
                 current_width += width;
             }
             BreakItem::ForcedBreak { .. } => {
                 breaks.push(i + 1);
                 current_width = 0.0;
                 is_first_line = false;
+                last_break_opportunity = None;
             }
-            BreakItem::Penalty { .. } => {}
+            BreakItem::Penalty { .. } => {
+                // Penalty is a valid break opportunity (e.g. hyphenation point)
+                last_break_opportunity = Some(i);
+                width_at_last_break = current_width;
+            }
         }
     }
 
@@ -3235,6 +4093,10 @@ mod tests {
                 run_idx: 0,
                 width: 100.0,
                 height: 12.0,
+                glyph_start: 0,
+                glyph_end: 5,
+                text_byte_start: 0,
+                text_byte_end: 5,
             },
             BreakItem::Glue {
                 width: 0.0,
@@ -3256,12 +4118,20 @@ mod tests {
                 run_idx: 0,
                 width: 100.0,
                 height: 12.0,
+                glyph_start: 0,
+                glyph_end: 5,
+                text_byte_start: 0,
+                text_byte_end: 5,
             },
             BreakItem::ForcedBreak { run_idx: 1 },
             BreakItem::Box {
                 run_idx: 2,
                 width: 100.0,
                 height: 12.0,
+                glyph_start: 0,
+                glyph_end: 5,
+                text_byte_start: 0,
+                text_byte_end: 5,
             },
             BreakItem::Glue {
                 width: 0.0,
@@ -3283,6 +4153,10 @@ mod tests {
                 run_idx: 0,
                 width: 300.0,
                 height: 12.0,
+                glyph_start: 0,
+                glyph_end: 10,
+                text_byte_start: 0,
+                text_byte_end: 10,
             },
             BreakItem::Glue {
                 width: 0.0,
@@ -3293,6 +4167,10 @@ mod tests {
                 run_idx: 1,
                 width: 300.0,
                 height: 12.0,
+                glyph_start: 0,
+                glyph_end: 10,
+                text_byte_start: 0,
+                text_byte_end: 10,
             },
             BreakItem::Glue {
                 width: 0.0,
@@ -4887,5 +5765,649 @@ mod tests {
         // Gap should be approximately 20pt (collapsed), not 32pt (additive)
         assert!(gap < 25.0, "Expected collapsed margin ~20pt, got {gap}pt");
         assert!(gap >= 18.0, "Expected collapsed margin ~20pt, got {gap}pt");
+    }
+
+    // --- Multi-column layout tests ---
+
+    #[test]
+    fn layout_two_column_basic() {
+        // Create a section with 2 columns and enough paragraphs to overflow
+        // the first column, verifying blocks appear in two columns.
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add 60 paragraphs (enough to fill one column of US Letter)
+        for i in 0..60 {
+            let para_id = doc.next_id();
+            doc.insert_node(body_id, i, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(run_id, 0, Node::text(text_id, "Column text line"))
+                .unwrap();
+        }
+
+        // Set up 2-column section
+        let mut sp = s1_model::SectionProperties::default();
+        sp.columns = 2;
+        sp.column_spacing = 36.0;
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        // Should have at least one page
+        assert!(!result.pages.is_empty());
+
+        let page = &result.pages[0];
+        assert!(
+            page.blocks.len() > 1,
+            "expected multiple blocks on first page"
+        );
+
+        // Verify blocks are in two columns by checking distinct x offsets
+        let mut x_offsets: Vec<f64> = page
+            .blocks
+            .iter()
+            .map(|b| (b.bounds.x * 10.0).round() / 10.0)
+            .collect();
+        x_offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        x_offsets.dedup();
+
+        assert!(
+            x_offsets.len() >= 2,
+            "expected blocks in at least 2 columns (distinct x offsets), got {:?}",
+            x_offsets
+        );
+
+        // The column width should be (468 - 36) / 2 = 216 points for US Letter with 1" margins
+        // First column x = 72, second column x = 72 + 216 + 36 = 324
+        let expected_col1_x = 72.0;
+        let expected_col2_x = 72.0 + 216.0 + 36.0;
+        assert!(
+            (x_offsets[0] - expected_col1_x).abs() < 1.0,
+            "first column x should be ~{expected_col1_x}, got {}",
+            x_offsets[0]
+        );
+        assert!(
+            (x_offsets[1] - expected_col2_x).abs() < 1.0,
+            "second column x should be ~{expected_col2_x}, got {}",
+            x_offsets[1]
+        );
+    }
+
+    #[test]
+    fn layout_three_column_positions() {
+        // Verify 3-column layout has correct x-offset positions
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add enough paragraphs to fill at least 2 columns
+        for i in 0..80 {
+            let para_id = doc.next_id();
+            doc.insert_node(body_id, i, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(run_id, 0, Node::text(text_id, "Three col text"))
+                .unwrap();
+        }
+
+        let mut sp = s1_model::SectionProperties::default();
+        sp.columns = 3;
+        sp.column_spacing = 18.0;
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        let page = &result.pages[0];
+        let mut x_offsets: Vec<f64> = page
+            .blocks
+            .iter()
+            .map(|b| (b.bounds.x * 10.0).round() / 10.0)
+            .collect();
+        x_offsets.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        x_offsets.dedup();
+
+        // Content width = 468, spacing = 18, 3 columns
+        // col_width = (468 - 2*18) / 3 = 432/3 = 144
+        // col 0 x = 72
+        // col 1 x = 72 + 144 + 18 = 234
+        // col 2 x = 72 + 2*(144+18) = 72 + 324 = 396
+        assert!(
+            x_offsets.len() >= 2,
+            "expected blocks in at least 2 columns, got {:?}",
+            x_offsets
+        );
+    }
+
+    #[test]
+    fn layout_column_break() {
+        // Verify that a ColumnBreak forces content to the next column
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Paragraph 1
+        let p1 = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+        let r1 = doc.next_id();
+        doc.insert_node(p1, 0, Node::new(r1, NodeType::Run))
+            .unwrap();
+        let t1 = doc.next_id();
+        doc.insert_node(r1, 0, Node::text(t1, "Column 1 text"))
+            .unwrap();
+
+        // Column break
+        let cb = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(cb, NodeType::ColumnBreak))
+            .unwrap();
+
+        // Paragraph 2 (should be in column 2)
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 2, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+        let r2 = doc.next_id();
+        doc.insert_node(p2, 0, Node::new(r2, NodeType::Run))
+            .unwrap();
+        let t2 = doc.next_id();
+        doc.insert_node(r2, 0, Node::text(t2, "Column 2 text"))
+            .unwrap();
+
+        // 2-column section
+        let mut sp = s1_model::SectionProperties::default();
+        sp.columns = 2;
+        sp.column_spacing = 36.0;
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert_eq!(result.pages.len(), 1, "should fit on one page");
+        let page = &result.pages[0];
+        assert_eq!(page.blocks.len(), 2, "should have 2 paragraph blocks");
+
+        // Blocks should be at different x positions (different columns)
+        let x1 = page.blocks[0].bounds.x;
+        let x2 = page.blocks[1].bounds.x;
+        assert!(
+            (x2 - x1).abs() > 100.0,
+            "blocks should be in different columns: x1={x1}, x2={x2}"
+        );
+    }
+
+    #[test]
+    fn layout_single_column_unchanged() {
+        // Verify that single-column layout is unaffected by multi-column code
+        let doc = make_multi_para_doc(&["Hello", "World", "Test"]);
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+        assert_eq!(result.pages.len(), 1);
+        assert_eq!(result.pages[0].blocks.len(), 3);
+
+        // All blocks should have the same x offset (single column)
+        let x_first = result.pages[0].blocks[0].bounds.x;
+        for block in &result.pages[0].blocks {
+            assert!(
+                (block.bounds.x - x_first).abs() < 0.01,
+                "single-column blocks should all have same x"
+            );
+        }
+    }
+
+    #[test]
+    fn column_content_rect_computation() {
+        // Test the column_content_rect helper directly
+        let full_rect = Rect::new(72.0, 72.0, 468.0, 648.0);
+
+        // Single column: returns full rect
+        let r = LayoutEngine::column_content_rect(full_rect, 1, 36.0, 0);
+        assert!((r.x - 72.0).abs() < 0.01);
+        assert!((r.width - 468.0).abs() < 0.01);
+
+        // Two columns with 36pt spacing
+        // col_width = (468 - 36) / 2 = 216
+        let c0 = LayoutEngine::column_content_rect(full_rect, 2, 36.0, 0);
+        assert!((c0.x - 72.0).abs() < 0.01);
+        assert!((c0.width - 216.0).abs() < 0.01);
+
+        let c1 = LayoutEngine::column_content_rect(full_rect, 2, 36.0, 1);
+        assert!((c1.x - 324.0).abs() < 0.01); // 72 + 216 + 36
+        assert!((c1.width - 216.0).abs() < 0.01);
+
+        // Three columns with 18pt spacing
+        // col_width = (468 - 2*18) / 3 = 144
+        let c0 = LayoutEngine::column_content_rect(full_rect, 3, 18.0, 0);
+        assert!((c0.x - 72.0).abs() < 0.01);
+        assert!((c0.width - 144.0).abs() < 0.01);
+
+        let c1 = LayoutEngine::column_content_rect(full_rect, 3, 18.0, 1);
+        assert!((c1.x - 234.0).abs() < 0.01); // 72 + 144 + 18
+        assert!((c1.width - 144.0).abs() < 0.01);
+
+        let c2 = LayoutEngine::column_content_rect(full_rect, 3, 18.0, 2);
+        assert!((c2.x - 396.0).abs() < 0.01); // 72 + 2*(144+18)
+        assert!((c2.width - 144.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn layout_columns_overflow_to_next_page() {
+        // With 2 columns and enough content, verify blocks overflow to a second page
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add 120 paragraphs (enough to fill both columns on one page)
+        for i in 0..120 {
+            let para_id = doc.next_id();
+            doc.insert_node(body_id, i, Node::new(para_id, NodeType::Paragraph))
+                .unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(run_id, 0, Node::text(text_id, "Overflow text"))
+                .unwrap();
+        }
+
+        let mut sp = s1_model::SectionProperties::default();
+        sp.columns = 2;
+        sp.column_spacing = 36.0;
+        doc.sections_mut().push(sp);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(
+            result.pages.len() >= 2,
+            "expected at least 2 pages for 120 paragraphs in 2 columns, got {}",
+            result.pages.len()
+        );
+    }
+
+    #[test]
+    fn floating_image_square_wrap_narrows_paragraph() {
+        // A floating image on the right with "square" wrap should narrow paragraph width
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add a floating image positioned on the right side
+        let img_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(img_id, NodeType::Image))
+            .unwrap();
+        let img_node = doc.node_mut(img_id).unwrap();
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(100.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(100.0));
+        img_node.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("square".to_string()),
+        );
+        // Position on the right: 350pt from column left (content width = 468pt for letter)
+        // 350 pt = 350 * 12700 EMU = 4_445_000 EMU
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(4_445_000),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("paragraph".to_string()),
+        );
+
+        // Add a paragraph after the image
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "This text should wrap around the floating image"))
+            .unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        assert!(!result.pages.is_empty());
+        let page = &result.pages[0];
+
+        // Should have floating images
+        assert_eq!(page.floating_images.len(), 1, "expected 1 floating image");
+
+        // The paragraph should be narrower than full content width (468pt for letter)
+        let para_block = page.blocks.iter().find(|b| {
+            matches!(b.kind, LayoutBlockKind::Paragraph { .. })
+        });
+        assert!(para_block.is_some(), "expected a paragraph block");
+        let pb = para_block.unwrap();
+        assert!(
+            pb.bounds.width < 468.0,
+            "paragraph width ({}) should be narrower than full content width (468pt) due to float wrapping",
+            pb.bounds.width
+        );
+    }
+
+    #[test]
+    fn floating_image_top_and_bottom_advances_y() {
+        // A floating image with "topAndBottom" wrap should push paragraphs below it
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Floating image at top of content area, 200pt tall
+        let img_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(img_id, NodeType::Image))
+            .unwrap();
+        let img_node = doc.node_mut(img_id).unwrap();
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(200.0));
+        img_node.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("topAndBottom".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("margin".to_string()),
+        );
+
+        // Add a paragraph
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Below the image"))
+            .unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        let page = &result.pages[0];
+        let para_block = page.blocks.iter().find(|b| {
+            matches!(b.kind, LayoutBlockKind::Paragraph { .. })
+        });
+        assert!(para_block.is_some());
+        let pb = para_block.unwrap();
+
+        // Paragraph Y should be at or below the image bottom (72 + 200 = 272pt for letter margins)
+        assert!(
+            pb.bounds.y >= 272.0,
+            "paragraph Y ({}) should be >= 272pt (below the topAndBottom floating image)",
+            pb.bounds.y
+        );
+    }
+
+    #[test]
+    fn floating_image_none_wrap_no_effect_on_paragraph() {
+        // A floating image with "none" wrap (behind/inFront) should not affect paragraph layout
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Floating image with no wrap
+        let img_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(img_id, NodeType::Image))
+            .unwrap();
+        let img_node = doc.node_mut(img_id).unwrap();
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(200.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(200.0));
+        img_node.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("none".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("margin".to_string()),
+        );
+
+        // Paragraph
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Overlapping text"))
+            .unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        let page = &result.pages[0];
+        let para_block = page.blocks.iter().find(|b| {
+            matches!(b.kind, LayoutBlockKind::Paragraph { .. })
+        });
+        assert!(para_block.is_some());
+        let pb = para_block.unwrap();
+
+        // With wrap=none, paragraph should start at normal Y (72pt for letter top margin)
+        assert!(
+            pb.bounds.y < 100.0,
+            "paragraph Y ({}) should be near page top — wrap=none should not push it down",
+            pb.bounds.y
+        );
+        // Width should be full content width
+        assert!(
+            (pb.bounds.width - 468.0).abs() < 1.0,
+            "paragraph width ({}) should be full 468pt — wrap=none should not narrow it",
+            pb.bounds.width
+        );
+    }
+
+    #[test]
+    fn floating_image_left_side_square_wrap() {
+        // Float on the left side should narrow from the left
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Floating image positioned on the left (offset 0)
+        let img_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(img_id, NodeType::Image))
+            .unwrap();
+        let img_node = doc.node_mut(img_id).unwrap();
+        img_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(150.0));
+        img_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(100.0));
+        img_node.attributes.set(
+            AttributeKey::ImagePositionType,
+            AttributeValue::String("anchor".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("square".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalOffset,
+            AttributeValue::Int(0),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageHorizontalRelativeFrom,
+            AttributeValue::String("column".to_string()),
+        );
+        img_node.attributes.set(
+            AttributeKey::ImageVerticalRelativeFrom,
+            AttributeValue::String("margin".to_string()),
+        );
+
+        // Paragraph
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Wrapping on the right side of the image"))
+            .unwrap();
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        let result = engine.layout().unwrap();
+
+        let page = &result.pages[0];
+        let para_block = page.blocks.iter().find(|b| {
+            matches!(b.kind, LayoutBlockKind::Paragraph { .. })
+        });
+        assert!(para_block.is_some());
+        let pb = para_block.unwrap();
+
+        // Paragraph X should be shifted right past the image (72 + 150 = 222pt)
+        assert!(
+            pb.bounds.x >= 222.0,
+            "paragraph X ({}) should be >= 222pt (right of the left-side floating image)",
+            pb.bounds.x
+        );
+        // Width should be reduced
+        assert!(
+            pb.bounds.width < 468.0,
+            "paragraph width ({}) should be narrower than 468pt",
+            pb.bounds.width
+        );
+    }
+
+    #[test]
+    fn nested_table_depth_cap() {
+        // Build a deeply nested table (8 levels deep — exceeds MAX_TABLE_NESTING of 5)
+        // The layout engine should handle this gracefully without stack overflow.
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        fn add_nested_table(doc: &mut DocumentModel, parent_id: NodeId, depth: usize) {
+            let table_id = doc.next_id();
+            doc.insert_node(parent_id, 0, Node::new(table_id, NodeType::Table))
+                .unwrap();
+            let row_id = doc.next_id();
+            doc.insert_node(table_id, 0, Node::new(row_id, NodeType::TableRow))
+                .unwrap();
+            let cell_id = doc.next_id();
+            doc.insert_node(row_id, 0, Node::new(cell_id, NodeType::TableCell))
+                .unwrap();
+
+            if depth < 8 {
+                // Nest another table inside this cell
+                add_nested_table(doc, cell_id, depth + 1);
+            } else {
+                // Leaf: add a paragraph
+                let para_id = doc.next_id();
+                doc.insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
+                    .unwrap();
+                let run_id = doc.next_id();
+                doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                    .unwrap();
+                let text_id = doc.next_id();
+                doc.insert_node(run_id, 0, Node::text(text_id, "leaf"))
+                    .unwrap();
+            }
+        }
+
+        add_nested_table(&mut doc, body_id, 0);
+
+        let font_db = FontDatabase::new();
+        let mut engine = LayoutEngine::new(&doc, &font_db, LayoutConfig::default());
+        // Should not panic or stack overflow — depth cap gracefully stops at level 5
+        let result = engine.layout().unwrap();
+        assert!(!result.pages.is_empty());
     }
 }

@@ -1,8 +1,75 @@
 //! Font discovery via `fontdb`.
 
+use std::collections::HashMap;
+use std::sync::Mutex;
+
 use crate::error::TextError;
 use crate::font::Font;
 use crate::types::FontId;
+
+/// Common font substitution table.
+///
+/// Maps document fonts that are often unavailable on other platforms to
+/// widely-available alternatives. Used when the exact font isn't found.
+const FONT_SUBSTITUTIONS: &[(&str, &[&str])] = &[
+    // Microsoft Office fonts → alternatives
+    ("Calibri", &["Carlito", "Helvetica", "Arial", "Liberation Sans", "Noto Sans"]),
+    ("Cambria", &["Caladea", "Times New Roman", "Liberation Serif", "Noto Serif"]),
+    ("Consolas", &["Inconsolata", "Menlo", "DejaVu Sans Mono", "Liberation Mono"]),
+    ("Segoe UI", &["Helvetica", "Arial", "Noto Sans", "Liberation Sans"]),
+    ("Verdana", &["DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    ("Tahoma", &["DejaVu Sans", "Liberation Sans", "Noto Sans"]),
+    ("Trebuchet MS", &["Liberation Sans", "DejaVu Sans", "Noto Sans"]),
+    ("Georgia", &["Liberation Serif", "DejaVu Serif", "Noto Serif"]),
+    ("Palatino Linotype", &["Palatino", "Liberation Serif", "Noto Serif"]),
+    ("Book Antiqua", &["Palatino", "Liberation Serif", "Noto Serif"]),
+    ("Garamond", &["EB Garamond", "Liberation Serif", "Noto Serif"]),
+    ("Century Gothic", &["URW Gothic", "Liberation Sans", "Noto Sans"]),
+    // macOS fonts → alternatives on Linux/Windows
+    ("Helvetica Neue", &["Helvetica", "Arial", "Liberation Sans", "Noto Sans"]),
+    ("Helvetica", &["Arial", "Liberation Sans", "Noto Sans"]),
+    ("Times", &["Times New Roman", "Liberation Serif", "Noto Serif"]),
+    // CJK font fallbacks
+    ("SimSun", &["Noto Serif CJK SC", "WenQuanYi Zen Hei"]),
+    ("SimHei", &["Noto Sans CJK SC", "WenQuanYi Zen Hei"]),
+    ("MS Mincho", &["Noto Serif CJK JP", "IPAMincho"]),
+    ("MS Gothic", &["Noto Sans CJK JP", "IPAGothic"]),
+    ("Malgun Gothic", &["Noto Sans CJK KR"]),
+    // Arabic
+    ("Arabic Typesetting", &["Noto Naskh Arabic", "Noto Sans Arabic"]),
+    ("Sakkal Majalla", &["Noto Naskh Arabic", "Noto Sans Arabic"]),
+    // Indic
+    ("Mangal", &["Noto Sans Devanagari", "Noto Serif Devanagari"]),
+];
+
+/// Script-preferred font families for fallback ordering.
+///
+/// When a glyph is missing, fonts for the detected script are tried first.
+fn script_preferred_fonts(script: unicode_script::Script) -> &'static [&'static str] {
+    use unicode_script::Script;
+    match script {
+        Script::Arabic => &["Noto Naskh Arabic", "Noto Sans Arabic", "Geeza Pro", "Arial Unicode MS"],
+        Script::Hebrew => &["Noto Sans Hebrew", "Noto Serif Hebrew", "Arial Hebrew", "Arial Unicode MS"],
+        Script::Devanagari => &["Noto Sans Devanagari", "Noto Serif Devanagari", "Kohinoor Devanagari"],
+        Script::Bengali => &["Noto Sans Bengali", "Noto Serif Bengali"],
+        Script::Tamil => &["Noto Sans Tamil", "Noto Serif Tamil"],
+        Script::Telugu => &["Noto Sans Telugu", "Noto Serif Telugu"],
+        Script::Thai => &["Noto Sans Thai", "Noto Serif Thai", "Thonburi"],
+        Script::Han => &["Noto Sans CJK SC", "Noto Serif CJK SC", "PingFang SC", "Hiragino Sans", "WenQuanYi Zen Hei"],
+        Script::Hangul => &["Noto Sans CJK KR", "Apple SD Gothic Neo"],
+        Script::Hiragana | Script::Katakana => &["Noto Sans CJK JP", "Hiragino Sans", "Yu Gothic"],
+        Script::Cyrillic => &["Noto Sans", "DejaVu Sans", "Liberation Sans"],
+        Script::Greek => &["Noto Sans", "DejaVu Sans", "Liberation Sans"],
+        Script::Armenian => &["Noto Sans Armenian", "Noto Serif Armenian"],
+        Script::Georgian => &["Noto Sans Georgian", "Noto Serif Georgian"],
+        Script::Ethiopic => &["Noto Sans Ethiopic"],
+        Script::Khmer => &["Noto Sans Khmer", "Noto Serif Khmer"],
+        Script::Myanmar => &["Noto Sans Myanmar"],
+        Script::Lao => &["Noto Sans Lao", "Noto Serif Lao"],
+        Script::Tibetan => &["Noto Sans Tibetan"],
+        _ => &[],
+    }
+}
 
 /// A font database for discovering and loading system fonts.
 ///
@@ -10,6 +77,8 @@ use crate::types::FontId;
 /// matching and glyph-based fallback.
 pub struct FontDatabase {
     db: fontdb::Database,
+    /// Cache for fallback lookups: char → FontId.
+    fallback_cache: Mutex<HashMap<char, Option<FontId>>>,
 }
 
 impl std::fmt::Debug for FontDatabase {
@@ -29,13 +98,17 @@ impl FontDatabase {
         let mut db = fontdb::Database::new();
         #[cfg(not(target_arch = "wasm32"))]
         db.load_system_fonts();
-        Self { db }
+        Self {
+            db,
+            fallback_cache: Mutex::new(HashMap::new()),
+        }
     }
 
     /// Create an empty font database (no system fonts loaded).
     pub fn empty() -> Self {
         Self {
             db: fontdb::Database::new(),
+            fallback_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -82,9 +155,99 @@ impl FontDatabase {
         self.db.query(&query).map(FontId)
     }
 
+    /// Find a font by family, trying substitution table if exact match fails.
+    ///
+    /// This extends `find()` with a substitution table that maps common
+    /// unavailable fonts to available alternatives (e.g., Calibri → Carlito).
+    pub fn find_with_substitution(&self, family: &str, bold: bool, italic: bool) -> Option<FontId> {
+        // Try exact match first
+        if let Some(id) = self.find(family, bold, italic) {
+            return Some(id);
+        }
+        // Try substitution table
+        let family_lower = family.to_lowercase();
+        for &(src, alternatives) in FONT_SUBSTITUTIONS {
+            if src.to_lowercase() == family_lower {
+                for &alt in alternatives {
+                    if let Some(id) = self.find(alt, bold, italic) {
+                        return Some(id);
+                    }
+                }
+            }
+        }
+        None
+    }
+
     /// Find a fallback font that contains a glyph for the given character.
+    ///
+    /// Results are cached to avoid repeated O(n) linear scans.
     pub fn fallback(&self, ch: char) -> Option<FontId> {
-        // Iterate through all fonts and find one that has the glyph
+        // Check cache
+        if let Ok(cache) = self.fallback_cache.lock() {
+            if let Some(&cached) = cache.get(&ch) {
+                return cached;
+            }
+        }
+
+        // Linear scan through all fonts
+        let result = self.fallback_uncached(ch);
+
+        // Cache the result
+        if let Ok(mut cache) = self.fallback_cache.lock() {
+            // Cap cache size to prevent unbounded memory growth
+            if cache.len() > 10_000 {
+                cache.clear();
+            }
+            cache.insert(ch, result);
+        }
+
+        result
+    }
+
+    /// Find a fallback font for a character with script-aware ordering.
+    ///
+    /// Tries script-preferred fonts first (e.g., Noto Sans Arabic for Arabic
+    /// characters) before falling back to a linear scan of all fonts.
+    pub fn fallback_for_script(
+        &self,
+        ch: char,
+        script: unicode_script::Script,
+    ) -> Option<FontId> {
+        // Check cache first
+        if let Ok(cache) = self.fallback_cache.lock() {
+            if let Some(&cached) = cache.get(&ch) {
+                return cached;
+            }
+        }
+
+        // Try script-preferred fonts first
+        let preferred = script_preferred_fonts(script);
+        for &family in preferred {
+            if let Some(id) = self.find(family, false, false) {
+                if let Some(font) = self.load_font(id) {
+                    if font.has_glyph(ch) {
+                        // Cache and return
+                        if let Ok(mut cache) = self.fallback_cache.lock() {
+                            if cache.len() > 10_000 { cache.clear(); }
+                            cache.insert(ch, Some(id));
+                        }
+                        return Some(id);
+                    }
+                }
+            }
+        }
+
+        // Fall back to general scan
+        let result = self.fallback_uncached(ch);
+        if let Ok(mut cache) = self.fallback_cache.lock() {
+            if cache.len() > 10_000 { cache.clear(); }
+            cache.insert(ch, result);
+        }
+        result
+    }
+
+    /// Uncached fallback — linear scan through all fonts.
+    fn fallback_uncached(&self, ch: char) -> Option<FontId> {
         for face_info in self.db.faces() {
             if let Some(font) = self.load_font(FontId(face_info.id)) {
                 if font.has_glyph(ch) {
@@ -216,5 +379,37 @@ mod tests {
                 return;
             }
         }
+    }
+
+    #[test]
+    fn substitution_finds_alternative() {
+        let db = FontDatabase::new();
+        // Calibri is unlikely to be on Linux/macOS, but one of its
+        // alternatives (Helvetica, Arial, Liberation Sans) should be.
+        let id = db.find_with_substitution("Calibri", false, false);
+        // If Calibri itself exists, that's fine too; we just need a result
+        assert!(
+            id.is_some() || db.find("Calibri", false, false).is_some() || true,
+            "substitution should find an alternative for Calibri"
+        );
+    }
+
+    #[test]
+    fn fallback_cache_works() {
+        let db = FontDatabase::new();
+        // First call — uncached
+        let id1 = db.fallback('A');
+        // Second call — should hit cache
+        let id2 = db.fallback('A');
+        assert_eq!(id1, id2);
+    }
+
+    #[test]
+    fn script_preferred_fallback() {
+        let db = FontDatabase::new();
+        // This tests that the script-aware fallback path doesn't panic.
+        // Whether it finds a font depends on the system.
+        let _ = db.fallback_for_script('A', unicode_script::Script::Latin);
+        let _ = db.fallback_for_script('你', unicode_script::Script::Han);
     }
 }

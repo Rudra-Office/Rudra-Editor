@@ -344,6 +344,10 @@ pub enum AttributeKey {
     /// Custom title for the TOC (e.g. "Table of Contents").
     TocTitle,
 
+    // Hyphenation attributes
+    /// Suppress automatic hyphenation for this paragraph.
+    SuppressAutoHyphens,
+
     // BiDi attribute
     /// Whether text direction is right-to-left.
     Bidi,

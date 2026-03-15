@@ -32,6 +32,27 @@ pub fn shape_text(
     language: Option<&str>,
     direction: Direction,
 ) -> Result<Vec<ShapedGlyph>, TextError> {
+    shape_text_with_script(text, font, font_size, features, language, direction, None)
+}
+
+/// Shape text with an explicit script tag for complex script support.
+///
+/// Like [`shape_text`], but also sets the Unicode script on the shaping buffer.
+/// This enables script-specific OpenType rules (Arabic joining, Devanagari
+/// conjuncts, etc.) that require `rustybuzz` to know the script tag.
+///
+/// # Arguments
+///
+/// * `script` — Optional `rustybuzz::Script`. If `None`, rustybuzz auto-detects.
+pub fn shape_text_with_script(
+    text: &str,
+    font: &Font,
+    font_size: f64,
+    features: &[FontFeature],
+    language: Option<&str>,
+    direction: Direction,
+    script: Option<rustybuzz::Script>,
+) -> Result<Vec<ShapedGlyph>, TextError> {
     // Create a rustybuzz Face from the font data
     let rb_face = rustybuzz::Face::from_slice(font.data(), 0)
         .ok_or_else(|| TextError::ShapingFailed("failed to create shaping face".into()))?;
@@ -46,6 +67,11 @@ pub fn shape_text(
         Direction::Rtl => rustybuzz::Direction::RightToLeft,
     });
 
+    // Set script if provided (enables script-specific OpenType rules)
+    if let Some(s) = script {
+        buffer.set_script(s);
+    }
+
     // Set language if provided
     if let Some(lang) = language {
         if let Ok(rb_lang) = rustybuzz::Language::from_str(lang) {
@@ -53,8 +79,14 @@ pub fn shape_text(
         }
     }
 
-    // Convert font features
-    let rb_features: Vec<rustybuzz::Feature> = features
+    // Convert font features — use default features (kern, liga, clig, calt)
+    // merged with any caller-provided features
+    let default_features = crate::script::default_shaping_features();
+    let all_features: Vec<&FontFeature> = default_features
+        .iter()
+        .chain(features.iter())
+        .collect();
+    let rb_features: Vec<rustybuzz::Feature> = all_features
         .iter()
         .map(|f| {
             let tag = ttf_parser::Tag::from_bytes(&f.tag);

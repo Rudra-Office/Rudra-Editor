@@ -71,10 +71,12 @@ pub fn write_section_properties(props: &SectionProperties, hf_rels: &[HfRelEntry
 
     // Columns
     if props.columns > 1 {
+        let equal_width_val = if props.equal_width { "1" } else { "0" };
         xml.push_str(&format!(
-            r#"<w:cols w:num="{}" w:space="{}"/>"#,
+            r#"<w:cols w:num="{}" w:space="{}" w:equalWidth="{}"/>"#,
             props.columns,
             points_to_twips(props.column_spacing),
+            equal_width_val,
         ));
     }
 
@@ -148,6 +150,19 @@ mod tests {
         let xml = write_section_properties(&props, &[]);
         assert!(xml.contains(r#"w:num="2""#));
         assert!(xml.contains(r#"w:space="720""#)); // 36pt = 720 twips
+        assert!(xml.contains(r#"w:equalWidth="1""#));
+    }
+
+    #[test]
+    fn write_section_with_unequal_columns() {
+        let mut props = SectionProperties::default();
+        props.columns = 3;
+        props.column_spacing = 18.0;
+        props.equal_width = false;
+
+        let xml = write_section_properties(&props, &[]);
+        assert!(xml.contains(r#"w:num="3""#));
+        assert!(xml.contains(r#"w:equalWidth="0""#));
     }
 
     #[test]

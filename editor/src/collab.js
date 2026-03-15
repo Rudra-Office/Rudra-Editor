@@ -843,7 +843,15 @@ export function showShareDialog() {
   }
 
   if (!state.doc) {
-    alert('Open or create a document first.');
+    // Show non-blocking toast instead of alert
+    const tc = document.getElementById('toastContainer');
+    if (tc) {
+      const t = document.createElement('div');
+      t.className = 'toast toast-error';
+      t.textContent = 'Open or create a document first.';
+      tc.appendChild(t);
+      setTimeout(() => { t.style.transition = 'opacity 0.2s'; t.style.opacity = '0'; setTimeout(() => t.remove(), 220); }, 4000);
+    }
     return;
   }
 
@@ -904,8 +912,9 @@ export function copyShareUrl() {
       setTimeout(() => { btn.textContent = orig; }, 1500);
     }
   }).catch(() => {
+    // Fallback: select the text so the user can manually Ctrl+C
     urlInput.select();
-    document.execCommand('copy');
+    urlInput.focus();
   });
 }
 

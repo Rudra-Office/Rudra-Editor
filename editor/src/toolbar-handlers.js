@@ -2,12 +2,12 @@
 import { state, $ } from './state.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo } from './toolbar.js';
 import { doUndo, doRedo, closeSlashMenu } from './input.js';
-import { renderDocument, renderNodeById, syncParagraphText, syncAllText } from './render.js';
-import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId } from './selection.js';
+import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions } from './render.js';
+import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
 import { insertImage } from './images.js';
 import { updatePageBreaks } from './pagination.js';
 import { renderRuler } from './ruler.js';
-import { getVersions, restoreVersion, saveVersion, openAutosaveDB } from './file.js';
+import { getVersions, restoreVersion, saveVersion, openAutosaveDB, newDocument, updateDirtyIndicator, updateStatusBar } from './file.js';
 import { showShareDialog, broadcastOp } from './collab.js';
 
 // E7.2: Screen reader announcement — briefly sets the aria-live region text
@@ -18,6 +18,37 @@ export function announce(msg) {
   clearTimeout(_announceTimer);
   el.textContent = msg;
   _announceTimer = setTimeout(() => { el.textContent = ''; }, 1000);
+}
+
+function restoreSelectionForPickers() {
+  const info = state.lastSelInfo;
+  if (!info || info.collapsed) return false;
+  const startEl = info.startEl;
+  const endEl = info.endEl || startEl;
+  if (!startEl || !document.contains(startEl)) return false;
+  if (!endEl || !document.contains(endEl)) return false;
+  setSelectionRange(startEl, info.startOffset, endEl, info.endOffset);
+  return true;
+}
+
+// ── Toast notification system ──────────────────────
+// Replaces alert() calls with non-blocking toast messages.
+// Types: 'info' (default, dark), 'error' (red), 'success' (green)
+export function showToast(message, type = 'info', duration = 4000) {
+  const container = $('toastContainer');
+  if (!container) { console.warn('toast:', message); return; }
+  const toast = document.createElement('div');
+  toast.className = 'toast' + (type === 'error' ? ' toast-error' : type === 'success' ? ' toast-success' : '');
+  toast.textContent = message;
+  container.appendChild(toast);
+  const remove = () => {
+    toast.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
+    toast.style.opacity = '0';
+    toast.style.transform = 'translateY(-8px)';
+    setTimeout(() => { toast.remove(); }, 220);
+  };
+  toast.addEventListener('click', remove);
+  if (duration > 0) setTimeout(remove, duration);
 }
 
 export function initToolbar() {
@@ -98,17 +129,27 @@ export function initToolbar() {
   initStyleGallery();
 
   // Text color
-  $('colorPicker').addEventListener('input', e => {
-    const hex = e.target.value.replace('#', '');
-    $('colorSwatch').style.background = '#' + hex;
-    applyFormat('color', hex);
-  });
+  const colorPicker = $('colorPicker');
+  if (colorPicker) {
+    colorPicker.addEventListener('pointerdown', () => saveSelection());
+    colorPicker.addEventListener('input', e => {
+      const hex = e.target.value.replace('#', '');
+      $('colorSwatch').style.background = '#' + hex;
+      restoreSelectionForPickers();
+      applyFormat('color', hex);
+    });
+  }
 
   // Highlight color
-  $('highlightPicker').addEventListener('input', e => {
-    const hex = e.target.value.replace('#', '');
-    applyFormat('highlightColor', hex);
-  });
+  const highlightPicker = $('highlightPicker');
+  if (highlightPicker) {
+    highlightPicker.addEventListener('pointerdown', () => saveSelection());
+    highlightPicker.addEventListener('input', e => {
+      const hex = e.target.value.replace('#', '');
+      restoreSelectionForPickers();
+      applyFormat('highlightColor', hex);
+    });
+  }
 
   // Line spacing
   $('lineSpacing').addEventListener('change', e => {
@@ -169,7 +210,7 @@ export function initToolbar() {
     const rows = parseInt($('tableRows').value) || 3;
     const cols = parseInt($('tableCols').value) || 3;
     if (rows < 1 || rows > 100 || cols < 1 || cols > 50) {
-      alert('Rows must be 1-100, columns must be 1-50.');
+      showToast('Rows must be 1-100, columns must be 1-50.', 'error');
       return;
     }
     $('tableModal').classList.remove('show');
@@ -308,6 +349,69 @@ export function initToolbar() {
     if (e.key === 'Escape') { $('commentModal').classList.remove('show'); ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus(); }
   });
 
+  // Headers & Footers — menu bar entry
+  $('miHeaderFooter').addEventListener('click', () => {
+    closeAllMenus();
+    openHeaderFooterModal();
+  });
+
+  // Header/Footer modal handlers
+  $('hfCancelBtn').addEventListener('click', () => {
+    $('headerFooterModal').classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  });
+  $('hfApplyBtn').addEventListener('click', () => {
+    const headerText = $('headerText').value.trim();
+    const footerText = $('footerText').value.trim();
+    const showPageNum = $('footerPageNum').checked;
+    const differentFirst = $('differentFirstPage').checked;
+
+    // Build header HTML
+    if (headerText) {
+      state.docHeaderHtml = '<span style="display:block;text-align:center;color:#5f6368;font-size:9pt">' + escapeHtml(headerText) + '</span>';
+    } else {
+      state.docHeaderHtml = '';
+    }
+
+    // Build footer HTML
+    let footerParts = [];
+    if (footerText) {
+      footerParts.push(escapeHtml(footerText));
+    }
+    if (showPageNum) {
+      footerParts.push('<span data-field="PageNumber"></span>');
+    }
+    if (footerParts.length > 0) {
+      state.docFooterHtml = '<span style="display:block;text-align:center;color:#5f6368;font-size:9pt">' + footerParts.join(' \u2014 ') + '</span>';
+    } else {
+      state.docFooterHtml = '';
+    }
+
+    state.hasDifferentFirstPage = differentFirst;
+    if (differentFirst) {
+      // First page gets no header/footer when "different first page" is checked
+      state.docFirstPageHeaderHtml = '';
+      state.docFirstPageFooterHtml = '';
+    }
+
+    $('headerFooterModal').classList.remove('show');
+    renderDocument();
+  });
+  $('headerFooterModal').addEventListener('click', e => {
+    if (e.target === $('headerFooterModal')) {
+      $('headerFooterModal').classList.remove('show');
+      ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+    }
+  });
+  $('headerText').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('hfApplyBtn').click(); }
+    if (e.key === 'Escape') { $('headerFooterModal').classList.remove('show'); ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus(); }
+  });
+  $('footerText').addEventListener('keydown', e => {
+    if (e.key === 'Enter') { e.preventDefault(); $('hfApplyBtn').click(); }
+    if (e.key === 'Escape') { $('headerFooterModal').classList.remove('show'); ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus(); }
+  });
+
   // Comments panel toggle
   $('btnComments').addEventListener('click', () => {
     $('commentsPanel').classList.toggle('show');
@@ -418,7 +522,7 @@ export function initToolbar() {
   // About dialog — simple alert
   if ($('menuAbout')) $('menuAbout').addEventListener('click', () => {
     closeAllMenus();
-    alert('s1engine Editor v1.0\n\nA WASM-powered document editor built on the s1engine SDK.\nMIT License\n\nhttps://github.com/nicholasgasior/s1engine');
+    showToast('s1engine Editor v1.0 — WASM-powered document editor. MIT License.', 'info', 6000);
   });
 
   // Toolbar insert dropdown — items use data-action
@@ -437,6 +541,7 @@ export function initToolbar() {
         else if (action === 'toc') $('miTOC').click();
         else if (action === 'hr') $('miHR').click();
         else if (action === 'pagebreak') $('miPageBreak').click();
+        else if (action === 'headerfooter') $('miHeaderFooter').click();
       });
     });
   }
@@ -447,6 +552,15 @@ export function initToolbar() {
 
   // More (overflow) menu toggle and item handlers
   initMoreMenu();
+
+  // Template chooser
+  initTemplateChooser();
+
+  // Table of Contents insertion
+  initTOCInsertion();
+
+  // Page Setup dialog
+  initPageSetup();
 
   // Touch selection support (double-tap word select, long-press context menu)
   initTouchSelection();
@@ -513,11 +627,22 @@ function toggleList(format) {
       if (fmt.listFormat === format) toggleOff = true;
     } catch (_) {}
     const applyFormat = toggleOff ? 'none' : format;
+    // Save cursor info for restoration
+    const cursorNodeId = info.startNodeId;
+    const cursorOffset = info.startOffset;
     paraIds.forEach(nodeId => {
       state.doc.set_list_format(nodeId, applyFormat, 0);
       broadcastOp({ action: 'setListFormat', nodeId, format: applyFormat, level: 0 });
     });
     renderDocument();
+    // Restore cursor position
+    const page = $('pageContainer');
+    if (page) {
+      const restored = page.querySelector(`[data-node-id="${cursorNodeId}"]`);
+      if (restored) {
+        setCursorAtOffset(restored, cursorOffset);
+      }
+    }
     updateToolbarState();
     updateUndoRedo();
   } catch (e) { console.error('list:', e); }
@@ -974,11 +1099,25 @@ function showReplyForm(parentId) {
 function submitReply(parentId, text) {
   if (!text || !text.trim()) return;
   const author = 'User';
+  const trimmed = text.trim();
+
+  // Persist the reply via the WASM document model if available
+  if (state.doc && parentId) {
+    try {
+      state.doc.insert_comment_reply(parentId, author, trimmed);
+      broadcastOp({ action: 'insertCommentReply', parentId, author, text: trimmed });
+    } catch (e) {
+      // WASM method may not exist in all builds — fall through to local storage
+      console.warn('insert_comment_reply not available, storing locally:', e);
+    }
+  }
+
+  // Store in local state for immediate UI rendering
   const reply = {
     id: 'reply-' + (++_replyCounter) + '-' + Date.now(),
     parentId,
     author,
-    text: text.trim(),
+    text: trimmed,
     timestamp: Date.now(),
   };
   if (!state.commentReplies) state.commentReplies = [];
@@ -991,6 +1130,32 @@ function escapeHtml(s) {
 }
 function escapeAttr(s) {
   return s.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+}
+
+// ── Header/Footer Modal Opener ───────────────────
+function openHeaderFooterModal() {
+  // Extract plain text from existing header/footer HTML for editing
+  const tmpH = document.createElement('div');
+  tmpH.innerHTML = state.docHeaderHtml || '';
+  $('headerText').value = tmpH.textContent || '';
+
+  const tmpF = document.createElement('div');
+  tmpF.innerHTML = state.docFooterHtml || '';
+  // If footer has a page number field, check the box and strip it from text
+  const hasPageField = tmpF.querySelector('[data-field="PageNumber"]') !== null ||
+    (state.docFooterHtml || '').includes('data-field="PageNumber"');
+  $('footerPageNum').checked = hasPageField;
+  // Remove page number field element before extracting text
+  tmpF.querySelectorAll('[data-field]').forEach(el => el.remove());
+  let footerText = tmpF.textContent || '';
+  // Strip em dash separator that we add when combining text + page num
+  footerText = footerText.replace(/\s*\u2014\s*$/, '').replace(/^\s*\u2014\s*/, '').trim();
+  $('footerText').value = footerText;
+
+  $('differentFirstPage').checked = state.hasDifferentFirstPage || false;
+
+  $('headerFooterModal').classList.add('show');
+  $('headerText').focus();
 }
 
 // ── Version History ──────────────────────────────
@@ -1063,7 +1228,7 @@ function refreshHistory() {
         restoreVersion(id).then(() => {
           refreshHistory();
         }).catch(e => {
-          alert('Failed to restore version: ' + e.message);
+          showToast('Failed to restore version: ' + e.message, 'error');
           console.error('restore version:', e);
         });
       });
@@ -1510,7 +1675,7 @@ function applyTableProps(tableId) {
 // ── E7.1: Modal Focus Trap ───────────────────────
 // When a modal is open, Tab/Shift+Tab cycle only within the modal.
 // Escape closes the modal. Focus returns to the element that opened it.
-const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal'];
+const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal'];
 const FOCUSABLE_SELECTOR = 'button, [href], input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 function initModalFocusTrap() {
@@ -1856,4 +2021,317 @@ function showTouchContextMenu(x, y) {
   setTimeout(() => {
     if (menu.parentNode) menu.remove();
   }, 5000);
+}
+
+// ── Template Chooser ─────────────────────────────
+function initTemplateChooser() {
+  const btnTemplate = $('btnTemplate');
+  if (btnTemplate) {
+    btnTemplate.addEventListener('click', () => {
+      closeAllMenus();
+      $('templateModal').classList.add('show');
+    });
+  }
+
+  const templateCancelBtn = $('templateCancelBtn');
+  if (templateCancelBtn) {
+    templateCancelBtn.addEventListener('click', () => {
+      $('templateModal').classList.remove('show');
+      ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+    });
+  }
+
+  // Backdrop click to close
+  const templateModal = $('templateModal');
+  if (templateModal) {
+    templateModal.addEventListener('click', e => {
+      if (e.target === templateModal) {
+        templateModal.classList.remove('show');
+        ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+      }
+    });
+  }
+
+  // Template card clicks
+  const templateGrid = $('templateGrid');
+  if (templateGrid) {
+    templateGrid.querySelectorAll('.template-card').forEach(card => {
+      card.addEventListener('click', () => {
+        const templateName = card.dataset.template;
+        $('templateModal').classList.remove('show');
+        createFromTemplate(templateName);
+      });
+    });
+  }
+}
+
+function createFromTemplate(templateName) {
+  if (!state.engine) return;
+
+  // For blank, reuse newDocument directly
+  if (templateName === 'blank') {
+    newDocument();
+    return;
+  }
+
+  // Create new document and populate with template content
+  state.doc = state.engine.create();
+  state.currentFormat = 'new';
+
+  switch (templateName) {
+    case 'letter':
+      state.doc.append_heading(1, 'Letter');
+      state.doc.append_paragraph(new Date().toLocaleDateString());
+      state.doc.append_paragraph('');
+      state.doc.append_paragraph('Dear [Recipient],');
+      state.doc.append_paragraph('');
+      state.doc.append_paragraph('I am writing to you regarding...');
+      state.doc.append_paragraph('');
+      state.doc.append_paragraph('Sincerely,');
+      state.doc.append_paragraph('[Your Name]');
+      break;
+
+    case 'resume':
+      state.doc.append_heading(1, 'Your Name');
+      state.doc.append_heading(2, 'Contact');
+      state.doc.append_paragraph('Email: your.email@example.com | Phone: (555) 123-4567 | Location: City, State');
+      state.doc.append_heading(2, 'Experience');
+      state.doc.append_paragraph('Job Title - Company Name (Start Date - End Date)');
+      state.doc.append_paragraph('Describe your responsibilities and achievements.');
+      state.doc.append_heading(2, 'Education');
+      state.doc.append_paragraph('Degree - University Name (Graduation Year)');
+      state.doc.append_heading(2, 'Skills');
+      state.doc.append_paragraph('List your relevant skills, technologies, and competencies.');
+      break;
+
+    case 'report':
+      state.doc.append_heading(1, 'Report Title');
+      state.doc.append_heading(2, 'Executive Summary');
+      state.doc.append_paragraph('Provide a brief overview of the report findings and recommendations.');
+      state.doc.append_heading(2, 'Introduction');
+      state.doc.append_paragraph('Describe the background, purpose, and scope of this report.');
+      state.doc.append_heading(2, 'Conclusion');
+      state.doc.append_paragraph('Summarize the key findings and recommended next steps.');
+      break;
+
+    case 'meeting':
+      state.doc.append_heading(1, 'Meeting Notes');
+      state.doc.append_paragraph('Date: ' + new Date().toLocaleDateString());
+      state.doc.append_paragraph('Attendees: [Name 1], [Name 2], [Name 3]');
+      state.doc.append_heading(2, 'Agenda');
+      state.doc.append_paragraph('1. Topic one');
+      state.doc.append_paragraph('2. Topic two');
+      state.doc.append_heading(2, 'Discussion');
+      state.doc.append_paragraph('Summary of discussion points and decisions made.');
+      state.doc.append_heading(2, 'Action Items');
+      state.doc.append_paragraph('- [Action item 1] - Assigned to [Person] - Due [Date]');
+      state.doc.append_paragraph('- [Action item 2] - Assigned to [Person] - Due [Date]');
+      break;
+
+    case 'essay':
+      state.doc.append_heading(1, 'Essay Title');
+      state.doc.append_paragraph('Begin your introduction here. Present the main topic and your thesis statement.');
+      state.doc.append_paragraph('');
+      state.doc.append_paragraph('Develop your argument in the body paragraphs. Each paragraph should focus on a single supporting point with evidence and analysis.');
+      state.doc.append_paragraph('');
+      state.doc.append_paragraph('Conclude by summarizing your main points and restating your thesis in light of the evidence presented.');
+      break;
+
+    default:
+      state.doc.append_paragraph('');
+      break;
+  }
+
+  state.doc.clear_history();
+
+  // Activate editor (same pattern as newDocument)
+  $('welcomeScreen').style.display = 'none';
+  $('toolbar').classList.add('show');
+  const menubar = $('appMenubar');
+  if (menubar) menubar.classList.add('show');
+  $('statusbar').classList.add('show');
+  import('./file.js').then(({ switchView }) => { switchView('editor'); });
+
+  renderDocument();
+  renderRuler();
+
+  // Capitalize template name for document title
+  const titleMap = {
+    letter: 'Letter',
+    resume: 'Resume',
+    report: 'Report',
+    meeting: 'Meeting Notes',
+    essay: 'Essay',
+  };
+  $('docName').value = titleMap[templateName] || 'Untitled Document';
+
+  ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  state.dirty = false;
+  updateDirtyIndicator();
+  updateStatusBar();
+
+  // Save an initial version for the template
+  import('./file.js').then(mod => {
+    if (typeof mod.saveVersion === 'function') {
+      mod.saveVersion('Template: ' + (titleMap[templateName] || templateName));
+    }
+  });
+}
+
+// ── Table of Contents Insertion ──────────────────
+function initTOCInsertion() {
+  const miTOC = $('miTOC');
+  if (!miTOC) return;
+
+  miTOC.addEventListener('click', () => {
+    // Close the insert menu (both the menu-bar version and toolbar dropdown)
+    $('insertMenu')?.classList.remove('show');
+    document.querySelectorAll('.app-menu-item').forEach(m => m.classList.remove('open'));
+
+    if (!state.doc) return;
+    const nodeId = getActiveNodeId();
+    if (!nodeId) return;
+    syncAllText();
+    try {
+      state.doc.insert_table_of_contents(nodeId, 3, 'Table of Contents');
+      broadcastOp({ action: 'insertTOC', afterNodeId: nodeId, maxLevel: 3, title: 'Table of Contents' });
+      renderDocument();
+      updateUndoRedo();
+    } catch (e) { console.error('insert TOC:', e); }
+  });
+}
+
+// ── Page Setup Dialog ────────────────────────────
+// Page size presets: width and height in inches
+const PAGE_SIZES = {
+  letter: { w: 8.5, h: 11 },
+  a4:     { w: 8.27, h: 11.69 },
+  legal:  { w: 8.5, h: 14 },
+};
+
+function initPageSetup() {
+  const menuPageSetup = $('menuPageSetup');
+  if (!menuPageSetup) return;
+
+  menuPageSetup.addEventListener('click', () => {
+    closeAllMenus();
+    openPageSetup();
+  });
+
+  // Cancel
+  $('psCancelBtn')?.addEventListener('click', () => {
+    $('pageSetupModal').classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  });
+
+  // Apply
+  $('psApplyBtn')?.addEventListener('click', () => {
+    applyPageSetup();
+    $('pageSetupModal').classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  });
+
+  // Backdrop click to close
+  const modal = $('pageSetupModal');
+  if (modal) {
+    modal.addEventListener('click', e => {
+      if (e.target === modal) {
+        modal.classList.remove('show');
+        ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+      }
+    });
+  }
+}
+
+function openPageSetup() {
+  // Populate with current values from state.pageDims or defaults
+  const dims = state.pageDims || {
+    widthPt: 612, heightPt: 792,
+    marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72,
+  };
+
+  const wIn = dims.widthPt / 72;
+  const hIn = dims.heightPt / 72;
+
+  // Determine orientation
+  const isLandscape = wIn > hIn;
+  document.querySelectorAll('input[name="psOrientation"]').forEach(r => {
+    r.checked = (r.value === (isLandscape ? 'landscape' : 'portrait'));
+  });
+
+  // Detect page size from dimensions (compare short/long sides to presets)
+  const shortSide = Math.min(wIn, hIn);
+  const longSide = Math.max(wIn, hIn);
+  let detectedSize = 'letter';
+  for (const [key, sz] of Object.entries(PAGE_SIZES)) {
+    const preShort = Math.min(sz.w, sz.h);
+    const preLong = Math.max(sz.w, sz.h);
+    if (Math.abs(preShort - shortSide) < 0.1 && Math.abs(preLong - longSide) < 0.1) {
+      detectedSize = key;
+      break;
+    }
+  }
+  $('psPageSize').value = detectedSize;
+
+  // Margins
+  $('psMarginTop').value = (dims.marginTopPt / 72).toFixed(2);
+  $('psMarginBottom').value = (dims.marginBottomPt / 72).toFixed(2);
+  $('psMarginLeft').value = (dims.marginLeftPt / 72).toFixed(2);
+  $('psMarginRight').value = (dims.marginRightPt / 72).toFixed(2);
+
+  $('pageSetupModal').classList.add('show');
+}
+
+function applyPageSetup() {
+  const sizeKey = $('psPageSize').value || 'letter';
+  const size = PAGE_SIZES[sizeKey] || PAGE_SIZES.letter;
+  const orientation = document.querySelector('input[name="psOrientation"]:checked')?.value || 'portrait';
+
+  let pageW = size.w;
+  let pageH = size.h;
+  if (orientation === 'landscape') {
+    pageW = size.h;
+    pageH = size.w;
+  }
+
+  const marginTop = Math.max(0, Math.min(5, parseFloat($('psMarginTop').value) || 1));
+  const marginBottom = Math.max(0, Math.min(5, parseFloat($('psMarginBottom').value) || 1));
+  const marginLeft = Math.max(0, Math.min(5, parseFloat($('psMarginLeft').value) || 1));
+  const marginRight = Math.max(0, Math.min(5, parseFloat($('psMarginRight').value) || 1));
+
+  // Convert inches to points (1 inch = 72 points)
+  const widthPt = pageW * 72;
+  const heightPt = pageH * 72;
+  const mTop = marginTop * 72;
+  const mBottom = marginBottom * 72;
+  const mLeft = marginLeft * 72;
+  const mRight = marginRight * 72;
+
+  // Update state.pageDims so the editor uses the new dimensions
+  state.pageDims = {
+    widthPt, heightPt,
+    marginTopPt: mTop,
+    marginBottomPt: mBottom,
+    marginLeftPt: mLeft,
+    marginRightPt: mRight,
+  };
+
+  // Store a WasmLayoutConfig in state for re-renders via Pages view
+  try {
+    import('../wasm-pkg/s1engine_wasm.js').then(mod => {
+      const config = new mod.WasmLayoutConfig();
+      config.set_page_width(widthPt);
+      config.set_page_height(heightPt);
+      config.set_margin_top(mTop);
+      config.set_margin_bottom(mBottom);
+      config.set_margin_left(mLeft);
+      config.set_margin_right(mRight);
+      state._layoutConfig = config;
+    }).catch(() => {});
+  } catch (_) {}
+
+  // Re-render with new dimensions
+  renderDocument();
+  renderRuler();
+  announce('Page setup applied');
 }

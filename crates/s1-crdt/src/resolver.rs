@@ -424,6 +424,15 @@ impl CrdtResolver {
         self.tombstones.gc(min_state)
     }
 
+    /// Force-GC tombstones that exceed a maximum count.
+    ///
+    /// Safety valve for when a slow replica prevents normal GC. Removes the
+    /// oldest tombstones (by Lamport timestamp), even if not all replicas have
+    /// acknowledged them. Returns the number removed.
+    pub fn gc_tombstones_excess(&mut self, max_count: usize) -> usize {
+        self.tombstones.gc_excess(max_count)
+    }
+
     /// Prepare a local operation for broadcast.
     ///
     /// Converts model offsets to CRDT positions and returns the CrdtOperation
