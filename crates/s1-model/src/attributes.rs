@@ -535,6 +535,62 @@ impl AttributeMap {
             _ => None,
         }
     }
+
+    /// Get an underline style value from the map.
+    pub fn get_underline_style(&self, key: &AttributeKey) -> Option<UnderlineStyle> {
+        match self.get(key) {
+            Some(AttributeValue::UnderlineStyle(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get a line spacing value from the map.
+    pub fn get_line_spacing(&self, key: &AttributeKey) -> Option<LineSpacing> {
+        match self.get(key) {
+            Some(AttributeValue::LineSpacing(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get a borders value from the map.
+    pub fn get_borders(&self, key: &AttributeKey) -> Option<&Borders> {
+        match self.get(key) {
+            Some(AttributeValue::Borders(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Get tab stops from the map.
+    pub fn get_tab_stops(&self, key: &AttributeKey) -> Option<&Vec<TabStop>> {
+        match self.get(key) {
+            Some(AttributeValue::TabStops(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Get list info from the map.
+    pub fn get_list_info(&self, key: &AttributeKey) -> Option<&ListInfo> {
+        match self.get(key) {
+            Some(AttributeValue::ListInfo(v)) => Some(v),
+            _ => None,
+        }
+    }
+
+    /// Get a media ID from the map.
+    pub fn get_media_id(&self, key: &AttributeKey) -> Option<MediaId> {
+        match self.get(key) {
+            Some(AttributeValue::MediaId(v)) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// Get a field type from the map.
+    pub fn get_field_type(&self, key: &AttributeKey) -> Option<FieldType> {
+        match self.get(key) {
+            Some(AttributeValue::FieldType(v)) => Some(*v),
+            _ => None,
+        }
+    }
 }
 
 // ─── Convenience setters (builder-style) ────────────────────────────────────

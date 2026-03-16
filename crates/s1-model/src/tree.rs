@@ -188,8 +188,11 @@ impl DocumentModel {
     }
 
     /// Get the root node.
-    pub fn root_node(&self) -> &Node {
-        self.nodes.get(&self.root).expect("root node must exist")
+    ///
+    /// Returns `None` if the root node is not in the node map (should not happen
+    /// in a properly constructed document, but avoids a panic in library code).
+    pub fn root_node(&self) -> Option<&Node> {
+        self.nodes.get(&self.root)
     }
 
     /// Get the children of a node.
@@ -367,6 +370,8 @@ impl DocumentModel {
     }
 
     /// Move a node to a new parent at the given index.
+    ///
+    /// If `new_index` exceeds the new parent's child count, it is clamped to append at end.
     pub fn move_node(
         &mut self,
         id: NodeId,
@@ -416,12 +421,26 @@ impl DocumentModel {
             }
         }
 
+        // new_index is the desired insertion position after the node has been removed.
+        // No same-parent adjustment is needed — the caller specifies the final index.
+
         // Validate index after removal (new_parent validated above, must still exist)
-        let actual_index = self
+        let child_count = self
             .nodes
             .get(&new_parent_id)
-            .map(|p| new_index.min(p.children.len()))
+            .map(|p| p.children.len())
             .unwrap_or(0);
+
+        let actual_index = if new_index > child_count {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[s1-model] Warning: move_node index {} exceeds child count {}, clamping to end",
+                new_index, child_count
+            );
+            child_count
+        } else {
+            new_index
+        };
 
         // Add to new parent
         if let Some(new_parent) = self.nodes.get_mut(&new_parent_id) {
@@ -466,7 +485,13 @@ impl DocumentModel {
         }
 
         // Convert char offset to byte offset
-        let byte_offset = char_offset_to_byte(content, offset);
+        let byte_offset = char_offset_to_byte(content, offset).map_err(|(off, len)| {
+            ModelError::TextOffsetOutOfBounds {
+                node_id,
+                offset: off,
+                text_len: len,
+            }
+        })?;
         content.insert_str(byte_offset, text);
         Ok(())
     }
@@ -502,8 +527,20 @@ impl DocumentModel {
         }
 
         // Convert char offsets to byte offsets
-        let byte_start = char_offset_to_byte(content, offset);
-        let byte_end = char_offset_to_byte(content, end);
+        let byte_start = char_offset_to_byte(content, offset).map_err(|(off, len)| {
+            ModelError::TextOffsetOutOfBounds {
+                node_id,
+                offset: off,
+                text_len: len,
+            }
+        })?;
+        let byte_end = char_offset_to_byte(content, end).map_err(|(off, len)| {
+            ModelError::TextOffsetOutOfBounds {
+                node_id,
+                offset: off,
+                text_len: len,
+            }
+        })?;
 
         let deleted: String = content[byte_start..byte_end].to_string();
         content.replace_range(byte_start..byte_end, "");
@@ -771,12 +808,21 @@ impl DocumentModel {
 
 /// Convert a character offset to a byte offset in a string.
 ///
-/// Panics if `char_offset` is greater than the number of chars in `s`.
-fn char_offset_to_byte(s: &str, char_offset: usize) -> usize {
-    s.char_indices()
+/// Returns the byte offset, or the string length if `char_offset` equals
+/// the character count (end-of-string position). Returns an error if
+/// `char_offset` exceeds the number of characters in `s`.
+fn char_offset_to_byte(s: &str, char_offset: usize) -> Result<usize, (usize, usize)> {
+    if char_offset == 0 {
+        return Ok(0);
+    }
+    let char_count = s.chars().count();
+    if char_offset > char_count {
+        return Err((char_offset, char_count));
+    }
+    Ok(s.char_indices()
         .nth(char_offset)
         .map(|(byte_idx, _)| byte_idx)
-        .unwrap_or(s.len())
+        .unwrap_or(s.len()))
 }
 
 impl Default for DocumentModel {
@@ -817,7 +863,7 @@ mod tests {
         assert_eq!(doc.root_id(), NodeId::ROOT);
         assert!(doc.body_id().is_some());
 
-        let root = doc.root_node();
+        let root = doc.root_node().expect("root must exist in test");
         assert_eq!(root.node_type, NodeType::Document);
         assert_eq!(root.children.len(), 1);
     }
@@ -1196,6 +1242,72 @@ mod tests {
             doc.node(text_id).unwrap().text_content.as_deref(),
             Some("hello\u{2192}\u{4e16}\u{754c}")
         );
+    }
+
+    #[test]
+    fn move_node_within_same_parent_forward() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Create three paragraphs: [P0, P1, P2]
+        let p0 = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p0, NodeType::Paragraph))
+            .unwrap();
+        let p1 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 2, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+
+        // Move P0 (index 0) to index 2 → expect [P1, P2, P0]
+        doc.move_node(p0, body_id, 2).unwrap();
+        let children = &doc.node(body_id).unwrap().children;
+        assert_eq!(children, &[p1, p2, p0], "moving forward within same parent");
+    }
+
+    #[test]
+    fn move_node_within_same_parent_backward() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Create three paragraphs: [P0, P1, P2]
+        let p0 = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p0, NodeType::Paragraph))
+            .unwrap();
+        let p1 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+        let p2 = doc.next_id();
+        doc.insert_node(body_id, 2, Node::new(p2, NodeType::Paragraph))
+            .unwrap();
+
+        // Move P2 (index 2) to index 0 → expect [P2, P0, P1]
+        doc.move_node(p2, body_id, 0).unwrap();
+        let children = &doc.node(body_id).unwrap().children;
+        assert_eq!(
+            children,
+            &[p2, p0, p1],
+            "moving backward within same parent"
+        );
+    }
+
+    #[test]
+    fn move_node_within_same_parent_noop() {
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        let p0 = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p0, NodeType::Paragraph))
+            .unwrap();
+        let p1 = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p1, NodeType::Paragraph))
+            .unwrap();
+
+        // Move P0 to index 0 within same parent → should be no-op: [P0, P1]
+        doc.move_node(p0, body_id, 0).unwrap();
+        let children = &doc.node(body_id).unwrap().children;
+        assert_eq!(children, &[p0, p1], "same-parent move to same position");
     }
 
     // ─── Cycle detection regression tests ────────────────────────────────

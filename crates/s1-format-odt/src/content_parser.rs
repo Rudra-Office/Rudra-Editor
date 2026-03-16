@@ -80,6 +80,17 @@ pub fn parse_content_body(
                         parse_toc_into(reader, doc, ctx, body_id, body_child_index, e)?;
                         body_child_index += 1;
                     }
+                    // Non-image draw elements (shapes, text boxes, etc.)
+                    b"custom-shape" | b"rect" | b"circle" | b"ellipse" | b"line"
+                    | b"polygon" | b"polyline" | b"path" | b"text-box" | b"g"
+                    | b"connector" => {
+                        #[cfg(debug_assertions)]
+                        eprintln!(
+                            "[s1-format-odt] Note: non-image draw element <draw:{}> skipped (not yet supported)",
+                            String::from_utf8_lossy(local.as_ref())
+                        );
+                        skip_element_odt(reader)?;
+                    }
                     _ => {}
                 }
             }
@@ -148,6 +159,10 @@ fn parse_paragraph_into(
                     }
                     b"a" => {
                         // Hyperlink — extract URL and set on child runs
+                        // TODO: Internal hyperlinks targeting bookmarks are parsed as regular
+                        // hyperlinks with href="#bookmark-name". The cross-reference resolution
+                        // (linking the href to the bookmark's actual position in the document)
+                        // is not yet implemented.
                         let url = get_attr(e, b"href").unwrap_or_default();
                         let added =
                             parse_hyperlink_into(reader, doc, e, ctx, para_id, child_index, &url)?;
@@ -160,6 +175,12 @@ fn parse_paragraph_into(
                     }
                     b"annotation" => {
                         let added = parse_annotation_into(reader, doc, e, para_id, child_index)?;
+                        child_index += added;
+                    }
+                    b"note" => {
+                        // Footnote or endnote (<text:note>)
+                        let added =
+                            parse_note_into(reader, doc, ctx, e, para_id, child_index)?;
                         child_index += added;
                     }
                     _ => {}
@@ -686,14 +707,25 @@ fn parse_frame_into(
         }
     }
 
-    let href = match href {
-        Some(h) => h,
-        None => return Ok(false),
-    };
+    if href.is_none() {
+        #[cfg(debug_assertions)]
+        eprintln!(
+            "[s1-format-odt] Note: non-image draw element within <draw:frame> skipped (not yet supported)"
+        );
+        return Ok(false);
+    }
+    let href = href.unwrap();
 
     let media_id = match ctx.image_map.get(&href) {
         Some(id) => *id,
-        None => return Ok(false),
+        None => {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[s1-format-odt] Warning: image reference not found in archive: {}",
+                href
+            );
+            return Ok(false);
+        }
     };
 
     let img_id = doc.next_id();
@@ -722,6 +754,156 @@ fn parse_frame_into(
         .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
 
     Ok(true)
+}
+
+/// Parse a `<text:note>` element (footnote or endnote).
+///
+/// Creates a FootnoteRef/EndnoteRef inline marker and a FootnoteBody/EndnoteBody
+/// node attached to the document root. Returns the number of inline nodes inserted (0 or 1).
+fn parse_note_into(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    _ctx: &ParseContext,
+    start: &quick_xml::events::BytesStart<'_>,
+    parent_id: s1_model::NodeId,
+    index: usize,
+) -> Result<usize, OdtError> {
+    // Determine note class: "footnote" or "endnote"
+    let note_class = get_attr(start, b"note-class").unwrap_or_else(|| "footnote".to_string());
+    let is_endnote = note_class == "endnote";
+
+    let mut citation_text = String::new();
+    let mut body_paragraphs: Vec<String> = Vec::new();
+    let mut in_body = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"note-citation" => {
+                        // Read citation text (the footnote number/mark)
+                    }
+                    b"note-body" => {
+                        in_body = true;
+                    }
+                    b"p" if in_body => {
+                        // Collect paragraph text from note body
+                        let mut para_text = String::new();
+                        loop {
+                            match reader.read_event() {
+                                Ok(Event::Text(ref t)) => {
+                                    if let Ok(text) = t.unescape() {
+                                        para_text.push_str(&text);
+                                    }
+                                }
+                                Ok(Event::Start(ref inner))
+                                    if inner.local_name().as_ref() == b"span" => {}
+                                Ok(Event::End(ref inner))
+                                    if inner.local_name().as_ref() == b"span" => {}
+                                Ok(Event::End(ref inner))
+                                    if inner.local_name().as_ref() == b"p" =>
+                                {
+                                    break;
+                                }
+                                Ok(Event::Eof) => break,
+                                Err(e) => return Err(OdtError::Xml(e.to_string())),
+                                _ => {}
+                            }
+                        }
+                        if !para_text.is_empty() {
+                            body_paragraphs.push(para_text);
+                        }
+                    }
+                    _ if in_body => {
+                        skip_element_odt(reader)?;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref t)) => {
+                if !in_body {
+                    if let Ok(text) = t.unescape() {
+                        citation_text.push_str(&text);
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"note-body" => in_body = false,
+                    b"note-citation" => {}
+                    b"note" => break,
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(OdtError::Xml(e.to_string())),
+            _ => {}
+        }
+    }
+
+    // Create the inline reference marker
+    let ref_type = if is_endnote {
+        NodeType::EndnoteRef
+    } else {
+        NodeType::FootnoteRef
+    };
+    let ref_id = doc.next_id();
+    let mut ref_node = Node::new(ref_id, ref_type);
+
+    // Store citation number
+    let attr_key = if is_endnote {
+        AttributeKey::EndnoteNumber
+    } else {
+        AttributeKey::FootnoteNumber
+    };
+    if !citation_text.is_empty() {
+        if let Ok(num) = citation_text.parse::<i64>() {
+            ref_node
+                .attributes
+                .set(attr_key, AttributeValue::Int(num));
+        } else {
+            ref_node
+                .attributes
+                .set(attr_key, AttributeValue::String(citation_text));
+        }
+    }
+
+    doc.insert_node(parent_id, index, ref_node)
+        .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+    // Create the body node at the document root
+    let body_type = if is_endnote {
+        NodeType::EndnoteBody
+    } else {
+        NodeType::FootnoteBody
+    };
+    let body_node_id = doc.next_id();
+    let body_node = Node::new(body_node_id, body_type);
+
+    let doc_root = doc.root_id();
+    let root_child_count = doc.node(doc_root).map_or(0, |n| n.children.len());
+    doc.insert_node(doc_root, root_child_count, body_node)
+        .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+    // Add paragraph content to the body node
+    for (i, text) in body_paragraphs.into_iter().enumerate() {
+        let para_id = doc.next_id();
+        let para_node = Node::new(para_id, NodeType::Paragraph);
+        doc.insert_node(body_node_id, i, para_node)
+            .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, text))
+            .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+    }
+
+    Ok(1)
 }
 
 /// Parse a `<text:list>` element, flattening items as Paragraph children of `parent_id`.
@@ -856,6 +1038,11 @@ fn parse_toc_into(
                 match name.as_slice() {
                     b"table-of-content-source" => {
                         // Read outline-level attribute
+                        // TODO: Additional TOC source attributes are not yet preserved on
+                        // round-trip. Only text:outline-level is captured. Other attributes
+                        // like text:use-index-marks, text:use-index-source-styles,
+                        // text:index-scope, and child elements like
+                        // <text:index-entry-tab-stop> are lost during parsing.
                         if let Some(level_str) = get_attr(e, b"outline-level") {
                             if let Ok(level) = level_str.parse::<i64>() {
                                 if let Some(toc) = doc.node_mut(toc_id) {
@@ -968,6 +1155,7 @@ fn parse_table_into(
         .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
 
     let mut row_index = 0;
+    let mut column_count: usize = 0;
 
     loop {
         match reader.read_event() {
@@ -979,9 +1167,25 @@ fn parse_table_into(
                         row_index += 1;
                     }
                     b"table-column" => {
-                        // Skip column definitions
+                        // Count columns; table-column as a Start event has a closing tag
+                        let repeated = get_attr(e, b"number-columns-repeated")
+                            .and_then(|v| v.parse::<usize>().ok())
+                            .unwrap_or(1);
+                        column_count += repeated;
+                        // TODO: Parse column width from automatic style
+                        // Column width definitions affect layout but are not yet
+                        // stored in the model; we track the count for now.
                     }
                     _ => {}
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let local = e.local_name();
+                if local.as_ref() == b"table-column" {
+                    let repeated = get_attr(e, b"number-columns-repeated")
+                        .and_then(|v| v.parse::<usize>().ok())
+                        .unwrap_or(1);
+                    column_count += repeated;
                 }
             }
             Ok(Event::End(ref e)) if e.local_name().as_ref() == b"table" => break,
@@ -990,6 +1194,10 @@ fn parse_table_into(
             _ => {}
         }
     }
+
+    // Column count is tracked for future layout use.
+    // TODO: Store column widths once the model supports per-column width attributes.
+    let _ = column_count;
 
     Ok(table_id)
 }

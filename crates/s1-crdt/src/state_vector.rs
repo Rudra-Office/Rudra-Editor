@@ -86,6 +86,21 @@ impl StateVector {
         }
         true
     }
+
+    /// Remove entries for replicas not in the given active set.
+    ///
+    /// This helps prevent unbounded growth of the state vector when replicas
+    /// disconnect permanently. Call periodically with the set of currently
+    /// connected replica IDs.
+    pub fn retain_active(&mut self, active_replicas: &[u64]) {
+        self.entries
+            .retain(|replica_id, _| active_replicas.contains(replica_id));
+    }
+
+    /// Number of replicas tracked.
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
 }
 
 impl Default for StateVector {
@@ -177,5 +192,49 @@ mod tests {
         assert_eq!(sv.get(1), 10);
         sv.set(1, 5); // overwrites, not max
         assert_eq!(sv.get(1), 5);
+    }
+
+    #[test]
+    fn retain_active_removes_stale() {
+        let mut sv = StateVector::new();
+        sv.set(1, 10);
+        sv.set(2, 20);
+        sv.set(3, 30);
+        sv.set(4, 40);
+
+        assert_eq!(sv.len(), 4);
+
+        sv.retain_active(&[1, 3]);
+        assert_eq!(sv.len(), 2);
+        assert_eq!(sv.get(1), 10);
+        assert_eq!(sv.get(2), 0); // removed
+        assert_eq!(sv.get(3), 30);
+        assert_eq!(sv.get(4), 0); // removed
+    }
+
+    #[test]
+    fn retain_active_empty_set() {
+        let mut sv = StateVector::new();
+        sv.set(1, 10);
+        sv.set(2, 20);
+
+        sv.retain_active(&[]);
+        assert!(sv.is_empty());
+        assert_eq!(sv.len(), 0);
+    }
+
+    #[test]
+    fn len_tracks_entries() {
+        let mut sv = StateVector::new();
+        assert_eq!(sv.len(), 0);
+
+        sv.set(1, 5);
+        assert_eq!(sv.len(), 1);
+
+        sv.set(2, 10);
+        assert_eq!(sv.len(), 2);
+
+        sv.set(1, 15); // update existing
+        assert_eq!(sv.len(), 2);
     }
 }

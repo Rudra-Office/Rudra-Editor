@@ -83,7 +83,10 @@ impl DocumentBuilder {
             s1_model::AttributeKey::StyleId,
             s1_model::AttributeValue::String(style_id.clone()),
         );
-        let _ = self.model.insert_node(body_id, child_count, para);
+        if let Err(e) = self.model.insert_node(body_id, child_count, para) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let run_id = self.model.next_id();
         let mut run = Node::new(run_id, NodeType::Run);
@@ -94,10 +97,16 @@ impl DocumentBuilder {
             _ => 12.0,
         };
         run.attributes = AttributeMap::new().bold(true).font_size(font_size);
-        let _ = self.model.insert_node(para_id, 0, run);
+        if let Err(e) = self.model.insert_node(para_id, 0, run) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let text_id = self.model.next_id();
-        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
+        if let Err(e) = self.model.insert_node(run_id, 0, Node::text(text_id, text)) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         self
     }
@@ -109,11 +118,14 @@ impl DocumentBuilder {
         };
 
         let para_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             body_id,
             child_count,
             Node::new(para_id, NodeType::Paragraph),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let pb = ParagraphBuilder {
             model: &mut self.model,
@@ -176,15 +188,25 @@ impl DocumentBuilder {
                 start: None,
             }),
         );
-        let _ = self.model.insert_node(body_id, child_count, para);
+        if let Err(e) = self.model.insert_node(body_id, child_count, para) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let run_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let text_id = self.model.next_id();
-        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
+        if let Err(e) = self.model.insert_node(run_id, 0, Node::text(text_id, text)) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         self
     }
@@ -285,7 +307,10 @@ impl DocumentBuilder {
             AttributeKey::TocMaxLevel,
             AttributeValue::Int(max_level as i64),
         );
-        let _ = self.model.insert_node(body_id, child_count, toc);
+        if let Err(e) = self.model.insert_node(body_id, child_count, toc) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
         self
     }
 
@@ -306,7 +331,10 @@ impl DocumentBuilder {
             AttributeKey::TocTitle,
             AttributeValue::String(title.to_string()),
         );
-        let _ = self.model.insert_node(body_id, child_count, toc);
+        if let Err(e) = self.model.insert_node(body_id, child_count, toc) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
         self
     }
 
@@ -330,9 +358,13 @@ impl DocumentBuilder {
         };
 
         let table_id = self.model.next_id();
-        let _ = self
-            .model
-            .insert_node(body_id, child_count, Node::new(table_id, NodeType::Table));
+        if let Err(e) =
+            self.model
+                .insert_node(body_id, child_count, Node::new(table_id, NodeType::Table))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let tb = TableBuilder {
             model: &mut self.model,
@@ -419,22 +451,37 @@ impl DocumentBuilder {
             .unwrap_or(0);
 
         let hf_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(root_id, child_count, Node::new(hf_id, node_type));
+            .insert_node(root_id, child_count, Node::new(hf_id, node_type))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let para_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(hf_id, 0, Node::new(para_id, NodeType::Paragraph));
+            .insert_node(hf_id, 0, Node::new(para_id, NodeType::Paragraph))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let run_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let text_id = self.model.next_id();
-        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
+        if let Err(e) = self.model.insert_node(run_id, 0, Node::text(text_id, text)) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         hf_id
     }
@@ -506,11 +553,14 @@ impl<'a> ParagraphBuilder<'a> {
             .map(|n| n.children.len())
             .unwrap_or(0);
         let br_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             self.para_id,
             child_count,
             Node::new(br_id, NodeType::LineBreak),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
         self
     }
 
@@ -551,7 +601,10 @@ impl<'a> ParagraphBuilder<'a> {
             AttributeKey::BookmarkName,
             AttributeValue::String(name.to_string()),
         );
-        let _ = self.model.insert_node(self.para_id, child_count, bk);
+        if let Err(e) = self.model.insert_node(self.para_id, child_count, bk) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
         self
     }
 
@@ -563,11 +616,14 @@ impl<'a> ParagraphBuilder<'a> {
             .map(|n| n.children.len())
             .unwrap_or(0);
         let bk_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             self.para_id,
             child_count,
             Node::new(bk_id, NodeType::BookmarkEnd),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
         self
     }
 
@@ -582,10 +638,16 @@ impl<'a> ParagraphBuilder<'a> {
         let run_id = self.model.next_id();
         let mut run = Node::new(run_id, NodeType::Run);
         run.attributes = attrs;
-        let _ = self.model.insert_node(self.para_id, child_count, run);
+        if let Err(e) = self.model.insert_node(self.para_id, child_count, run) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let text_id = self.model.next_id();
-        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
+        if let Err(e) = self.model.insert_node(run_id, 0, Node::text(text_id, text)) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         self
     }
@@ -606,11 +668,14 @@ impl<'a> TableBuilder<'a> {
             .map(|n| n.children.len())
             .unwrap_or(0);
         let row_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             self.table_id,
             row_count,
             Node::new(row_id, NodeType::TableRow),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let rb = RowBuilder {
             model: self.model,
@@ -649,25 +714,39 @@ impl<'a> RowBuilder<'a> {
             .map(|n| n.children.len())
             .unwrap_or(0);
         let cell_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             self.row_id,
             cell_count,
             Node::new(cell_id, NodeType::TableCell),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         // Add a paragraph with a text run inside the cell
         let para_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph));
+            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let run_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run));
+            .insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let text_id = self.model.next_id();
-        let _ = self.model.insert_node(run_id, 0, Node::text(text_id, text));
+        if let Err(e) = self.model.insert_node(run_id, 0, Node::text(text_id, text)) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         Self {
             model: self.model,
@@ -683,16 +762,23 @@ impl<'a> RowBuilder<'a> {
             .map(|n| n.children.len())
             .unwrap_or(0);
         let cell_id = self.model.next_id();
-        let _ = self.model.insert_node(
+        if let Err(e) = self.model.insert_node(
             self.row_id,
             cell_count,
             Node::new(cell_id, NodeType::TableCell),
-        );
+        ) {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let para_id = self.model.next_id();
-        let _ = self
+        if let Err(e) = self
             .model
-            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph));
+            .insert_node(cell_id, 0, Node::new(para_id, NodeType::Paragraph))
+        {
+            #[cfg(debug_assertions)]
+            eprintln!("[s1engine] Builder warning: failed to insert node: {e:?}");
+        }
 
         let pb = ParagraphBuilder {
             model: self.model,

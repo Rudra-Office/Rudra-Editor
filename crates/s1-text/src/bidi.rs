@@ -16,11 +16,38 @@ use crate::types::{BidiRun, Direction};
 /// A vector of `BidiRun` values sorted by visual order. For pure LTR text,
 /// this returns a single run covering the entire text.
 pub fn bidi_resolve(text: &str) -> Vec<BidiRun> {
+    bidi_resolve_with_direction(text, None)
+}
+
+/// Resolve bidirectional text runs with an explicit base direction.
+///
+/// When `base_direction` is `Some(Direction::Rtl)`, the paragraph is treated
+/// as right-to-left regardless of its first strong character. When `None`,
+/// the `unicode-bidi` crate auto-detects from the text content.
+///
+/// Explicit BiDi format characters (LRE, RLE, PDF, LRI, RLI, FSI, PDI) in
+/// the text are handled by the underlying `unicode-bidi` implementation per
+/// UAX #9.
+///
+/// # Arguments
+///
+/// * `text` — The text to analyze.
+/// * `base_direction` — Optional explicit base paragraph direction.
+pub fn bidi_resolve_with_direction(text: &str, base_direction: Option<Direction>) -> Vec<BidiRun> {
     if text.is_empty() {
         return Vec::new();
     }
 
-    let bidi_info = unicode_bidi::BidiInfo::new(text, None);
+    // Map our Direction type to unicode-bidi's Level for explicit base direction.
+    // None lets the crate auto-detect from the first strong character.
+    // Explicit format characters (LRE, RLE, PDF, LRI, RLI, FSI, PDI) in the
+    // text are processed by the unicode-bidi crate automatically per UAX #9.
+    let bidi_level = base_direction.map(|d| match d {
+        Direction::Rtl => unicode_bidi::Level::rtl(),
+        Direction::Ltr => unicode_bidi::Level::ltr(),
+    });
+
+    let bidi_info = unicode_bidi::BidiInfo::new(text, bidi_level);
 
     let mut runs = Vec::new();
 

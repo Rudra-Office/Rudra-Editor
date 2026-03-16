@@ -129,7 +129,10 @@ fn parse_style_element(
 ///
 /// Extracts default run properties (`rPrDefault`) and paragraph
 /// properties (`pPrDefault`) and stores them in the document model.
-fn parse_doc_defaults(reader: &mut Reader<&[u8]>, doc: &mut DocumentModel) -> Result<(), DocxError> {
+fn parse_doc_defaults(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+) -> Result<(), DocxError> {
     let defaults = doc.doc_defaults_mut();
 
     loop {

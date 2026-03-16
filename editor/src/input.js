@@ -12,10 +12,15 @@ import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
 import { broadcastOp } from './collab.js';
-import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled } from './toolbar-handlers.js';
+import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter } from './toolbar-handlers.js';
 
 export function initInput() {
   const page = $('pageContainer');
+
+  // ─── Clear pending formats on editor blur ───
+  page.addEventListener('blur', () => {
+    state.pendingFormats = {};
+  }, true);
 
   // ─── E-01 fix: Capture cursor offset before text insertion for pending formats ───
   page.addEventListener('beforeinput', (e) => {
@@ -231,6 +236,17 @@ export function initInput() {
     clearSelectAll();
   });
 
+  // ─── UXP-14: Format Painter — apply on mouseup ──
+  // When format painter mode is active, apply the copied format to whatever
+  // text the user just selected via click-drag.
+  document.addEventListener('mouseup', () => {
+    if (!state.formatPainterMode) return;
+    // Use a short delay to let the browser finalize the selection range
+    setTimeout(() => {
+      applyFormatPainter();
+    }, 10);
+  });
+
   // ─── Keydown ────────────────────────────────────
   page.addEventListener('keydown', e => {
     if (!state.doc) return;
@@ -442,6 +458,19 @@ export function initInput() {
         e.preventDefault();
         import('./toolbar-handlers.js').then(mod => {
           if (typeof mod.openEquationModal === 'function') mod.openEquationModal('');
+        });
+        return;
+      }
+
+      // Ctrl+Alt+0 — Normal style; Ctrl+Alt+1-6 — Heading 1-6
+      if (e.altKey && e.key >= '0' && e.key <= '6') {
+        e.preventDefault();
+        const level = parseInt(e.key);
+        const styleMap = ['normal', 'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6'];
+        import('./toolbar-handlers.js').then(mod => {
+          if (typeof mod.applyParagraphStyle === 'function') {
+            mod.applyParagraphStyle(styleMap[level]);
+          }
         });
         return;
       }
@@ -1074,6 +1103,11 @@ export function initInput() {
   // ─── Global Escape handler — close modals/menus ──
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
+    // UXP-14: Exit format painter mode
+    if (state.formatPainterMode) {
+      exitFormatPainter();
+      return;
+    }
     // Close slash menu
     if (state.slashMenuOpen) {
       closeSlashMenu();
@@ -2624,6 +2658,11 @@ function openSlashMenu() {
   state.slashMenuOpen = true;
   state.slashMenuIndex = 0;
   state.slashQuery = '';
+  const menu = $('slashMenu');
+  if (menu) {
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', 'Insert commands');
+  }
   const commands = filterSlashCommands('');
   renderSlashMenu(commands);
   positionSlashMenu();

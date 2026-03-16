@@ -163,6 +163,8 @@ pub struct FontDatabase {
     db: fontdb::Database,
     /// Cache for fallback lookups: char → FontId.
     fallback_cache: Mutex<HashMap<char, Option<FontId>>>,
+    /// Cache for substitution lookups: (family_lower, bold, italic) → Option<FontId>.
+    substitution_cache: Mutex<HashMap<(String, bool, bool), Option<FontId>>>,
 }
 
 impl std::fmt::Debug for FontDatabase {
@@ -189,6 +191,7 @@ impl FontDatabase {
         let mut font_db = Self {
             db,
             fallback_cache: Mutex::new(HashMap::new()),
+            substitution_cache: Mutex::new(HashMap::new()),
         };
 
         // On WASM, load embedded fallback font if available
@@ -203,6 +206,7 @@ impl FontDatabase {
         Self {
             db: fontdb::Database::new(),
             fallback_cache: Mutex::new(HashMap::new()),
+            substitution_cache: Mutex::new(HashMap::new()),
         }
     }
 
@@ -271,23 +275,41 @@ impl FontDatabase {
     ///
     /// This extends `find()` with a substitution table that maps common
     /// unavailable fonts to available alternatives (e.g., Calibri → Carlito).
+    /// Results are cached to avoid repeated substitution table scans.
     pub fn find_with_substitution(&self, family: &str, bold: bool, italic: bool) -> Option<FontId> {
         // Try exact match first
         if let Some(id) = self.find(family, bold, italic) {
             return Some(id);
         }
-        // Try substitution table
-        let family_lower = family.to_lowercase();
-        for &(src, alternatives) in FONT_SUBSTITUTIONS {
-            if src.to_lowercase() == family_lower {
-                for &alt in alternatives {
-                    if let Some(id) = self.find(alt, bold, italic) {
-                        return Some(id);
-                    }
-                }
+
+        // Check substitution cache
+        let cache_key = (family.to_lowercase(), bold, italic);
+        if let Ok(cache) = self.substitution_cache.lock() {
+            if let Some(cached) = cache.get(&cache_key) {
+                return *cached;
             }
         }
-        None
+
+        // Try substitution table
+        let mut result = None;
+        for &(src, alternatives) in FONT_SUBSTITUTIONS {
+            if src.to_lowercase() == cache_key.0 {
+                for &alt in alternatives {
+                    if let Some(id) = self.find(alt, bold, italic) {
+                        result = Some(id);
+                        break;
+                    }
+                }
+                break;
+            }
+        }
+
+        // Cache the substitution result (even None to avoid repeated misses)
+        if let Ok(mut cache) = self.substitution_cache.lock() {
+            cache.insert(cache_key, result);
+        }
+
+        result
     }
 
     /// Find a fallback font that contains a glyph for the given character.
@@ -307,8 +329,15 @@ impl FontDatabase {
         // Cache the result
         if let Ok(mut cache) = self.fallback_cache.lock() {
             // Cap cache size to prevent unbounded memory growth
-            if cache.len() > 10_000 {
-                cache.clear();
+            if cache.len() > 50_000 {
+                // Evict oldest half instead of clearing entire cache.
+                // HashMap has no insertion order, so we remove an arbitrary
+                // half of entries. This is cheaper than a full clear for
+                // workloads that repeatedly query the same characters.
+                let to_remove: Vec<_> = cache.keys().take(cache.len() / 2).cloned().collect();
+                for key in to_remove {
+                    cache.remove(&key);
+                }
             }
             cache.insert(ch, result);
         }
@@ -350,8 +379,15 @@ impl FontDatabase {
         // Fall back to general scan
         let result = self.fallback_uncached(ch);
         if let Ok(mut cache) = self.fallback_cache.lock() {
-            if cache.len() > 10_000 {
-                cache.clear();
+            if cache.len() > 50_000 {
+                // Evict oldest half instead of clearing entire cache.
+                // HashMap has no insertion order, so we remove an arbitrary
+                // half of entries. This is cheaper than a full clear for
+                // workloads that repeatedly query the same characters.
+                let to_remove: Vec<_> = cache.keys().take(cache.len() / 2).cloned().collect();
+                for key in to_remove {
+                    cache.remove(&key);
+                }
             }
             cache.insert(ch, result);
         }

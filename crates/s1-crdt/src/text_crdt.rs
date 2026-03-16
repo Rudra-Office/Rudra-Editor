@@ -55,20 +55,54 @@ impl TextSequence {
         // Find the raw position after origin_left
         let scan_start = match item.origin_left {
             None => 0,
-            Some(left_id) => self.find_index(left_id).map(|p| p + 1).unwrap_or(0),
+            Some(left_id) => match self.find_index(left_id) {
+                Some(p) => p + 1,
+                None => {
+                    // Origin was not found — this should not happen in a correct CRDT.
+                    // Fallback to start to avoid divergence, but this indicates a bug.
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[s1-crdt] Warning: origin_left {:?} not found in text CRDT",
+                        left_id
+                    );
+                    0
+                }
+            },
         };
 
         // Find the raw position of origin_right (exclusive bound)
         let scan_end = match item.origin_right {
             None => self.items.len(),
-            Some(right_id) => self.find_index(right_id).unwrap_or(self.items.len()),
+            Some(right_id) => match self.find_index(right_id) {
+                Some(p) => p,
+                None => {
+                    // Origin was not found — this should not happen in a correct CRDT.
+                    // Fallback to end to avoid divergence, but this indicates a bug.
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[s1-crdt] Warning: origin_right {:?} not found in text CRDT",
+                        right_id
+                    );
+                    self.items.len()
+                }
+            },
         };
 
         // Position of the new item's origin_left in the current sequence.
         // None (no origin) is conceptually before everything, so use -1.
         let new_origin_pos: i64 = match item.origin_left {
             None => -1,
-            Some(id) => self.find_index(id).map(|i| i as i64).unwrap_or(-1),
+            Some(id) => match self.find_index(id) {
+                Some(i) => i as i64,
+                None => {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[s1-crdt] Warning: origin_left {:?} not found for position lookup",
+                        id
+                    );
+                    -1
+                }
+            },
         };
 
         // Scan between origins to find correct insertion point.
@@ -89,7 +123,14 @@ impl TextSequence {
                 // Different origin: compare positions to ensure deterministic ordering.
                 let existing_origin_pos: i64 = match existing.origin_left {
                     None => -1,
-                    Some(id) => self.find_index(id).map(|p| p as i64).unwrap_or(-1),
+                    Some(id) => match self.find_index(id) {
+                        Some(p) => p as i64,
+                        None => {
+                            #[cfg(debug_assertions)]
+                            eprintln!("[s1-crdt] Warning: existing origin_left {:?} not found during integration", id);
+                            -1
+                        }
+                    },
                 };
                 if existing_origin_pos < new_origin_pos {
                     // Existing's origin is further left → skip past it

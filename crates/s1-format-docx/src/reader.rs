@@ -121,17 +121,17 @@ pub fn read(input: &[u8]) -> Result<DocumentModel, DocxError> {
 
     // Parse comments (word/comments.xml)
     if let Ok(comments_xml) = read_zip_entry(&mut archive, "word/comments.xml") {
-        let _ = parse_comments_xml(&comments_xml, &mut doc)?;
+        parse_comments_xml(&comments_xml, &mut doc)?;
     }
 
     // Parse footnotes (word/footnotes.xml)
     if let Ok(footnotes_xml) = read_zip_entry(&mut archive, "word/footnotes.xml") {
-        let _ = parse_footnotes_xml(&footnotes_xml, &mut doc)?;
+        parse_footnotes_xml(&footnotes_xml, &mut doc)?;
     }
 
     // Parse endnotes (word/endnotes.xml)
     if let Ok(endnotes_xml) = read_zip_entry(&mut archive, "word/endnotes.xml") {
-        let _ = parse_endnotes_xml(&endnotes_xml, &mut doc)?;
+        parse_endnotes_xml(&endnotes_xml, &mut doc)?;
     }
 
     Ok(doc)
@@ -200,7 +200,11 @@ fn parse_relationships(xml: &str) -> HashMap<String, String> {
                 }
             }
             Ok(Event::Eof) => break,
-            Err(_) => break,
+            Err(e) => {
+                #[cfg(debug_assertions)]
+                eprintln!("[s1-format-docx] Warning: XML error in relationships: {e}");
+                break;
+            }
             _ => {}
         }
     }

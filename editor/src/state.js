@@ -92,6 +92,9 @@ export const state = {
   _composing: false,
   // E5.4: Editing mode — 'editing' | 'suggesting' | 'viewing'
   editingMode: 'editing',
+  // UXP-14: Format Painter
+  formatPainterMode: null, // null | 'once' | 'sticky'
+  copiedFormat: null,       // { bold, italic, underline, strikethrough, ... } or null
   // E9.5: TOC style — 'default' | 'dotted' | 'dashed' | 'no-page-numbers'
   tocStyle: 'default',
   // PDF viewer state

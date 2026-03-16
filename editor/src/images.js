@@ -147,6 +147,8 @@ export function selectImage(img) {
     const h = document.createElement('span');
     h.className = 'img-handle ' + pos;
     h.dataset.handle = pos;
+    h.setAttribute('aria-hidden', 'true');
+    h.setAttribute('role', 'presentation');
     h.addEventListener('mousedown', startResize);
     wrap.appendChild(h);
   });
@@ -316,12 +318,15 @@ export function initImageContextMenu() {
     state._ctxImageNodeId = nodeEl.dataset.nodeId;
 
     const menu = document.getElementById('imageContextMenu');
+    // Position off-screen first to measure, then clamp to viewport
+    menu.style.left = '-9999px';
+    menu.style.top = '-9999px';
     menu.style.display = 'block';
-    const menuW = 200, menuH = 200;
-    const x = Math.min(e.clientX, window.innerWidth - menuW);
-    const y = Math.min(e.clientY, window.innerHeight - menuH);
-    menu.style.left = Math.max(0, x) + 'px';
-    menu.style.top = Math.max(0, y) + 'px';
+    const menuRect = menu.getBoundingClientRect();
+    const maxX = window.innerWidth - menuRect.width;
+    const maxY = window.innerHeight - menuRect.height;
+    menu.style.left = Math.min(Math.max(0, e.clientX), maxX) + 'px';
+    menu.style.top = Math.min(Math.max(0, e.clientY), maxY) + 'px';
   });
 
   // Close image context menu on outside click

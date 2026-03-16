@@ -191,7 +191,11 @@ function startDrag(type, e) {
   else if (type === 'right') startPt = indentRightPt;
   else if (type === 'firstLine') startPt = firstLinePt;
 
-  _dragging = { type, startX: e.clientX, startPt, nodeId };
+  // Save current selection so we can restore after drag
+  const savedSel = window.getSelection();
+  const savedRange = savedSel && savedSel.rangeCount > 0 ? savedSel.getRangeAt(0).cloneRange() : null;
+
+  _dragging = { type, startX: e.clientX, startPt, nodeId, savedRange };
 
   document.addEventListener('mousemove', onDrag);
   document.addEventListener('mouseup', endDrag);
@@ -270,6 +274,7 @@ function endDrag(e) {
 
   const type = _dragging.type;
   const nodeId = _dragging.nodeId; // Use the nodeId saved at drag start
+  const savedRange = _dragging.savedRange;
   _dragging = null;
 
   document.removeEventListener('mousemove', onDrag);
@@ -279,6 +284,15 @@ function endDrag(e) {
 
   // Apply to document using the saved nodeId (selection may be lost)
   applyIndent(type, newPt, nodeId);
+
+  // Restore the selection/cursor position that was active before the drag
+  if (savedRange) {
+    try {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(savedRange);
+    } catch (_) { /* range may be invalid after re-render */ }
+  }
 
   // Reset cached indent values so next update picks up the change
   _lastIndentLeftPt = -1;

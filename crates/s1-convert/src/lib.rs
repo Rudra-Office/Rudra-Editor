@@ -23,5 +23,8 @@ pub mod sprm;
 pub mod stylesheet;
 pub mod summary_info;
 
-pub use convert::{convert, convert_to_model, detect_format, SourceFormat, TargetFormat};
+pub use convert::{
+    convert, convert_to_model, convert_with_warnings, detect_format, is_supported,
+    validate_conversion, ConvertWarning, SourceFormat, TargetFormat,
+};
 pub use error::ConvertError;

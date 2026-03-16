@@ -19,6 +19,11 @@ pub enum Operation {
     },
 
     /// Delete a node and all its descendants.
+    ///
+    /// When creating a fresh delete operation, set `parent_id`, `index`, and `snapshot`
+    /// to `None` — they will be populated during `apply()` for use in the inverse (undo).
+    /// When this operation is the result of an undo (inverse of InsertNode), these fields
+    /// contain the restoration data.
     DeleteNode {
         /// The node to delete.
         target_id: NodeId,
@@ -77,14 +82,18 @@ pub enum Operation {
     SetMetadata {
         key: String,
         value: Option<String>,
-        /// Stored on apply for undo: old value.
+        /// Captured during `apply()` for undo. The outer `Option` indicates whether
+        /// apply has run (`None` = not yet applied). The inner `Option` indicates
+        /// whether the key had a previous value (`None` = key did not exist).
         old_value: Option<Option<String>>,
     },
 
     /// Add or update a style definition.
     SetStyle {
         style: Style,
-        /// Stored on apply for undo: the previous style (if replacing).
+        /// Captured during `apply()` for undo. The outer `Option` indicates whether
+        /// apply has run (`None` = not yet applied). The inner `Option` indicates
+        /// whether a style with this ID existed previously (`None` = no prior style).
         old_style: Option<Option<Style>>,
     },
 

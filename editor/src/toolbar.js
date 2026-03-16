@@ -38,13 +38,27 @@ function collectNodeIdsBetween(container, startNodeId, endNodeId) {
   return ids;
 }
 
-// Detect which style best matches the current paragraph formatting
+// Detect which style best matches the current paragraph formatting.
+// Prefers explicit styleId from document model; falls back to heuristics.
 function detectCurrentStyle(fmt) {
+  // 1. Prefer explicit styleId from the model (set by set_paragraph_style_id)
+  if (fmt.styleId) {
+    const sid = fmt.styleId.toLowerCase();
+    if (sid === 'title') return 'title';
+    if (sid === 'subtitle') return 'subtitle';
+    if (sid === 'quote') return 'quote';
+    if (sid === 'code') return 'code';
+    if (sid.startsWith('heading')) {
+      const n = parseInt(sid.replace(/\D/g, '')) || 0;
+      if (n >= 1 && n <= 4) return 'heading' + n;
+    }
+    // Known non-empty styleId but not one we display → treat as normal
+    return 'normal';
+  }
+  // 2. Fall back to heading level (backward compatibility)
   const level = parseInt(fmt.headingLevel || '0') || 0;
-  if (level === 1) return 'heading1';
-  if (level === 2) return 'heading2';
-  if (level === 3) return 'heading3';
-  if (level === 4) return 'heading4';
+  if (level >= 1 && level <= 4) return 'heading' + level;
+  // 3. Heuristic detection for documents without styleId
   const fam = fmt.fontFamily || '';
   if (fam.toLowerCase().includes('courier') || fam.toLowerCase().includes('mono')) return 'code';
   const size = parseFloat(fmt.fontSize || '0');

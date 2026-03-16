@@ -4,9 +4,25 @@
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum Error {
-    /// Error from a format reader/writer (DOCX, TXT, etc.).
+    /// Generic format error (used when a specific variant is not available).
     #[error("Format error: {0}")]
     Format(String),
+    /// DOCX format error (preserves the original error for inspection).
+    #[cfg(feature = "docx")]
+    #[error("DOCX format error: {0}")]
+    Docx(#[from] s1_format_docx::DocxError),
+    /// ODT format error (preserves the original error for inspection).
+    #[cfg(feature = "odt")]
+    #[error("ODT format error: {0}")]
+    Odt(#[from] s1_format_odt::OdtError),
+    /// TXT format error (preserves the original error for inspection).
+    #[cfg(feature = "txt")]
+    #[error("TXT format error: {0}")]
+    Txt(#[from] s1_format_txt::TxtError),
+    /// PDF export error (preserves the original error for inspection).
+    #[cfg(feature = "pdf")]
+    #[error("PDF error: {0}")]
+    Pdf(#[from] s1_format_pdf::PdfError),
     /// Error from an operation (insert, delete, etc.).
     #[error("Operation error: {0}")]
     Operation(#[from] s1_ops::OperationError),
@@ -24,32 +40,4 @@ pub enum Error {
     #[cfg(feature = "layout")]
     #[error("Layout error: {0}")]
     Layout(#[from] s1_layout::LayoutError),
-}
-
-#[cfg(feature = "docx")]
-impl From<s1_format_docx::DocxError> for Error {
-    fn from(e: s1_format_docx::DocxError) -> Self {
-        Self::Format(e.to_string())
-    }
-}
-
-#[cfg(feature = "odt")]
-impl From<s1_format_odt::OdtError> for Error {
-    fn from(e: s1_format_odt::OdtError) -> Self {
-        Self::Format(e.to_string())
-    }
-}
-
-#[cfg(feature = "txt")]
-impl From<s1_format_txt::TxtError> for Error {
-    fn from(e: s1_format_txt::TxtError) -> Self {
-        Self::Format(e.to_string())
-    }
-}
-
-#[cfg(feature = "pdf")]
-impl From<s1_format_pdf::PdfError> for Error {
-    fn from(e: s1_format_pdf::PdfError) -> Self {
-        Self::Format(e.to_string())
-    }
 }

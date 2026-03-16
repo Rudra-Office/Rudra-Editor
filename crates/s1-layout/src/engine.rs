@@ -251,13 +251,20 @@ impl<'a> LayoutEngine<'a> {
                         prev_space_after = 0.0;
                     }
 
-                    // CSS-style margin collapsing: use the larger of
-                    // previous block's space_after and this block's space_before
+                    // CSS-style margin collapsing (handles negative margins per spec):
+                    // - Both positive: use the larger
+                    // - Both negative: use the more negative (min)
+                    // - Mixed: add them together
                     let space_before = sanitize_pt(para_style.space_before);
-                    let collapsed_spacing = if prev_space_after > 0.0 || space_before > 0.0 {
+                    let collapsed_spacing = if prev_space_after >= 0.0 && space_before >= 0.0 {
+                        // Both positive: CSS-style collapsing — take the larger
                         space_before.max(prev_space_after) - prev_space_after
+                    } else if prev_space_after < 0.0 && space_before < 0.0 {
+                        // Both negative: use the more negative one
+                        space_before.min(prev_space_after) - prev_space_after
                     } else {
-                        0.0
+                        // Mixed positive/negative: add them together
+                        space_before
                     };
                     current_y += collapsed_spacing;
 
@@ -297,6 +304,31 @@ impl<'a> LayoutEngine<'a> {
                             );
                             current_y = content_rect.y;
                         } else {
+                            // Widow/orphan control: before creating a new page,
+                            // check if the last block on the current page is a
+                            // short paragraph (fewer than min_orphan_lines lines).
+                            // If so, pull it to the next page to avoid an orphan
+                            // at the bottom of the current page.
+                            let min_orphan = self.config.min_orphan_lines;
+                            let mut deferred_block: Option<LayoutBlock> = None;
+                            if page_blocks.len() > 1 {
+                                let is_short_orphan = page_blocks
+                                    .last()
+                                    .map(|b| {
+                                        if let LayoutBlockKind::Paragraph { ref lines, .. } =
+                                            b.kind
+                                        {
+                                            lines.len() < min_orphan && lines.len() == 1
+                                        } else {
+                                            false
+                                        }
+                                    })
+                                    .unwrap_or(false);
+                                if is_short_orphan {
+                                    deferred_block = page_blocks.pop();
+                                }
+                            }
+
                             // All columns full — new page
                             pages.push(self.make_page(
                                 page_index,
@@ -316,6 +348,14 @@ impl<'a> LayoutEngine<'a> {
                                 current_column,
                             );
                             current_y = content_rect.y;
+
+                            // Place the deferred orphan block on the new page
+                            if let Some(mut orphan_block) = deferred_block {
+                                orphan_block.bounds.y = current_y;
+                                let h = orphan_block.bounds.height;
+                                page_blocks.push(orphan_block);
+                                current_y += h;
+                            }
                         }
 
                         // Re-layout in the new column/page
@@ -474,7 +514,7 @@ impl<'a> LayoutEngine<'a> {
                                 placed_row.bounds.y = chunk_height;
                                 chunk_rows.push(placed_row);
                                 let effective_h = if !added_any_data_row && row_h > available {
-                                    available.max(0.0) // clamp oversized single row
+                                    available.max(1.0) // minimum 1pt to prevent zero-height rows
                                 } else {
                                     row_h
                                 };
@@ -998,10 +1038,17 @@ impl<'a> LayoutEngine<'a> {
             _ => 7,
         };
         hash = hash.wrapping_mul(0x100000001b3);
-        // Include keep flags and page break
+        // Include keep flags, page break, and bidi direction
         hash ^= (para_style.keep_with_next as u64)
             | ((para_style.keep_lines as u64) << 1)
-            | ((para_style.page_break_before as u64) << 2);
+            | ((para_style.page_break_before as u64) << 2)
+            | ((para_style.bidi as u64) << 3);
+        hash = hash.wrapping_mul(0x100000001b3);
+        // Include default_font_size (affects empty paragraph height)
+        hash ^= para_style
+            .default_font_size
+            .unwrap_or(0.0)
+            .to_bits();
         hash = hash.wrapping_mul(0x100000001b3);
 
         // Check cache
@@ -2141,6 +2188,10 @@ impl<'a> LayoutEngine<'a> {
             // If only one group (no splits), keep as single Box
             if word_groups.len() <= 1 {
                 let glyph_advance: f64 = glyphs.iter().map(|g| g.x_advance).sum();
+                // Use character count for spacing intervals. Character spacing
+                // (letter-spacing) is defined as extra space between characters.
+                // Ligature glyphs represent multiple characters, so using glyph
+                // count would under-count the spacing for ligated text.
                 let num_chars = text.chars().count();
                 let spacing_contribution = if num_chars > 1 {
                     (num_chars as f64 - 1.0) * run_info.character_spacing
@@ -2184,6 +2235,9 @@ impl<'a> LayoutEngine<'a> {
                             .iter()
                             .map(|g| g.x_advance)
                             .sum();
+                        // Use character count for spacing (ligature-aware).
+                        // Ligature glyphs span multiple characters, so counting
+                        // glyphs would under-count spacing intervals.
                         let sub_chars = text[prev_byte..hyph_byte].chars().count();
                         let sub_spacing = if sub_chars > 1 {
                             (sub_chars as f64 - 1.0) * run_info.character_spacing
@@ -2212,6 +2266,7 @@ impl<'a> LayoutEngine<'a> {
                     // Remaining part
                     let remaining_advance: f64 =
                         glyphs[prev_glyph..].iter().map(|g| g.x_advance).sum();
+                    // Use character count for spacing (ligature-aware)
                     let remaining_chars = text[prev_byte..].chars().count();
                     let remaining_spacing = if remaining_chars > 1 {
                         (remaining_chars as f64 - 1.0) * run_info.character_spacing
@@ -2243,8 +2298,10 @@ impl<'a> LayoutEngine<'a> {
 
                     let group_advance: f64 =
                         glyphs[g_start..g_end].iter().map(|g| g.x_advance).sum();
-                    let group_text = &text[*group_start..*group_end];
-                    let group_chars = group_text.chars().count();
+                    // Use character count for spacing (ligature-aware).
+                    // Ligature glyphs represent multiple characters, so glyph
+                    // count would under-count spacing intervals.
+                    let group_chars = text[*group_start..*group_end].chars().count();
                     let spacing_contribution = if group_chars > 1 {
                         (group_chars as f64 - 1.0) * run_info.character_spacing
                     } else {
@@ -2435,7 +2492,9 @@ impl<'a> LayoutEngine<'a> {
                             continue;
                         }
 
-                        let this_col_width = col_widths.get(col_idx).copied()
+                        let this_col_width = col_widths
+                            .get(col_idx)
+                            .copied()
                             .unwrap_or(content_rect.width / num_cols as f64);
                         let cell_x = col_x_positions.get(col_idx).copied().unwrap_or(0.0);
                         let cell_rect = Rect::new(cell_x, 0.0, this_col_width, 0.0);
@@ -2448,8 +2507,12 @@ impl<'a> LayoutEngine<'a> {
                             if let Some(content) = self.doc.node(content_id) {
                                 if content.node_type == NodeType::Paragraph {
                                     let ps = resolve_paragraph_style(self.doc, content_id);
-                                    let cell_content_rect =
-                                        Rect::new(cell_x + 2.0, cell_y, this_col_width - 4.0, 1000.0);
+                                    let cell_content_rect = Rect::new(
+                                        cell_x + 2.0,
+                                        cell_y,
+                                        this_col_width - 4.0,
+                                        1000.0,
+                                    );
                                     let block = self.layout_paragraph(
                                         content_id,
                                         &ps,
@@ -2459,8 +2522,12 @@ impl<'a> LayoutEngine<'a> {
                                     cell_y += block.bounds.height + sanitize_pt(ps.space_after);
                                     cell_blocks.push(block);
                                 } else if content.node_type == NodeType::Table {
-                                    let nested_rect =
-                                        Rect::new(cell_x + 2.0, cell_y, this_col_width - 4.0, 1000.0);
+                                    let nested_rect = Rect::new(
+                                        cell_x + 2.0,
+                                        cell_y,
+                                        this_col_width - 4.0,
+                                        1000.0,
+                                    );
                                     let nested_rows = self.layout_table_rows_with_depth(
                                         content_id,
                                         nested_rect,
@@ -3252,10 +3319,12 @@ impl<'a> LayoutEngine<'a> {
                 let current_page = &pages[i];
                 let next_page = &pages[i + 1];
 
-                // Check last block on current page — is it a paragraph with too few lines?
+                // Check last block on current page — is it a short paragraph
+                // (fewer than min_orphan lines) that should be moved to the
+                // next page to prevent an orphan at the bottom of this page?
                 let orphan_problem = if let Some(last_block) = current_page.blocks.last() {
                     if let LayoutBlockKind::Paragraph { lines, .. } = &last_block.kind {
-                        lines.len() > 1 && lines.len() < min_orphan + min_widow
+                        !lines.is_empty() && lines.len() < min_orphan
                     } else {
                         false
                     }

@@ -23,8 +23,11 @@ pub fn write_manifest_xml(image_paths: &[&str], has_metadata: bool) -> String {
     }
 
     for path in image_paths {
-        let mime = crate::xml_util::mime_for_extension(path.rsplit('.').next().unwrap_or(""))
-            .unwrap_or("application/octet-stream");
+        let ext = std::path::Path::new(path)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
+        let mime = crate::xml_util::mime_for_extension(ext).unwrap_or("application/octet-stream");
 
         xml.push_str(&format!(
             r#"<manifest:file-entry manifest:full-path="{}" manifest:media-type="{}"/>"#,

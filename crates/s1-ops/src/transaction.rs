@@ -69,7 +69,10 @@ pub fn apply_transaction(
         match apply(model, op) {
             Ok(inverse) => inverses.push(inverse),
             Err(e) => {
-                // Rollback: apply collected inverses in reverse order
+                // Rollback: apply collected inverses in reverse order.
+                // Note: rollback errors are intentionally ignored — if rollback fails,
+                // the document may be in an inconsistent state. This is a best-effort
+                // recovery; the original error is reported to the caller.
                 for inv in inverses.into_iter().rev() {
                     let _ = apply(model, &inv);
                 }
