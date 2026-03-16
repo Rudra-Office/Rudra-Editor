@@ -12,29 +12,54 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr;
 
-// --- Opaque handles ---
+// TODO: Additional C FFI functions needed for full API coverage:
+// - Transaction creation and application (s1_transaction_new, s1_transaction_push, etc.)
+// - Operation construction (s1_op_insert_text, s1_op_delete_text, etc.)
+// - Collaborative document support (s1_collab_new, s1_collab_apply_local, etc.)
+// - Selection/cursor management
+// Currently only document open/create/export and basic queries are exposed.
+//
+// IMPORTANT: Every new opaque handle type MUST have a corresponding `*_free`
+// function exposed via `extern "C"`. All existing handles (S1Engine, S1Document,
+// S1Error, S1Bytes, S1String) have free functions. New handles (e.g., S1Transaction,
+// S1CollabSession) must follow the same pattern to prevent memory leaks in C consumers.
 
-/// Opaque handle to an s1engine Engine.
+// --- Opaque handles ---
+//
+// These structs are opaque handles passed to and from C code as pointers.
+// The internal layout is NOT stable across versions. C consumers must never
+// dereference or inspect the contents of these pointers directly — always use
+// the provided `s1_*` API functions. The handles are heap-allocated on the Rust
+// side via `Box::into_raw` and freed via the corresponding `*_free` function.
+
+/// Opaque engine handle. The internal layout is not stable across versions.
+/// Always use the provided API functions to interact with this type.
+/// Do not attempt to access fields directly from C code.
 pub struct S1Engine {
     inner: s1engine::Engine,
 }
 
-/// Opaque handle to an s1engine Document.
+/// Opaque document handle. The internal layout is not stable across versions.
+/// Always use the provided API functions to interact with this type.
+/// Do not attempt to access fields directly from C code.
 pub struct S1Document {
     inner: s1engine::Document,
 }
 
-/// Opaque handle to an error message.
+/// Opaque error handle. The internal layout is not stable across versions.
+/// Use `s1_error_message` to retrieve the error string.
 pub struct S1Error {
     message: CString,
 }
 
-/// Opaque handle to a byte buffer returned from export.
+/// Opaque byte buffer handle. The internal layout is not stable across versions.
+/// Use `s1_bytes_data` and `s1_bytes_len` to access the contents.
 pub struct S1Bytes {
     data: Vec<u8>,
 }
 
-/// Opaque handle to a string returned from the API.
+/// Opaque string handle. The internal layout is not stable across versions.
+/// Use `s1_string_ptr` to get the C string pointer.
 pub struct S1String {
     value: CString,
 }
@@ -362,12 +387,14 @@ fn parse_format(s: &str) -> Option<s1engine::Format> {
 /// Set error_out if it's non-null.
 unsafe fn set_error(error_out: *mut *mut S1Error, msg: &str) {
     if !error_out.is_null() {
+        // Free existing error if present to prevent memory leak
+        if !(*error_out).is_null() {
+            drop(Box::from_raw(*error_out));
+        }
         let cstr = CString::new(msg)
             .or_else(|_| CString::new("unknown error"))
             .unwrap_or_default();
-        unsafe {
-            *error_out = Box::into_raw(Box::new(S1Error { message: cstr }));
-        }
+        *error_out = Box::into_raw(Box::new(S1Error { message: cstr }));
     }
 }
 

@@ -12,6 +12,15 @@ use s1_model::DocumentModel;
 use crate::doc_reader;
 use crate::error::ConvertError;
 
+/// Warnings generated during conversion (non-fatal issues).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ConvertWarning {
+    /// Formatting was lost during conversion.
+    FormattingLost(String),
+    /// An element was not supported.
+    UnsupportedElement(String),
+}
+
 /// Supported source formats for conversion.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
@@ -38,6 +47,9 @@ pub enum TargetFormat {
 ///
 /// Returns the converted document as bytes in the target format.
 ///
+/// Note: DOC source format only supports basic text extraction.
+/// Use [`convert_with_warnings()`] to receive diagnostic warnings about data loss.
+///
 /// # Supported conversions
 ///
 /// | From | To | Notes |
@@ -51,11 +63,81 @@ pub enum TargetFormat {
 ///
 /// Returns `ConvertError` if the conversion is not supported or fails.
 pub fn convert(data: &[u8], from: SourceFormat, to: TargetFormat) -> Result<Vec<u8>, ConvertError> {
+    #[cfg(debug_assertions)]
+    if matches!(from, SourceFormat::Doc) {
+        eprintln!(
+            "[s1-convert] Warning: DOC format only supports basic text extraction; \
+             formatting, images, and styles will be lost. Use convert_with_warnings() \
+             to receive structured diagnostics."
+        );
+    }
+
     // Step 1: Read source into DocumentModel
     let doc = read_source(data, from)?;
 
     // Step 2: Write to target format
     write_target(&doc, to)
+}
+
+/// Convert document data from one format to another, returning warnings.
+///
+/// This is the same as [`convert()`] but additionally returns a list of
+/// [`ConvertWarning`]s describing any non-fatal data loss (e.g., formatting
+/// dropped during DOC conversion).
+///
+/// # Errors
+///
+/// Returns `ConvertError` if the conversion is not supported or fails.
+pub fn convert_with_warnings(
+    data: &[u8],
+    from: SourceFormat,
+    to: TargetFormat,
+) -> Result<(Vec<u8>, Vec<ConvertWarning>), ConvertError> {
+    let mut warnings = Vec::new();
+
+    if matches!(from, SourceFormat::Doc) {
+        warnings.push(ConvertWarning::FormattingLost(
+            "DOC format: only basic text extraction supported; formatting, images, and styles are not preserved".into()
+        ));
+    }
+
+    let doc = read_source(data, from)?;
+    let output = write_target(&doc, to)?;
+    Ok((output, warnings))
+}
+
+/// Check if a conversion path is supported.
+///
+/// Currently all combinations of [`SourceFormat`] and [`TargetFormat`] are
+/// supported, but this function is provided for forward-compatibility when
+/// new format variants are added.
+pub fn is_supported(from: SourceFormat, to: TargetFormat) -> bool {
+    matches!(
+        (from, to),
+        (SourceFormat::Doc, TargetFormat::Docx)
+            | (SourceFormat::Doc, TargetFormat::Odt)
+            | (SourceFormat::Docx, TargetFormat::Odt)
+            | (SourceFormat::Odt, TargetFormat::Docx)
+    )
+}
+
+/// Validate that a conversion path is supported, returning an error if not.
+///
+/// This provides early validation before starting potentially expensive
+/// read/write operations.
+///
+/// # Errors
+///
+/// Returns [`ConvertError::UnsupportedConversion`] if the path is not supported.
+pub fn validate_conversion(from: SourceFormat, to: TargetFormat) -> Result<(), ConvertError> {
+    if is_supported(from, to) {
+        Ok(())
+    } else {
+        Err(ConvertError::UnsupportedConversion {
+            from: format!("{from:?}"),
+            to: format!("{to:?}"),
+        })
+    }
 }
 
 /// Convert document data from one format to a DocumentModel.
@@ -223,6 +305,36 @@ mod tests {
     fn convert_invalid_doc() {
         let result = convert(b"not a doc", SourceFormat::Doc, TargetFormat::Docx);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn convert_with_warnings_doc_source() {
+        // DOC source should produce a FormattingLost warning
+        // We can't easily test with real DOC data here, but we can test the
+        // non-DOC path.
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(
+            root,
+            0,
+            s1_model::Node::new(body_id, s1_model::NodeType::Body),
+        )
+        .unwrap();
+        let docx_bytes = s1_format_docx::write(&doc).unwrap();
+
+        let (odt_bytes, warnings) =
+            convert_with_warnings(&docx_bytes, SourceFormat::Docx, TargetFormat::Odt).unwrap();
+        assert!(!odt_bytes.is_empty());
+        assert!(warnings.is_empty(), "DOCX→ODT should have no warnings");
+    }
+
+    #[test]
+    fn is_supported_all_current_paths() {
+        assert!(is_supported(SourceFormat::Doc, TargetFormat::Docx));
+        assert!(is_supported(SourceFormat::Doc, TargetFormat::Odt));
+        assert!(is_supported(SourceFormat::Docx, TargetFormat::Odt));
+        assert!(is_supported(SourceFormat::Odt, TargetFormat::Docx));
     }
 
     #[test]

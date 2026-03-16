@@ -1156,4 +1156,116 @@ mod tests {
             "compaction should not be triggered for small doc"
         );
     }
+
+    // ─── 3-way convergence test (WFC-13) ────────────────────────────────
+
+    #[test]
+    fn test_three_way_convergence() {
+        // Create three replicas that all start with the same initial state.
+        let mut doc1 = CollabDocument::new(1);
+        let mut doc2 = doc1.fork(2);
+        let mut doc3 = doc1.fork(3);
+
+        let body_id = doc1.model().body_id().unwrap();
+
+        // Each replica inserts a paragraph concurrently (no knowledge of others).
+        let para1 = NodeId::new(1, 100);
+        let op1 = doc1
+            .apply_local(Operation::insert_node(
+                body_id,
+                0,
+                Node::new(para1, NodeType::Paragraph),
+            ))
+            .unwrap();
+
+        let para2 = NodeId::new(2, 100);
+        let op2 = doc2
+            .apply_local(Operation::insert_node(
+                body_id,
+                0,
+                Node::new(para2, NodeType::Paragraph),
+            ))
+            .unwrap();
+
+        let para3 = NodeId::new(3, 100);
+        let op3 = doc3
+            .apply_local(Operation::insert_node(
+                body_id,
+                0,
+                Node::new(para3, NodeType::Paragraph),
+            ))
+            .unwrap();
+
+        // Exchange all operations between all pairs.
+        // doc1 receives from doc2 and doc3
+        doc1.apply_remote(op2.clone()).unwrap();
+        doc1.apply_remote(op3.clone()).unwrap();
+
+        // doc2 receives from doc1 and doc3
+        doc2.apply_remote(op1.clone()).unwrap();
+        doc2.apply_remote(op3).unwrap();
+
+        // doc3 receives from doc1 and doc2
+        doc3.apply_remote(op1).unwrap();
+        doc3.apply_remote(op2).unwrap();
+
+        // All three should have all three paragraphs.
+        assert!(doc1.model().node(para1).is_some());
+        assert!(doc1.model().node(para2).is_some());
+        assert!(doc1.model().node(para3).is_some());
+
+        assert!(doc2.model().node(para1).is_some());
+        assert!(doc2.model().node(para2).is_some());
+        assert!(doc2.model().node(para3).is_some());
+
+        assert!(doc3.model().node(para1).is_some());
+        assert!(doc3.model().node(para2).is_some());
+        assert!(doc3.model().node(para3).is_some());
+
+        // All three should have the same children under body (same order).
+        let body1 = doc1.model().node(body_id).unwrap();
+        let body2 = doc2.model().node(body_id).unwrap();
+        let body3 = doc3.model().node(body_id).unwrap();
+
+        assert_eq!(
+            body1.children, body2.children,
+            "doc1 and doc2 should converge to same child order"
+        );
+        assert_eq!(
+            body2.children, body3.children,
+            "doc2 and doc3 should converge to same child order"
+        );
+    }
+
+    // ─── Error path tests (WFC-14) ──────────────────────────────────────
+
+    #[test]
+    fn test_apply_local_invalid_node() {
+        let mut doc = CollabDocument::new(1);
+        let result = doc.apply_local(Operation::InsertText {
+            target_id: NodeId::new(999, 999),
+            offset: 0,
+            text: "hello".into(),
+        });
+        assert!(result.is_err(), "inserting text into non-existent node should fail");
+    }
+
+    #[test]
+    fn test_apply_local_delete_nonexistent_node() {
+        let mut doc = CollabDocument::new(1);
+        let result = doc.apply_local(Operation::delete_node(NodeId::new(999, 999)));
+        assert!(result.is_err(), "deleting non-existent node should fail");
+    }
+
+    #[test]
+    fn test_apply_local_insert_into_nonexistent_parent() {
+        let mut doc = CollabDocument::new(1);
+        let child_id = doc.next_id();
+        let result = doc.apply_local(Operation::insert_node(
+            NodeId::new(999, 999),
+            0,
+            Node::new(child_id, NodeType::Paragraph),
+        ));
+        assert!(result.is_err(), "inserting into non-existent parent should fail");
+    }
 }

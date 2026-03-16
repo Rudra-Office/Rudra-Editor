@@ -829,6 +829,10 @@ fn write_toc_odt(
         .unwrap_or("Table of Contents");
 
     xml.push_str(r#"<text:table-of-content text:name="TOC" text:protected="false">"#);
+    // TODO: Only text:outline-level is written back on the TOC source element.
+    // Other attributes (text:use-index-marks, text:use-index-source-styles,
+    // text:index-scope) and child elements (text:index-entry-tab-stop, etc.)
+    // are not preserved on round-trip. See also content_parser.rs TOC parsing.
     xml.push_str(&format!(
         r#"<text:table-of-content-source text:outline-level="{}">"#,
         max_level

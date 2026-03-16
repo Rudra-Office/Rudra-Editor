@@ -2,7 +2,7 @@
 import { state, $ } from './state.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo } from './toolbar.js';
 import { doUndo, doRedo, closeSlashMenu } from './input.js';
-import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer } from './render.js';
+import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty } from './render.js';
 import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
 import { insertImage } from './images.js';
 import { updatePageBreaks } from './pagination.js';
@@ -11,6 +11,35 @@ import { getVersions, restoreVersion, saveVersion, openAutosaveDB, newDocument, 
 import { showShareDialog, broadcastOp } from './collab.js';
 import { trackEvent, getStats, clearStats, getSessionDuration } from './analytics.js';
 import { getLastError, clearErrors } from './error-tracking.js';
+
+// ── Selection save/restore for modal dialogs ─────
+// Saves the current DOM selection before a modal opens, restores it after close.
+let _savedModalSelection = null;
+
+function saveModalSelection() {
+  try {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      _savedModalSelection = sel.getRangeAt(0).cloneRange();
+    } else {
+      _savedModalSelection = null;
+    }
+  } catch (_) {
+    _savedModalSelection = null;
+  }
+}
+
+function restoreModalSelection() {
+  if (!_savedModalSelection) return;
+  try {
+    const sel = window.getSelection();
+    sel.removeAllRanges();
+    sel.addRange(_savedModalSelection);
+  } catch (_) {
+    // Range may be invalid if DOM changed; fall back to focusing editor
+  }
+  _savedModalSelection = null;
+}
 
 // E7.2: Screen reader announcement — briefly sets the aria-live region text
 let _announceTimer = 0;
@@ -76,6 +105,9 @@ export function initToolbar() {
   $('btnStrike').addEventListener('click', () => { toggleFormat('strikethrough'); announce('Strikethrough toggled'); trackEvent('toolbar', 'strikethrough'); });
   $('btnSuperscript').addEventListener('click', () => { toggleFormat('superscript'); announce('Superscript toggled'); trackEvent('toolbar', 'superscript'); });
   $('btnSubscript').addEventListener('click', () => { toggleFormat('subscript'); announce('Subscript toggled'); trackEvent('toolbar', 'subscript'); });
+
+  // UXP-14: Format Painter
+  initFormatPainter();
 
   // Clear formatting
   $('btnClearFormat').addEventListener('click', () => {
@@ -203,6 +235,7 @@ export function initToolbar() {
   // Insert table
   $('miTable').addEventListener('click', () => {
     $('insertMenu').classList.remove('show');
+    saveModalSelection();
     $('tableModal').classList.add('show');
     $('tableRows').focus();
     trackEvent('insert', 'table');
@@ -259,6 +292,7 @@ export function initToolbar() {
     const info = getSelectionInfo();
     if (!info) return;
     state._linkSelInfo = info; // stash selection for after modal
+    saveModalSelection();
     $('linkUrl').value = '';
     $('linkModal').classList.add('show');
     $('linkUrl').focus();
@@ -328,6 +362,7 @@ export function initToolbar() {
     const info = getSelectionInfo();
     if (!info) return;
     state._commentSelInfo = info;
+    saveModalSelection();
     $('commentText').value = '';
     $('commentAuthor').value = 'User';
     $('commentModal').classList.add('show');
@@ -507,6 +542,7 @@ export function initToolbar() {
   if ($('menuUnderline')) $('menuUnderline').addEventListener('click', () => { closeAllMenus(); toggleFormat('underline'); });
   if ($('menuStrike')) $('menuStrike').addEventListener('click', () => { closeAllMenus(); toggleFormat('strikethrough'); });
   if ($('menuClearFormat')) $('menuClearFormat').addEventListener('click', () => { closeAllMenus(); $('btnClearFormat').click(); });
+  if ($('menuFormatPainter')) $('menuFormatPainter').addEventListener('click', () => { closeAllMenus(); $('btnFormatPainter').click(); });
   if ($('menuUndo')) $('menuUndo').addEventListener('click', () => { closeAllMenus(); doUndo(); });
   if ($('menuRedo')) $('menuRedo').addEventListener('click', () => { closeAllMenus(); doRedo(); });
   if ($('menuFind')) $('menuFind').addEventListener('click', () => { closeAllMenus(); $('findBar').classList.add('show'); $('findInput').focus(); });
@@ -581,6 +617,7 @@ export function initToolbar() {
   // Help menu — keyboard shortcuts dialog (E7.4)
   if ($('menuShortcuts')) $('menuShortcuts').addEventListener('click', () => {
     closeAllMenus();
+    saveModalSelection();
     $('shortcutsModal').classList.add('show');
   });
   if ($('shortcutsCloseBtn')) $('shortcutsCloseBtn').addEventListener('click', () => {
@@ -700,6 +737,182 @@ export function initToolbar() {
   initToolbarKeyboardNav();
 }
 
+// ── UXP-14: Format Painter ─────────────────────────
+// Copies character formatting from the current selection/cursor and applies
+// it to the next selection. Single-click = apply once, double-click = sticky
+// mode (keeps applying until Escape or button click).
+
+function initFormatPainter() {
+  const btn = $('btnFormatPainter');
+  if (!btn) return;
+
+  let clickTimer = null;
+  let clickCount = 0;
+
+  btn.addEventListener('click', (e) => {
+    e.preventDefault();
+    // If already in paint mode, toggle off
+    if (state.formatPainterMode) {
+      exitFormatPainter();
+      trackEvent('toolbar', 'format-painter-off');
+      return;
+    }
+    clickCount++;
+    if (clickCount === 1) {
+      // Wait briefly to see if a second click arrives (double-click detection)
+      clickTimer = setTimeout(() => {
+        // Single click: copy format + enter "once" mode
+        if (copyFormatFromSelection()) {
+          enterFormatPainter('once');
+          announce('Format Painter: select text to apply formatting');
+          trackEvent('toolbar', 'format-painter-once');
+        }
+        clickCount = 0;
+      }, 250);
+    } else if (clickCount >= 2) {
+      // Double click: copy format + enter "sticky" mode
+      clearTimeout(clickTimer);
+      clickCount = 0;
+      if (copyFormatFromSelection()) {
+        enterFormatPainter('sticky');
+        announce('Format Painter locked: select text to apply, press Escape to exit');
+        trackEvent('toolbar', 'format-painter-sticky');
+      }
+    }
+  });
+}
+
+/**
+ * Copy character formatting from the current selection or cursor position.
+ * Returns true if formatting was successfully captured, false otherwise.
+ */
+function copyFormatFromSelection() {
+  if (!state.doc) return false;
+  const info = getSelectionInfo();
+  if (!info) return false;
+
+  try {
+    let fmt;
+    if (info.collapsed) {
+      fmt = JSON.parse(state.doc.get_formatting_json(info.startNodeId));
+    } else {
+      try {
+        fmt = JSON.parse(state.doc.get_selection_formatting_json(
+          info.startNodeId, info.startOffset, info.endNodeId, info.endOffset));
+      } catch (_) {
+        fmt = JSON.parse(state.doc.get_formatting_json(info.startNodeId));
+      }
+    }
+
+    // Extract character-level formatting properties
+    state.copiedFormat = {
+      bold: fmt.bold === true || fmt.bold === 'true' ? 'true' : 'false',
+      italic: fmt.italic === true || fmt.italic === 'true' ? 'true' : 'false',
+      underline: fmt.underline === true || fmt.underline === 'true' ? 'true' : 'false',
+      strikethrough: fmt.strikethrough === true || fmt.strikethrough === 'true' ? 'true' : 'false',
+      superscript: fmt.superscript === true || fmt.superscript === 'true' ? 'true' : 'false',
+      subscript: fmt.subscript === true || fmt.subscript === 'true' ? 'true' : 'false',
+    };
+    // Include value-based formatting only if they are set
+    if (fmt.fontSize && fmt.fontSize !== 'mixed') {
+      state.copiedFormat.fontSize = String(Math.round(parseFloat(fmt.fontSize)));
+    }
+    if (fmt.fontFamily && fmt.fontFamily !== 'mixed') {
+      state.copiedFormat.fontFamily = fmt.fontFamily;
+    }
+    if (fmt.color && fmt.color !== 'mixed') {
+      state.copiedFormat.color = fmt.color;
+    }
+    if (fmt.highlightColor && fmt.highlightColor !== 'mixed') {
+      state.copiedFormat.highlightColor = fmt.highlightColor;
+    }
+    return true;
+  } catch (e) {
+    console.error('Format Painter: failed to copy formatting:', e);
+    return false;
+  }
+}
+
+/**
+ * Enter format painter mode. Sets cursor to crosshair and activates the button.
+ * @param {'once'|'sticky'} mode
+ */
+function enterFormatPainter(mode) {
+  state.formatPainterMode = mode;
+  const btn = $('btnFormatPainter');
+  if (btn) {
+    btn.classList.add('format-painter-active');
+    btn.setAttribute('aria-pressed', 'true');
+  }
+  // Set crosshair cursor on all page content areas
+  const page = $('pageContainer');
+  if (page) page.classList.add('format-painter-cursor');
+}
+
+/**
+ * Exit format painter mode. Restores cursor and clears state.
+ */
+export function exitFormatPainter() {
+  state.formatPainterMode = null;
+  state.copiedFormat = null;
+  const btn = $('btnFormatPainter');
+  if (btn) {
+    btn.classList.remove('format-painter-active');
+    btn.setAttribute('aria-pressed', 'false');
+  }
+  const page = $('pageContainer');
+  if (page) page.classList.remove('format-painter-cursor');
+}
+
+/**
+ * Apply the previously copied format to the current text selection.
+ * Called on mouseup in the document while format painter is active.
+ * Returns true if format was applied, false otherwise.
+ */
+export function applyFormatPainter() {
+  if (!state.formatPainterMode || !state.copiedFormat || !state.doc) return false;
+  const info = getSelectionInfo();
+  if (!info || info.collapsed) return false;
+
+  syncAllText();
+  try {
+    const sn = info.startNodeId, so = info.startOffset;
+    const en = info.endNodeId, eo = info.endOffset;
+    const fmt = state.copiedFormat;
+
+    // Apply each formatting property from the copied format
+    const formatKeys = ['bold', 'italic', 'underline', 'strikethrough', 'superscript', 'subscript'];
+    for (const key of formatKeys) {
+      if (key in fmt) {
+        state.doc.format_selection(sn, so, en, eo, key, fmt[key]);
+        broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key, value: fmt[key] });
+      }
+    }
+    // Apply value-based properties (fontSize, fontFamily, color, highlightColor)
+    const valueKeys = ['fontSize', 'fontFamily', 'color', 'highlightColor'];
+    for (const key of valueKeys) {
+      if (fmt[key]) {
+        state.doc.format_selection(sn, so, en, eo, key, fmt[key]);
+        broadcastOp({ action: 'formatSelection', startNode: sn, startOffset: so, endNode: en, endOffset: eo, key, value: fmt[key] });
+      }
+    }
+
+    renderDocument();
+    updateToolbarState();
+    updateUndoRedo();
+    announce('Format applied');
+
+    // In "once" mode, exit after first application
+    if (state.formatPainterMode === 'once') {
+      exitFormatPainter();
+    }
+    return true;
+  } catch (e) {
+    console.error('Format Painter: failed to apply formatting:', e);
+    return false;
+  }
+}
+
 function applyAlignment(align) {
   if (!state.doc) return;
   const info = getSelectionInfo();
@@ -807,6 +1020,7 @@ function adjustZoom(delta) {
 // ── E10.2: Unified zoom — set, persist, update UI ──
 export function setZoomLevel(level) {
   level = Math.max(50, Math.min(200, Math.round(level)));
+  const changed = state.zoomLevel !== level;
   state.zoomLevel = level;
   const label = level + '%';
   if ($('zoomValue')) $('zoomValue').textContent = label;
@@ -828,6 +1042,8 @@ export function setZoomLevel(level) {
       btn.classList.toggle('active', v === String(level));
     });
   }
+  // Invalidate layout cache when zoom changes so repagination uses fresh dimensions
+  if (changed) markLayoutDirty();
   try { localStorage.setItem('s1-zoom', String(level)); } catch (_) {}
   renderRuler();
 }
@@ -835,7 +1051,8 @@ export function setZoomLevel(level) {
 function calcFitWidthZoom() {
   const canvas = $('editorCanvas');
   if (!canvas) return 100;
-  const pageWidth = 816; // default page width in px (8.5in @ 96dpi)
+  const dims = state.pageDims || { widthPt: 612 };
+  const pageWidth = Math.round(dims.widthPt * 96 / 72); // dynamic from doc
   const canvasWidth = canvas.clientWidth - 48; // subtract padding
   return Math.max(50, Math.min(200, Math.round((canvasWidth / pageWidth) * 100)));
 }
@@ -1140,10 +1357,13 @@ function refreshComments() {
         const id = btn.dataset.id;
         if (!id) return;
         if (!state.resolvedComments) state.resolvedComments = new Set();
-        if (state.resolvedComments.has(id)) {
+        const wasResolved = state.resolvedComments.has(id);
+        if (wasResolved) {
           state.resolvedComments.delete(id);
+          announce('Comment reopened');
         } else {
           state.resolvedComments.add(id);
+          announce('Comment resolved');
         }
         refreshComments();
       });
@@ -1203,15 +1423,17 @@ function renderCommentCard(c) {
   const isResolved = state.resolvedComments && state.resolvedComments.has(cid);
   const resolvedClass = isResolved ? ' comment-resolved' : '';
   const resolveLabel = isResolved ? 'Unresolve' : 'Resolve';
+  const resolvedStatus = isResolved ? 'Resolved' : 'Active';
   const startNodeId = c.start_node_id || c.startNodeId || '';
   return `
-    <div class="comment-card${resolvedClass}" data-comment-id="${escapeAttr(cid)}" data-start-node-id="${escapeAttr(startNodeId)}" style="cursor:pointer">
+    <div class="comment-card${resolvedClass}" data-comment-id="${escapeAttr(cid)}" data-start-node-id="${escapeAttr(startNodeId)}" style="cursor:pointer" role="article" aria-label="Comment by ${escapeAttr(c.author || 'Unknown')} - ${resolvedStatus}">
       <div class="comment-author">${escapeHtml(c.author || 'Unknown')}</div>
       ${c.date ? `<div class="comment-date">${escapeHtml(c.date)}</div>` : ''}
       <div class="comment-text">${escapeHtml(c.text || c.body || '')}</div>
+      <span class="sr-only" role="status">${resolvedStatus}</span>
       <div class="comment-actions">
         <button class="comment-reply-btn" data-parent-id="${escapeAttr(cid)}" title="Reply to this comment">Reply</button>
-        <button class="comment-resolve-btn" data-id="${escapeAttr(cid)}" title="${resolveLabel} this comment">${resolveLabel}</button>
+        <button class="comment-resolve-btn" data-id="${escapeAttr(cid)}" title="${resolveLabel} this comment" aria-pressed="${isResolved}">${resolveLabel}</button>
         <button class="comment-delete" data-id="${escapeAttr(cid)}" title="Delete this comment">Delete</button>
       </div>
     </div>`;
@@ -1325,6 +1547,7 @@ function openHeaderFooterModal() {
 
   $('differentFirstPage').checked = state.hasDifferentFirstPage || false;
 
+  saveModalSelection();
   $('headerFooterModal').classList.add('show');
   $('headerText').focus();
 }
@@ -1468,18 +1691,65 @@ function showTextDiffPopup(oldText, newText, versionLabel) {
 }
 
 // ── Style Gallery ─────────────────────────────────
-// Style definitions: heading level + font/size/color for each style
+// Style definitions: styleId for model, heading level for compat, font overrides for run-level
 const STYLE_DEFS = {
-  normal:   { heading: 0, fontSize: null, fontFamily: null, color: null, italic: false },
-  title:    { heading: 0, fontSize: '26', fontFamily: null, color: null, italic: false },
-  subtitle: { heading: 0, fontSize: '15', fontFamily: null, color: '666666', italic: false },
-  heading1: { heading: 1, fontSize: null, fontFamily: null, color: null, italic: false },
-  heading2: { heading: 2, fontSize: null, fontFamily: null, color: null, italic: false },
-  heading3: { heading: 3, fontSize: null, fontFamily: null, color: null, italic: false },
-  heading4: { heading: 4, fontSize: null, fontFamily: null, color: null, italic: false },
-  quote:    { heading: 0, fontSize: null, fontFamily: null, color: '666666', italic: true },
-  code:     { heading: 0, fontSize: '11', fontFamily: 'Courier New', color: null, italic: false },
+  normal:   { styleId: '',         heading: 0, fontSize: null, fontFamily: null, color: null, italic: false },
+  title:    { styleId: 'Title',    heading: 0, fontSize: '26', fontFamily: null, color: null, italic: false },
+  subtitle: { styleId: 'Subtitle', heading: 0, fontSize: '15', fontFamily: null, color: '666666', italic: false },
+  heading1: { styleId: 'Heading1', heading: 1, fontSize: null, fontFamily: null, color: null, italic: false },
+  heading2: { styleId: 'Heading2', heading: 2, fontSize: null, fontFamily: null, color: null, italic: false },
+  heading3: { styleId: 'Heading3', heading: 3, fontSize: null, fontFamily: null, color: null, italic: false },
+  heading4: { styleId: 'Heading4', heading: 4, fontSize: null, fontFamily: null, color: null, italic: false },
+  quote:    { styleId: 'Quote',    heading: 0, fontSize: null, fontFamily: null, color: '666666', italic: true },
+  code:     { styleId: 'Code',     heading: 0, fontSize: '11', fontFamily: 'Courier New', color: null, italic: false },
 };
+
+/** Apply a named paragraph style to the current selection.
+ *  Called from style gallery clicks and keyboard shortcuts (Ctrl+Alt+0-6).
+ *  @param {string} styleName - key into STYLE_DEFS (e.g. 'heading1', 'title', 'normal')
+ */
+export function applyParagraphStyle(styleName) {
+  if (!state.doc) return;
+  const def = STYLE_DEFS[styleName];
+  if (!def) return;
+  const info = getSelectionInfo();
+  if (!info) return;
+
+  syncAllText();
+  const paraIds = getSelectedParagraphIds(info);
+  paraIds.forEach(nodeId => {
+    // Set the style ID on the paragraph node (authoritative for model/export)
+    if (typeof state.doc.set_paragraph_style_id === 'function') {
+      state.doc.set_paragraph_style_id(nodeId, def.styleId);
+      broadcastOp({ action: 'setStyle', nodeId, styleId: def.styleId });
+    }
+    // Also set heading level for backward compatibility with rendering
+    state.doc.set_heading_level(nodeId, def.heading);
+    broadcastOp({ action: 'setHeading', nodeId, level: def.heading });
+
+    // Apply run-level formatting overrides (whole paragraph text)
+    const pEl = $('pageContainer')?.querySelector(`[data-node-id="${nodeId}"]`);
+    const textLen = pEl ? Array.from(pEl.textContent || '').length : 0;
+    if (textLen > 0) {
+      const bcast = (key, value) => {
+        state.doc.format_selection(nodeId, 0, nodeId, textLen, key, value);
+        broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: textLen, key, value });
+      };
+      if (def.fontSize) bcast('fontSize', def.fontSize);
+      if (def.fontFamily) bcast('fontFamily', def.fontFamily);
+      if (def.color) bcast('color', def.color);
+      if (def.italic) {
+        bcast('italic', 'true');
+      } else {
+        try { bcast('italic', 'false'); } catch(_) {}
+      }
+    }
+  });
+
+  renderDocument();
+  updateToolbarState();
+  updateUndoRedo();
+}
 
 function initStyleGallery() {
   const btn = $('styleGalleryBtn');
@@ -1513,35 +1783,7 @@ function initStyleGallery() {
       if (!def) { panel.classList.remove('show'); return; }
 
       try {
-        syncAllText();
-        const paraIds = getSelectedParagraphIds(info);
-        paraIds.forEach(nodeId => {
-          // Set heading level on each paragraph
-          state.doc.set_heading_level(nodeId, def.heading);
-          broadcastOp({ action: 'setHeading', nodeId, level: def.heading });
-
-          // Apply font formatting (whole paragraph)
-          const pEl = $('pageContainer')?.querySelector(`[data-node-id="${nodeId}"]`);
-          const textLen = pEl ? Array.from(pEl.textContent || '').length : 0;
-          if (textLen > 0) {
-            const bcast = (key, value) => {
-              state.doc.format_selection(nodeId, 0, nodeId, textLen, key, value);
-              broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: textLen, key, value });
-            };
-            if (def.fontSize) bcast('fontSize', def.fontSize);
-            if (def.fontFamily) bcast('fontFamily', def.fontFamily);
-            if (def.color) bcast('color', def.color);
-            if (def.italic) {
-              bcast('italic', 'true');
-            } else {
-              try { bcast('italic', 'false'); } catch(_) {}
-            }
-          }
-        });
-
-        renderDocument();
-        updateToolbarState();
-        updateUndoRedo();
+        applyParagraphStyle(styleName);
       } catch (err) { console.error('style gallery:', err); }
 
       panel.classList.remove('show');
@@ -1846,12 +2088,15 @@ function applyTableProps(tableId) {
 // ── E7.1: Modal Focus Trap ───────────────────────
 // When a modal is open, Tab/Shift+Tab cycle only within the modal.
 // Escape closes the modal. Focus returns to the element that opened it.
-const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'equationModal', 'dictModal', 'autoCorrectModal'];
+// Selection is saved before open and restored after close.
+const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'equationModal', 'dictModal', 'autoCorrectModal', 'shortcutsModal', 'usageStatsModal', 'errorDetailModal', 'whatsNewModal', 'welcomeModal'];
 const FOCUSABLE_SELECTOR = 'button, [href], input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 function initModalFocusTrap() {
   // Track which element opened the modal so we can return focus
   const openerMap = new WeakMap();
+  // Track saved selection per modal
+  const selectionMap = new WeakMap();
 
   // Observe modal open/close via class changes
   const observer = new MutationObserver(mutations => {
@@ -1860,17 +2105,39 @@ function initModalFocusTrap() {
       const overlay = m.target;
       if (!overlay.classList.contains('modal-overlay')) continue;
       if (overlay.classList.contains('show')) {
-        // Modal just opened — record opener and focus first element
+        // Modal just opened — save selection, record opener, focus first element
+        try {
+          const sel = window.getSelection();
+          if (sel && sel.rangeCount > 0) {
+            selectionMap.set(overlay, sel.getRangeAt(0).cloneRange());
+          }
+        } catch (_) {}
         openerMap.set(overlay, document.activeElement);
+        // UI-02: Set aria-modal for screen readers and trap context
+        overlay.setAttribute('aria-modal', 'true');
+        overlay.setAttribute('role', 'dialog');
         requestAnimationFrame(() => {
-          const focusable = overlay.querySelectorAll(FOCUSABLE_SELECTOR);
+          const focusable = Array.from(overlay.querySelectorAll(FOCUSABLE_SELECTOR))
+            .filter(el => !el.disabled && el.offsetParent !== null);
           if (focusable.length > 0) focusable[0].focus();
         });
       } else {
-        // Modal just closed — return focus to opener
+        // Modal just closed — return focus to opener, restore selection
+        overlay.removeAttribute('aria-modal');
         const opener = openerMap.get(overlay);
         if (opener && typeof opener.focus === 'function') {
           opener.focus();
+        }
+        const savedRange = selectionMap.get(overlay);
+        if (savedRange) {
+          try {
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(savedRange);
+          } catch (_) {
+            // Range may be invalid if DOM changed
+          }
+          selectionMap.delete(overlay);
         }
       }
     }
@@ -1879,6 +2146,19 @@ function initModalFocusTrap() {
   MODAL_IDS.forEach(id => {
     const el = $(id);
     if (el) observer.observe(el, { attributes: true, attributeFilter: ['class'] });
+  });
+
+  // UI-11: Centralized backdrop-click-to-close for all modal overlays.
+  // Clicking on the overlay background (not the modal content) closes the modal.
+  MODAL_IDS.forEach(id => {
+    const overlay = $(id);
+    if (!overlay) return;
+    overlay.addEventListener('click', e => {
+      if (e.target === overlay && overlay.classList.contains('show')) {
+        overlay.classList.remove('show');
+        ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+      }
+    });
   });
 
   // Trap Tab and handle Escape within open modals
@@ -2027,6 +2307,10 @@ function initMoreMenu() {
         case 'strikethrough':
           toggleFormat('strikethrough');
           announce('Strikethrough toggled');
+          break;
+        case 'formatPainter':
+          // Trigger the format painter button click (single-click = once mode)
+          $('btnFormatPainter')?.click();
           break;
         case 'superscript':
           toggleFormat('superscript');
@@ -2286,6 +2570,7 @@ function initTemplateChooser() {
   if (btnTemplate) {
     btnTemplate.addEventListener('click', () => {
       closeAllMenus();
+      saveModalSelection();
       $('templateModal').classList.add('show');
     });
   }
@@ -2465,6 +2750,7 @@ const PAGE_SIZES = {
   letter: { w: 8.5, h: 11 },
   a4:     { w: 8.27, h: 11.69 },
   legal:  { w: 8.5, h: 14 },
+  a3:     { w: 11.69, h: 16.54 },
 };
 
 function initPageSetup() {
@@ -2489,6 +2775,17 @@ function initPageSetup() {
     ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
   });
 
+  // Show/hide custom size fields when "Custom" is selected
+  const pageSizeSelect = $('psPageSize');
+  if (pageSizeSelect) {
+    pageSizeSelect.addEventListener('change', () => {
+      const customPanel = $('psCustomSize');
+      if (customPanel) {
+        customPanel.style.display = pageSizeSelect.value === 'custom' ? 'block' : 'none';
+      }
+    });
+  }
+
   // Backdrop click to close
   const modal = $('pageSetupModal');
   if (modal) {
@@ -2502,17 +2799,40 @@ function initPageSetup() {
 }
 
 function openPageSetup() {
-  // Populate with current values from state.pageDims or defaults
-  const dims = state.pageDims || {
-    widthPt: 612, heightPt: 792,
-    marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72,
-  };
+  // Try to read current page setup from the WASM document model
+  let dims = null;
+  let orientationFromDoc = null;
+  if (state.doc && typeof state.doc.get_page_setup_json === 'function') {
+    try {
+      const json = state.doc.get_page_setup_json();
+      const setup = JSON.parse(json);
+      dims = {
+        widthPt: setup.pageWidth || 612,
+        heightPt: setup.pageHeight || 792,
+        marginTopPt: setup.marginTop || 72,
+        marginBottomPt: setup.marginBottom || 72,
+        marginLeftPt: setup.marginLeft || 72,
+        marginRightPt: setup.marginRight || 72,
+      };
+      orientationFromDoc = setup.orientation || null;
+    } catch (_) {}
+  }
+
+  // Fall back to state.pageDims or defaults
+  if (!dims) {
+    dims = state.pageDims || {
+      widthPt: 612, heightPt: 792,
+      marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72,
+    };
+  }
 
   const wIn = dims.widthPt / 72;
   const hIn = dims.heightPt / 72;
 
-  // Determine orientation
-  const isLandscape = wIn > hIn;
+  // Determine orientation from doc property or from dimensions
+  const isLandscape = orientationFromDoc
+    ? orientationFromDoc === 'landscape'
+    : wIn > hIn;
   document.querySelectorAll('input[name="psOrientation"]').forEach(r => {
     r.checked = (r.value === (isLandscape ? 'landscape' : 'portrait'));
   });
@@ -2520,7 +2840,7 @@ function openPageSetup() {
   // Detect page size from dimensions (compare short/long sides to presets)
   const shortSide = Math.min(wIn, hIn);
   const longSide = Math.max(wIn, hIn);
-  let detectedSize = 'letter';
+  let detectedSize = 'custom';
   for (const [key, sz] of Object.entries(PAGE_SIZES)) {
     const preShort = Math.min(sz.w, sz.h);
     const preLong = Math.max(sz.w, sz.h);
@@ -2531,25 +2851,56 @@ function openPageSetup() {
   }
   $('psPageSize').value = detectedSize;
 
+  // Show/hide custom size panel
+  const customPanel = $('psCustomSize');
+  if (customPanel) {
+    customPanel.style.display = detectedSize === 'custom' ? 'block' : 'none';
+  }
+
+  // Populate custom width/height fields (always update so they're ready if user switches to Custom)
+  const customW = $('psCustomWidth');
+  const customH = $('psCustomHeight');
+  if (customW) customW.value = wIn.toFixed(2);
+  if (customH) customH.value = hIn.toFixed(2);
+
   // Margins
   $('psMarginTop').value = (dims.marginTopPt / 72).toFixed(2);
   $('psMarginBottom').value = (dims.marginBottomPt / 72).toFixed(2);
   $('psMarginLeft').value = (dims.marginLeftPt / 72).toFixed(2);
   $('psMarginRight').value = (dims.marginRightPt / 72).toFixed(2);
 
+  saveModalSelection();
   $('pageSetupModal').classList.add('show');
 }
 
 function applyPageSetup() {
   const sizeKey = $('psPageSize').value || 'letter';
-  const size = PAGE_SIZES[sizeKey] || PAGE_SIZES.letter;
   const orientation = document.querySelector('input[name="psOrientation"]:checked')?.value || 'portrait';
 
-  let pageW = size.w;
-  let pageH = size.h;
+  let pageW, pageH;
+  if (sizeKey === 'custom') {
+    pageW = Math.max(1, Math.min(60, parseFloat($('psCustomWidth').value) || 8.5));
+    pageH = Math.max(1, Math.min(60, parseFloat($('psCustomHeight').value) || 11));
+  } else {
+    const size = PAGE_SIZES[sizeKey] || PAGE_SIZES.letter;
+    pageW = size.w;
+    pageH = size.h;
+  }
+
   if (orientation === 'landscape') {
-    pageW = size.h;
-    pageH = size.w;
+    // Ensure width > height for landscape
+    if (pageW < pageH) {
+      const tmp = pageW;
+      pageW = pageH;
+      pageH = tmp;
+    }
+  } else {
+    // Ensure height > width for portrait
+    if (pageH < pageW) {
+      const tmp = pageW;
+      pageW = pageH;
+      pageH = tmp;
+    }
   }
 
   const marginTop = Math.max(0, Math.min(5, parseFloat($('psMarginTop').value) || 1));
@@ -2564,6 +2915,34 @@ function applyPageSetup() {
   const mBottom = marginBottom * 72;
   const mLeft = marginLeft * 72;
   const mRight = marginRight * 72;
+
+  // Validate: margins must not exceed page dimensions
+  if (mLeft + mRight >= widthPt) {
+    announce('Left + right margins exceed page width');
+    return;
+  }
+  if (mTop + mBottom >= heightPt) {
+    announce('Top + bottom margins exceed page height');
+    return;
+  }
+
+  // Persist page setup to the document model via WASM
+  if (state.doc && typeof state.doc.set_page_setup === 'function') {
+    try {
+      const setupJson = JSON.stringify({
+        pageWidth: widthPt,
+        pageHeight: heightPt,
+        marginTop: mTop,
+        marginBottom: mBottom,
+        marginLeft: mLeft,
+        marginRight: mRight,
+        orientation: orientation,
+      });
+      state.doc.set_page_setup(setupJson);
+    } catch (e) {
+      console.warn('set_page_setup failed:', e);
+    }
+  }
 
   // Update state.pageDims so the editor uses the new dimensions
   state.pageDims = {
@@ -2588,6 +2967,14 @@ function applyPageSetup() {
     }).catch(() => {});
   } catch (_) {}
 
+  // Invalidate page map cache to force full repagination
+  state._lastPageMapHash = null;
+  state._layoutCache = null;
+  state._layoutDirty = true;
+
+  // Mark document as dirty (unsaved changes)
+  state.dirty = true;
+
   // Re-render with new dimensions
   renderDocument();
   renderRuler();
@@ -2602,6 +2989,7 @@ let _eqPreviewTimer = 0;
 
 export function openEquationModal(prefillLatex) {
   closeAllMenus();
+  saveModalSelection();
   const input = $('equationInput');
   const preview = $('equationPreview');
   input.value = prefillLatex || '';
@@ -2802,6 +3190,7 @@ function initDictModal() {
   if (menuEntry) {
     menuEntry.addEventListener('click', () => {
       closeAllMenus();
+      saveModalSelection();
       refreshDictWordList();
       modal.classList.add('show');
       $('dictWordInput').focus();

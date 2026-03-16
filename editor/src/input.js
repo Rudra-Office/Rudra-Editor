@@ -12,10 +12,15 @@ import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
 import { broadcastOp } from './collab.js';
-import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled } from './toolbar-handlers.js';
+import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter } from './toolbar-handlers.js';
 
 export function initInput() {
   const page = $('pageContainer');
+
+  // ─── Clear pending formats on editor blur ───
+  page.addEventListener('blur', () => {
+    state.pendingFormats = {};
+  }, true);
 
   // ─── E-01 fix: Capture cursor offset before text insertion for pending formats ───
   page.addEventListener('beforeinput', (e) => {
@@ -29,7 +34,9 @@ export function initInput() {
     if (e.inputType && e.inputType.startsWith('delete') && e.getTargetRanges) {
       const ranges = e.getTargetRanges();
       for (const r of ranges) {
-        const container = r.commonAncestorContainer;
+        // StaticRange has startContainer/endContainer, not commonAncestorContainer
+        const container = r.startContainer;
+        if (!container) continue;
         const parent = container.nodeType === 1 ? container : container.parentElement;
         if (parent && parent.closest?.('.page-header, .page-footer')) {
           e.preventDefault();
@@ -227,6 +234,17 @@ export function initInput() {
       }
     }
     clearSelectAll();
+  });
+
+  // ─── UXP-14: Format Painter — apply on mouseup ──
+  // When format painter mode is active, apply the copied format to whatever
+  // text the user just selected via click-drag.
+  document.addEventListener('mouseup', () => {
+    if (!state.formatPainterMode) return;
+    // Use a short delay to let the browser finalize the selection range
+    setTimeout(() => {
+      applyFormatPainter();
+    }, 10);
   });
 
   // ─── Keydown ────────────────────────────────────
@@ -444,6 +462,19 @@ export function initInput() {
         return;
       }
 
+      // Ctrl+Alt+0 — Normal style; Ctrl+Alt+1-6 — Heading 1-6
+      if (e.altKey && e.key >= '0' && e.key <= '6') {
+        e.preventDefault();
+        const level = parseInt(e.key);
+        const styleMap = ['normal', 'heading1', 'heading2', 'heading3', 'heading4', 'heading5', 'heading6'];
+        import('./toolbar-handlers.js').then(mod => {
+          if (typeof mod.applyParagraphStyle === 'function') {
+            mod.applyParagraphStyle(styleMap[level]);
+          }
+        });
+        return;
+      }
+
       // Ctrl+Alt+F — insert footnote
       if (e.altKey && e.key.toLowerCase() === 'f') {
         e.preventDefault();
@@ -528,7 +559,11 @@ export function initInput() {
             doc.set_list_format(nodeId, listType, newLevel);
             broadcastOp({ action: 'setListFormat', nodeId, format: listType, level: newLevel });
             const updated = renderNodeById(nodeId);
-            if (updated) setCursorAtStart(updated);
+            if (updated) {
+              const content = updated.closest('.page-content');
+              if (content) content.focus();
+              setCursorAtStart(updated);
+            }
             recordUndoAction(e.shiftKey ? 'Outdent list item' : 'Indent list item');
             state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
           } catch (err) { console.error('list indent:', err); }
@@ -618,7 +653,11 @@ export function initInput() {
           doc.set_list_format(nodeId, 'none', 0);
           broadcastOp({ action: 'setListFormat', nodeId, format: 'none', level: 0 });
           const updated = renderNodeById(nodeId);
-          if (updated) setCursorAtStart(updated);
+          if (updated) {
+            const content = updated.closest('.page-content');
+            if (content) content.focus();
+            setCursorAtStart(updated);
+          }
           recordUndoAction('Exit list');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
         } catch (err) { console.error('exit list:', err); }
@@ -641,6 +680,9 @@ export function initInput() {
             state.nodeIdToElement.set(child.dataset.nodeId, child);
           });
           setupImages(newEl);
+          // Ensure the contenteditable parent has focus before setting cursor
+          const content = newEl.closest('.page-content');
+          if (content) content.focus();
           setCursorAtStart(newEl);
         }
         recordUndoAction('Split paragraph');
@@ -672,7 +714,11 @@ export function initInput() {
           doc.set_list_format(nodeId, 'none', 0);
           broadcastOp({ action: 'setListFormat', nodeId, format: 'none', level: 0 });
           const updated = renderNodeById(nodeId);
-          if (updated) setCursorAtStart(updated);
+          if (updated) {
+            const content = updated.closest('.page-content');
+            if (content) content.focus();
+            setCursorAtStart(updated);
+          }
           recordUndoAction('Remove list formatting');
           state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
         } catch (err) { console.error('remove list:', err); }
@@ -819,10 +865,17 @@ export function initInput() {
       let firstEl = page.querySelector('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]');
       if (!firstEl) {
         // Document is completely empty — create a paragraph
+        // NOTE: Don't renderDocument() here — the main paste handler will do it
         try {
           doc.append_paragraph('');
           broadcastOp({ action: 'insertParagraph', afterNodeId: null, text: '' });
-          renderDocument();
+        } catch (_) {}
+        // Re-check WASM model for the newly created paragraph
+        try {
+          const ids = JSON.parse(doc.paragraph_ids_json());
+          if (ids.length > 0) {
+            return { startNodeId: ids[0], startOffset: 0, startEl: null };
+          }
         } catch (_) {}
         firstEl = page.querySelector('[data-node-id]');
       }
@@ -891,7 +944,9 @@ export function initInput() {
       try {
         doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, text);
         broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text });
-        const updated = renderNodeById(info.startNodeId);
+        renderDocument();
+        const page = $('pageContainer');
+        const updated = page?.querySelector(`[data-node-id="${info.startNodeId}"]`);
         if (updated) setCursorAtOffset(updated, info.startOffset + Array.from(text).length);
         recordUndoAction('Paste text');
         updateUndoRedo();
@@ -1048,6 +1103,11 @@ export function initInput() {
   // ─── Global Escape handler — close modals/menus ──
   document.addEventListener('keydown', e => {
     if (e.key !== 'Escape') return;
+    // UXP-14: Exit format painter mode
+    if (state.formatPainterMode) {
+      exitFormatPainter();
+      return;
+    }
     // Close slash menu
     if (state.slashMenuOpen) {
       closeSlashMenu();
@@ -1567,17 +1627,33 @@ function walkBlockElements(container, elements) {
 
     // Lists
     if (tag === 'ul' || tag === 'ol') {
+      const listType = tag === 'ul' ? 'bullet' : 'decimal';
       const items = child.querySelectorAll(':scope > li');
       items.forEach((li, idx) => {
         // Check for images inside list items
         const imgs = li.querySelectorAll('img');
+        // Check for nested lists inside the li
+        const nestedLists = li.querySelectorAll(':scope > ul, :scope > ol');
         const runs = extractRunsFromElement(li);
         if (runs.length > 0) {
-          elements.push({ type: 'paragraph', runs });
+          const para = { type: 'paragraph', runs, listType, listLevel: 0 };
+          extractParagraphFormat(li, para);
+          elements.push(para);
         }
         imgs.forEach(img => {
           const imgEl = extractImageElement(img);
           if (imgEl) elements.push(imgEl);
+        });
+        // Process nested lists recursively with incremented level
+        nestedLists.forEach(nested => {
+          const nestedType = nested.tagName.toLowerCase() === 'ul' ? 'bullet' : 'decimal';
+          const nestedItems = nested.querySelectorAll(':scope > li');
+          nestedItems.forEach(nli => {
+            const nRuns = extractRunsFromElement(nli);
+            if (nRuns.length > 0) {
+              elements.push({ type: 'paragraph', runs: nRuns, listType: nestedType, listLevel: 1 });
+            }
+          });
         });
       });
       continue;
@@ -1612,6 +1688,12 @@ function walkBlockElements(container, elements) {
           if (levelMatch) para.listLevel = parseInt(levelMatch[1]) - 1;
           // Clean up empty first run after marker removal
           if (runs[0] && !runs[0].text) runs.shift();
+        }
+
+        // s1engine data-list-type/data-list-level attributes (from our own copy/cut)
+        if (!para.listType && child.dataset?.listType) {
+          para.listType = child.dataset.listType;
+          para.listLevel = parseInt(child.dataset.listLevel || '0');
         }
 
         // MS Word heading detection (class="MsoTitle", "MsoHeading1", etc.)
@@ -2056,6 +2138,8 @@ function extractParaFmtForJson(para) {
   if (para.indentRight) fmt.indentRight = para.indentRight;
   if (para.indentFirstLine) fmt.indentFirstLine = para.indentFirstLine;
   if (para.headingLevel) fmt.headingLevel = para.headingLevel;
+  if (para.listType) fmt.listType = para.listType;
+  if (para.listLevel != null) fmt.listLevel = para.listLevel;
   return fmt;
 }
 
@@ -2574,6 +2658,11 @@ function openSlashMenu() {
   state.slashMenuOpen = true;
   state.slashMenuIndex = 0;
   state.slashQuery = '';
+  const menu = $('slashMenu');
+  if (menu) {
+    menu.setAttribute('role', 'listbox');
+    menu.setAttribute('aria-label', 'Insert commands');
+  }
   const commands = filterSlashCommands('');
   renderSlashMenu(commands);
   positionSlashMenu();

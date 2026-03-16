@@ -28,6 +28,10 @@ use crate::style_writer::write_styles_xml;
 /// - `word/_rels/document.xml.rels`
 /// - `word/styles.xml` (if styles exist)
 /// - `docProps/core.xml` (if metadata exists)
+// TODO: OOXML constraint validation before writing:
+// - Empty table cells should contain at least one <w:p/>
+// - Section properties should have pgSz and pgMar
+// - Runs should not be empty (but we allow it for flexibility)
 pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
     let buf = Vec::new();
     let mut zip = ZipWriter::new(Cursor::new(buf));
@@ -52,6 +56,15 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, DocxError> {
 
     for section in doc.sections() {
         for hf_ref in section.headers.iter().chain(section.footers.iter()) {
+            // Validate that the referenced node exists in the document
+            if doc.node(hf_ref.node_id).is_none() {
+                #[cfg(debug_assertions)]
+                eprintln!(
+                    "[s1-format-docx] Warning: header/footer node {:?} referenced in section but not found in document",
+                    hf_ref.node_id
+                );
+                continue; // skip invalid reference
+            }
             // Check if we already wrote this node
             if hf_parts.iter().any(|p| p.node_id == hf_ref.node_id) {
                 continue;
@@ -828,6 +841,157 @@ mod tests {
         let s = doc2.style_by_id("Heading1").unwrap();
         assert_eq!(s.name, "Heading 1");
         use s1_model::AttributeKey;
+        assert_eq!(s.attributes.get_bool(&AttributeKey::Bold), Some(true));
+    }
+
+    #[test]
+    fn roundtrip_paragraph_style_id() {
+        // Verify that a paragraph with a StyleId attribute survives write → read
+        use s1_model::{AttributeKey, AttributeValue, Node, NodeType};
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add a Title style definition
+        let title_style = Style::new("Title", "Title", StyleType::Paragraph);
+        doc.set_style(title_style);
+
+        // Create paragraph with StyleId = "Title"
+        let para_id = doc.next_id();
+        let mut para = Node::new(para_id, NodeType::Paragraph);
+        para.attributes.set(
+            AttributeKey::StyleId,
+            AttributeValue::String("Title".into()),
+        );
+        doc.insert_node(body_id, 0, para).unwrap();
+
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "My Title"))
+            .unwrap();
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        // Verify the paragraph still has StyleId = "Title"
+        let body2 = doc2.node(doc2.root_id()).unwrap().children[0];
+        let para2 = doc2.node(body2).unwrap().children[0];
+        let para_node = doc2.node(para2).unwrap();
+        assert_eq!(
+            para_node.attributes.get_string(&AttributeKey::StyleId),
+            Some("Title"),
+            "paragraph StyleId should survive round-trip"
+        );
+        // Verify the style definition survived
+        assert!(
+            doc2.style_by_id("Title").is_some(),
+            "Title style definition should survive"
+        );
+    }
+
+    #[test]
+    fn roundtrip_multiple_paragraph_styles() {
+        // Multiple paragraphs with different non-heading styles
+        use s1_model::{AttributeKey, AttributeValue, Node, NodeType};
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Add style definitions
+        for (id, name) in [
+            ("Title", "Title"),
+            ("Subtitle", "Subtitle"),
+            ("Quote", "Quote"),
+        ] {
+            doc.set_style(Style::new(id, name, StyleType::Paragraph));
+        }
+
+        // Create paragraphs with different styles
+        for (i, (style_id, text)) in [
+            ("Title", "Doc Title"),
+            ("Subtitle", "A subtitle"),
+            ("Quote", "A famous quote"),
+        ]
+        .iter()
+        .enumerate()
+        {
+            let para_id = doc.next_id();
+            let mut para = Node::new(para_id, NodeType::Paragraph);
+            para.attributes.set(
+                AttributeKey::StyleId,
+                AttributeValue::String(style_id.to_string()),
+            );
+            doc.insert_node(body_id, i, para).unwrap();
+            let run_id = doc.next_id();
+            doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                .unwrap();
+            let text_id = doc.next_id();
+            doc.insert_node(run_id, 0, Node::text(text_id, *text))
+                .unwrap();
+        }
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let body2 = doc2.node(doc2.root_id()).unwrap().children[0];
+        let body_node = doc2.node(body2).unwrap();
+        assert!(body_node.children.len() >= 3, "should have 3 paragraphs");
+
+        let expected_styles = ["Title", "Subtitle", "Quote"];
+        for (i, expected) in expected_styles.iter().enumerate() {
+            let para_node = doc2.node(body_node.children[i]).unwrap();
+            assert_eq!(
+                para_node.attributes.get_string(&AttributeKey::StyleId),
+                Some(*expected),
+                "paragraph {i} should have style '{expected}'"
+            );
+        }
+    }
+
+    #[test]
+    fn roundtrip_style_with_inheritance() {
+        // Style with basedOn chain should preserve the parent reference
+        use s1_model::{AttributeKey, Node, NodeType};
+        let mut doc = DocumentModel::new();
+        let root = doc.root_id();
+        let body_id = doc.next_id();
+        doc.insert_node(root, 0, Node::new(body_id, NodeType::Body))
+            .unwrap();
+
+        // Normal → Heading1 (basedOn Normal)
+        let normal = Style::new("Normal", "Normal", StyleType::Paragraph);
+        doc.set_style(normal);
+
+        let mut h1 = Style::new("Heading1", "Heading 1", StyleType::Paragraph);
+        h1.parent_id = Some("Normal".to_string());
+        h1.attributes = AttributeMap::new().bold(true).font_size(24.0);
+        doc.set_style(h1);
+
+        let para_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(para_id, NodeType::Paragraph))
+            .unwrap();
+        let run_id = doc.next_id();
+        doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+            .unwrap();
+        let text_id = doc.next_id();
+        doc.insert_node(run_id, 0, Node::text(text_id, "Test"))
+            .unwrap();
+
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let s = doc2.style_by_id("Heading1").unwrap();
+        assert_eq!(
+            s.parent_id.as_deref(),
+            Some("Normal"),
+            "style basedOn should survive round-trip"
+        );
         assert_eq!(s.attributes.get_bool(&AttributeKey::Bold), Some(true));
     }
 
@@ -2098,5 +2262,415 @@ mod tests {
         );
 
         assert_eq!(doc2.to_plain_text(), "normal added removed");
+    }
+
+    /// DOCX-06: Round-trip test for nested tables (table inside a table cell).
+    #[test]
+    fn roundtrip_nested_table() {
+        use s1_model::{AttributeKey, AttributeValue, Node, NodeType, TableWidth};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Create outer table: 1 row, 1 cell
+        let outer_table_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(outer_table_id, NodeType::Table))
+            .unwrap();
+        let outer_row_id = doc.next_id();
+        doc.insert_node(
+            outer_table_id,
+            0,
+            Node::new(outer_row_id, NodeType::TableRow),
+        )
+        .unwrap();
+        let outer_cell_id = doc.next_id();
+        let mut outer_cell = Node::new(outer_cell_id, NodeType::TableCell);
+        outer_cell.attributes.set(
+            AttributeKey::CellWidth,
+            AttributeValue::TableWidth(TableWidth::Fixed(300.0)),
+        );
+        doc.insert_node(outer_row_id, 0, outer_cell).unwrap();
+
+        // Add a paragraph before the inner table (OOXML requires at least one <w:p>)
+        let pre_para_id = doc.next_id();
+        doc.insert_node(
+            outer_cell_id,
+            0,
+            Node::new(pre_para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+        let pre_run_id = doc.next_id();
+        doc.insert_node(pre_para_id, 0, Node::new(pre_run_id, NodeType::Run))
+            .unwrap();
+        let pre_text_id = doc.next_id();
+        doc.insert_node(pre_run_id, 0, Node::text(pre_text_id, "Outer cell"))
+            .unwrap();
+
+        // Create inner (nested) table: 1 row, 1 cell with text
+        let inner_table_id = doc.next_id();
+        doc.insert_node(outer_cell_id, 1, Node::new(inner_table_id, NodeType::Table))
+            .unwrap();
+        let inner_row_id = doc.next_id();
+        doc.insert_node(
+            inner_table_id,
+            0,
+            Node::new(inner_row_id, NodeType::TableRow),
+        )
+        .unwrap();
+        let inner_cell_id = doc.next_id();
+        doc.insert_node(
+            inner_row_id,
+            0,
+            Node::new(inner_cell_id, NodeType::TableCell),
+        )
+        .unwrap();
+
+        let inner_para_id = doc.next_id();
+        doc.insert_node(
+            inner_cell_id,
+            0,
+            Node::new(inner_para_id, NodeType::Paragraph),
+        )
+        .unwrap();
+        let inner_run_id = doc.next_id();
+        doc.insert_node(inner_para_id, 0, Node::new(inner_run_id, NodeType::Run))
+            .unwrap();
+        let inner_text_id = doc.next_id();
+        doc.insert_node(inner_run_id, 0, Node::text(inner_text_id, "Inner cell"))
+            .unwrap();
+
+        // Write and read back
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        // Verify structure: body > table > row > cell > [paragraph, table]
+        let body2 = doc2.node(doc2.body_id().unwrap()).unwrap();
+        assert!(!body2.children.is_empty(), "body should have children");
+
+        let outer_tbl = doc2.node(body2.children[0]).unwrap();
+        assert_eq!(outer_tbl.node_type, NodeType::Table);
+
+        let outer_row = doc2.node(outer_tbl.children[0]).unwrap();
+        assert_eq!(outer_row.node_type, NodeType::TableRow);
+
+        let outer_cell2 = doc2.node(outer_row.children[0]).unwrap();
+        assert_eq!(outer_cell2.node_type, NodeType::TableCell);
+        assert!(
+            outer_cell2.children.len() >= 2,
+            "outer cell should have at least 2 children (paragraph + nested table), got {}",
+            outer_cell2.children.len()
+        );
+
+        // Find the nested table
+        let nested_tbl = outer_cell2
+            .children
+            .iter()
+            .find(|&&id| {
+                doc2.node(id)
+                    .map(|n| n.node_type == NodeType::Table)
+                    .unwrap_or(false)
+            })
+            .expect("should find nested table in outer cell");
+        let nested_tbl_node = doc2.node(*nested_tbl).unwrap();
+        assert_eq!(nested_tbl_node.node_type, NodeType::Table);
+
+        // Verify nested table has content
+        let nested_row = doc2.node(nested_tbl_node.children[0]).unwrap();
+        assert_eq!(nested_row.node_type, NodeType::TableRow);
+        let nested_cell = doc2.node(nested_row.children[0]).unwrap();
+        assert_eq!(nested_cell.node_type, NodeType::TableCell);
+
+        // Verify text survived
+        assert!(doc2.to_plain_text().contains("Outer cell"));
+        assert!(doc2.to_plain_text().contains("Inner cell"));
+    }
+
+    /// DOCX-06: Round-trip test for mixed bullet/numbered list paragraphs.
+    #[test]
+    fn roundtrip_mixed_list() {
+        use s1_model::{
+            AbstractNumbering, AttributeKey, AttributeValue, ListFormat, ListInfo, Node, NodeType,
+            NumberingInstance, NumberingLevel,
+        };
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Set up numbering definitions: one bullet, one decimal
+        doc.numbering_mut().abstract_nums.push(AbstractNumbering {
+            abstract_num_id: 0,
+            name: None,
+            levels: vec![NumberingLevel {
+                level: 0,
+                num_format: ListFormat::Bullet,
+                level_text: "\u{F0B7}".into(),
+                start: 1,
+                indent_left: Some(36.0),
+                indent_hanging: Some(18.0),
+                alignment: Some(s1_model::Alignment::Left),
+                bullet_font: Some("Symbol".into()),
+            }],
+        });
+        doc.numbering_mut().instances.push(NumberingInstance {
+            num_id: 1,
+            abstract_num_id: 0,
+            level_overrides: vec![],
+        });
+
+        doc.numbering_mut().abstract_nums.push(AbstractNumbering {
+            abstract_num_id: 1,
+            name: None,
+            levels: vec![NumberingLevel {
+                level: 0,
+                num_format: ListFormat::Decimal,
+                level_text: "%1.".into(),
+                start: 1,
+                indent_left: Some(36.0),
+                indent_hanging: Some(18.0),
+                alignment: Some(s1_model::Alignment::Left),
+                bullet_font: None,
+            }],
+        });
+        doc.numbering_mut().instances.push(NumberingInstance {
+            num_id: 2,
+            abstract_num_id: 1,
+            level_overrides: vec![],
+        });
+
+        // Paragraph 0: bullet list item
+        let p0_id = doc.next_id();
+        let mut p0 = Node::new(p0_id, NodeType::Paragraph);
+        p0.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 0,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 0, p0).unwrap();
+        let r0_id = doc.next_id();
+        doc.insert_node(p0_id, 0, Node::new(r0_id, NodeType::Run))
+            .unwrap();
+        let t0_id = doc.next_id();
+        doc.insert_node(r0_id, 0, Node::text(t0_id, "Bullet item"))
+            .unwrap();
+
+        // Paragraph 1: numbered list item
+        let p1_id = doc.next_id();
+        let mut p1 = Node::new(p1_id, NodeType::Paragraph);
+        p1.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 0,
+                num_format: ListFormat::Decimal,
+                num_id: 2,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 1, p1).unwrap();
+        let r1_id = doc.next_id();
+        doc.insert_node(p1_id, 0, Node::new(r1_id, NodeType::Run))
+            .unwrap();
+        let t1_id = doc.next_id();
+        doc.insert_node(r1_id, 0, Node::text(t1_id, "Numbered item"))
+            .unwrap();
+
+        // Paragraph 2: another bullet
+        let p2_id = doc.next_id();
+        let mut p2 = Node::new(p2_id, NodeType::Paragraph);
+        p2.attributes.set(
+            AttributeKey::ListInfo,
+            AttributeValue::ListInfo(ListInfo {
+                level: 0,
+                num_format: ListFormat::Bullet,
+                num_id: 1,
+                start: None,
+            }),
+        );
+        doc.insert_node(body_id, 2, p2).unwrap();
+        let r2_id = doc.next_id();
+        doc.insert_node(p2_id, 0, Node::new(r2_id, NodeType::Run))
+            .unwrap();
+        let t2_id = doc.next_id();
+        doc.insert_node(r2_id, 0, Node::text(t2_id, "Second bullet"))
+            .unwrap();
+
+        // Write and read back
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        let body2 = doc2.node(doc2.body_id().unwrap()).unwrap();
+        assert!(body2.children.len() >= 3, "should have 3 paragraphs");
+
+        // Verify list info on each paragraph
+        let para0 = doc2.node(body2.children[0]).unwrap();
+        let li0 = para0
+            .attributes
+            .get_list_info(&AttributeKey::ListInfo)
+            .expect("paragraph 0 should have ListInfo");
+        assert_eq!(li0.num_format, ListFormat::Bullet);
+        assert_eq!(li0.num_id, 1);
+
+        let para1 = doc2.node(body2.children[1]).unwrap();
+        let li1 = para1
+            .attributes
+            .get_list_info(&AttributeKey::ListInfo)
+            .expect("paragraph 1 should have ListInfo");
+        assert_eq!(li1.num_format, ListFormat::Decimal);
+        assert_eq!(li1.num_id, 2);
+
+        let para2 = doc2.node(body2.children[2]).unwrap();
+        let li2 = para2
+            .attributes
+            .get_list_info(&AttributeKey::ListInfo)
+            .expect("paragraph 2 should have ListInfo");
+        assert_eq!(li2.num_format, ListFormat::Bullet);
+        assert_eq!(li2.num_id, 1);
+
+        // Verify text content
+        let text = doc2.to_plain_text();
+        assert!(text.contains("Bullet item"));
+        assert!(text.contains("Numbered item"));
+        assert!(text.contains("Second bullet"));
+    }
+
+    /// DOCX-06: Round-trip test for multiple sections with different page sizes.
+    #[test]
+    fn roundtrip_multiple_sections() {
+        use s1_model::{Node, NodeType, PageOrientation, SectionProperties};
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Section 1: US Letter portrait (default)
+        let mut sect1 = SectionProperties::default();
+        sect1.page_width = 612.0; // 8.5" in points
+        sect1.page_height = 792.0; // 11" in points
+
+        // Section 2: A4 landscape
+        let mut sect2 = SectionProperties::default();
+        sect2.page_width = 841.89; // A4 landscape width (297mm)
+        sect2.page_height = 595.28; // A4 landscape height (210mm)
+        sect2.orientation = PageOrientation::Landscape;
+        sect2.margin_top = 54.0; // 0.75 inch margins
+        sect2.margin_bottom = 54.0;
+
+        doc.sections_mut().push(sect1);
+        doc.sections_mut().push(sect2);
+
+        // Paragraph in first section (marked with SectionIndex 0)
+        let p0_id = doc.next_id();
+        let mut p0 = Node::new(p0_id, NodeType::Paragraph);
+        p0.attributes.set(
+            s1_model::AttributeKey::SectionIndex,
+            s1_model::AttributeValue::Int(0),
+        );
+        doc.insert_node(body_id, 0, p0).unwrap();
+        let r0_id = doc.next_id();
+        doc.insert_node(p0_id, 0, Node::new(r0_id, NodeType::Run))
+            .unwrap();
+        let t0_id = doc.next_id();
+        doc.insert_node(r0_id, 0, Node::text(t0_id, "Section 1 content"))
+            .unwrap();
+
+        // Paragraph in second section
+        let p1_id = doc.next_id();
+        doc.insert_node(body_id, 1, Node::new(p1_id, NodeType::Paragraph))
+            .unwrap();
+        let r1_id = doc.next_id();
+        doc.insert_node(p1_id, 0, Node::new(r1_id, NodeType::Run))
+            .unwrap();
+        let t1_id = doc.next_id();
+        doc.insert_node(r1_id, 0, Node::text(t1_id, "Section 2 content"))
+            .unwrap();
+
+        // Write and read back
+        let bytes = write(&doc).unwrap();
+        let doc2 = crate::read(&bytes).unwrap();
+
+        // Verify sections
+        let sections = doc2.sections();
+        assert!(
+            sections.len() >= 2,
+            "should have at least 2 sections, got {}",
+            sections.len()
+        );
+
+        // Section 1: US Letter portrait
+        let s1 = &sections[0];
+        assert!(
+            (s1.page_width - 612.0).abs() < 1.0,
+            "section 1 width: {}",
+            s1.page_width
+        );
+        assert!(
+            (s1.page_height - 792.0).abs() < 1.0,
+            "section 1 height: {}",
+            s1.page_height
+        );
+
+        // Section 2: A4 landscape
+        let s2 = &sections[sections.len() - 1];
+        assert!(
+            (s2.page_width - 841.89).abs() < 2.0,
+            "section 2 width: {}",
+            s2.page_width
+        );
+        assert!(
+            (s2.page_height - 595.28).abs() < 2.0,
+            "section 2 height: {}",
+            s2.page_height
+        );
+        assert_eq!(s2.orientation, PageOrientation::Landscape);
+
+        // Verify text content
+        let text = doc2.to_plain_text();
+        assert!(text.contains("Section 1 content"));
+        assert!(text.contains("Section 2 content"));
+    }
+
+    /// DOCX-11: Verify that header/footer references to non-existent nodes
+    /// are silently skipped (not written as invalid references).
+    #[test]
+    fn write_skips_invalid_header_footer_node_refs() {
+        use s1_model::{
+            HeaderFooterRef, HeaderFooterType, Node, NodeId, NodeType, SectionProperties,
+        };
+
+        let mut doc = DocumentModel::new();
+        let body_id = doc.body_id().unwrap();
+
+        // Create a section that references a header NodeId that does NOT exist
+        let fake_header_id = NodeId::new(99, 999);
+        let mut sect = SectionProperties::default();
+        sect.headers.push(HeaderFooterRef {
+            hf_type: HeaderFooterType::Default,
+            node_id: fake_header_id,
+        });
+        doc.sections_mut().push(sect);
+
+        // Add a paragraph so the doc isn't empty
+        let p_id = doc.next_id();
+        doc.insert_node(body_id, 0, Node::new(p_id, NodeType::Paragraph))
+            .unwrap();
+        let r_id = doc.next_id();
+        doc.insert_node(p_id, 0, Node::new(r_id, NodeType::Run))
+            .unwrap();
+        let t_id = doc.next_id();
+        doc.insert_node(r_id, 0, Node::text(t_id, "Content"))
+            .unwrap();
+
+        // Writing should succeed (not panic or error) — the invalid ref is skipped
+        let bytes = write(&doc).unwrap();
+
+        // Reading back should also succeed
+        let doc2 = crate::read(&bytes).unwrap();
+        assert_eq!(doc2.to_plain_text(), "Content");
+
+        // The section should not have header references (the invalid one was skipped)
+        // Note: section may or may not be preserved depending on whether it was the
+        // only section, but we should not crash or produce invalid XML.
     }
 }

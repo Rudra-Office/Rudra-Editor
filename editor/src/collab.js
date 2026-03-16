@@ -881,10 +881,12 @@ function updateConnectionStatus(status) {
   if (!indicator) return;
 
   indicator.className = 'collab-indicator collab-' + status;
-  indicator.title =
+  const indicatorTitle =
     status === 'connected' ? 'Connected to relay server' :
     status === 'reconnecting' ? 'Reconnecting...' :
     'Disconnected';
+  indicator.title = indicatorTitle;
+  indicator.setAttribute('aria-label', indicatorTitle);
 
   // Update state for status bar sync indicator
   state.collabStatus = status === 'connected' ? 'connected' :
@@ -943,7 +945,9 @@ function renderStatusBarPeers() {
     const dot = document.createElement('span');
     dot.className = 'status-peer-dot';
     dot.style.background = p.userColor || '#999';
-    dot.title = p.userName || 'Peer';
+    const peerTitle = p.userName || 'Peer';
+    dot.title = peerTitle;
+    dot.setAttribute('aria-label', peerTitle);
     container.appendChild(dot);
   }
 }

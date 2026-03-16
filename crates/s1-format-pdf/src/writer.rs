@@ -270,7 +270,13 @@ fn embed_fonts(
             let font_data = font.data();
             let subset_data = match subsetter::subset(font_data, 0, &remapper) {
                 Ok(data) => data,
-                Err(_) => font_data.to_vec(), // Fall back to full font
+                Err(_e) => {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[s1-format-pdf] Warning: font subsetting failed, embedding full font"
+                    );
+                    font_data.to_vec() // Fall back to full font
+                }
             };
 
             let metrics = font.metrics(1000.0);
@@ -426,6 +432,17 @@ fn collect_and_embed_images(
                     continue; // Already embedded
                 }
 
+                // Limit image data size to prevent OOM (100MB max)
+                const MAX_IMAGE_SIZE: usize = 100 * 1024 * 1024;
+                if data.len() > MAX_IMAGE_SIZE {
+                    #[cfg(debug_assertions)]
+                    eprintln!(
+                        "[s1-format-pdf] Warning: skipping oversized image ({} bytes)",
+                        data.len()
+                    );
+                    continue;
+                }
+
                 let ct = content_type.as_deref().unwrap_or("");
                 let xobject_ref = alloc.next();
                 let name = format!("Im{}", *img_idx);
@@ -464,8 +481,12 @@ const MAX_IMAGE_DIMENSION: u32 = 16384;
 
 /// Embed a JPEG image as-is with DCTDecode filter.
 fn embed_jpeg_image(pdf: &mut Pdf, xobject_ref: Ref, data: &[u8]) -> Result<(), PdfError> {
-    // Parse JPEG to get dimensions
-    let (width, height) = jpeg_dimensions(data).unwrap_or((1, 1));
+    // Parse JPEG to get dimensions and component count
+    let info = jpeg_info(data);
+    let (width, height, num_components) = match info {
+        Some(ref i) => (i.width, i.height, i.num_components),
+        None => (1, 1, 3), // Default to RGB if parsing fails
+    };
 
     if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
         return Err(PdfError::Generation(format!(
@@ -477,26 +498,48 @@ fn embed_jpeg_image(pdf: &mut Pdf, xobject_ref: Ref, data: &[u8]) -> Result<(), 
     stream.filter(pdf_writer::Filter::DctDecode);
     stream.width(width as i32);
     stream.height(height as i32);
-    stream.color_space().device_rgb();
+    // Select color space based on the actual number of JPEG components
+    match num_components {
+        1 => stream.color_space().device_gray(),
+        4 => stream.color_space().device_cmyk(),
+        _ => stream.color_space().device_rgb(), // 3 (YCbCr/RGB) or unknown
+    };
     stream.bits_per_component(8);
     stream.finish();
 
     Ok(())
 }
 
-/// Parse JPEG dimensions from SOF markers.
-fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+/// Parsed JPEG metadata from SOF markers.
+struct JpegInfo {
+    width: u32,
+    height: u32,
+    /// Number of color components (1=grayscale, 3=RGB/YCbCr, 4=CMYK).
+    num_components: u8,
+}
+
+/// Parse JPEG dimensions and component count from SOF markers.
+fn jpeg_info(data: &[u8]) -> Option<JpegInfo> {
     let mut i = 2; // Skip SOI
     while i + 4 < data.len() {
         if data[i] != 0xFF {
             break;
         }
         let marker = data[i + 1];
-        // SOF0-SOF3 markers contain dimensions
-        if (0xC0..=0xC3).contains(&marker) && i + 9 < data.len() {
+        // SOF markers contain dimensions and component count:
+        // SOF0-SOF3 (baseline, extended, progressive, lossless)
+        // SOF5-SOF7 (differential variants)
+        // SOF9-SOF11 (arithmetic coded variants)
+        // Layout: [FF][marker][length_hi][length_lo][precision][height_hi][height_lo][width_hi][width_lo][num_components]
+        if matches!(marker, 0xC0..=0xC3 | 0xC5..=0xC7 | 0xC9..=0xCB) && i + 9 < data.len() {
             let height = u16::from_be_bytes([data[i + 5], data[i + 6]]) as u32;
             let width = u16::from_be_bytes([data[i + 7], data[i + 8]]) as u32;
-            return Some((width, height));
+            let num_components = data[i + 9];
+            return Some(JpegInfo {
+                width,
+                height,
+                num_components,
+            });
         }
         let len = u16::from_be_bytes([data[i + 2], data[i + 3]]) as usize;
         i += 2 + len;
@@ -504,20 +547,58 @@ fn jpeg_dimensions(data: &[u8]) -> Option<(u32, u32)> {
     None
 }
 
+/// Check PNG dimensions from the IHDR chunk without decoding the full image.
+///
+/// PNG files start with an 8-byte signature, followed by chunks. The first
+/// chunk is always IHDR which contains width (4 bytes) and height (4 bytes)
+/// at offsets 16 and 20 respectively.
+fn png_dimensions(data: &[u8]) -> Option<(u32, u32)> {
+    // PNG signature (8 bytes) + IHDR length (4) + "IHDR" (4) + width (4) + height (4) = 24 bytes
+    if data.len() < 24 {
+        return None;
+    }
+    // Check PNG signature
+    if &data[0..8] != b"\x89PNG\r\n\x1a\n" {
+        return None;
+    }
+    // IHDR chunk type at offset 12
+    if &data[12..16] != b"IHDR" {
+        return None;
+    }
+    let width = u32::from_be_bytes([data[16], data[17], data[18], data[19]]);
+    let height = u32::from_be_bytes([data[20], data[21], data[22], data[23]]);
+    Some((width, height))
+}
+
 /// Decode an image (PNG, etc.) to RGB pixels and embed with FlateDecode.
 fn embed_decoded_image(pdf: &mut Pdf, xobject_ref: Ref, data: &[u8]) -> Result<(), PdfError> {
+    // Validate dimensions BEFORE full decode to prevent DoS from oversized images.
+    // For PNG, read the IHDR chunk directly without decoding pixel data.
+    // For other formats, use the image crate's lightweight dimension reader.
+    if let Some((w, h)) = png_dimensions(data) {
+        if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+            return Err(PdfError::Generation(format!(
+                "image dimensions {w}x{h} exceed maximum {MAX_IMAGE_DIMENSION}"
+            )));
+        }
+    } else if let Ok(reader) =
+        image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format()
+    {
+        if let Ok((w, h)) = reader.into_dimensions() {
+            if w > MAX_IMAGE_DIMENSION || h > MAX_IMAGE_DIMENSION {
+                return Err(PdfError::Generation(format!(
+                    "image dimensions {w}x{h} exceed maximum {MAX_IMAGE_DIMENSION}"
+                )));
+            }
+        }
+    }
+
     let img = image::load_from_memory(data)
         .map_err(|e| PdfError::Generation(format!("image decode error: {e}")))?;
 
     let rgb = img.to_rgb8();
     let width = rgb.width();
     let height = rgb.height();
-
-    if width > MAX_IMAGE_DIMENSION || height > MAX_IMAGE_DIMENSION {
-        return Err(PdfError::Generation(format!(
-            "image dimensions {width}x{height} exceed maximum {MAX_IMAGE_DIMENSION}"
-        )));
-    }
     let raw_pixels = rgb.into_raw();
 
     let compressed = miniz_oxide::deflate::compress_to_vec(&raw_pixels, 6);
@@ -1096,12 +1177,13 @@ fn render_table(
     hyperlinks: &mut Vec<HyperlinkAnnotation>,
 ) {
     for row in rows {
-        let row_pdf_y = page_height - table_bounds.y - row.bounds.y - row.bounds.height;
+        let _row_pdf_y = page_height - table_bounds.y - row.bounds.y - row.bounds.height;
 
         // Draw cell borders, backgrounds, and content
         for cell in &row.cells {
             let cell_x = table_bounds.x + cell.bounds.x;
-            let cell_pdf_y = row_pdf_y;
+            let cell_pdf_y =
+                page_height - table_bounds.y - row.bounds.y - cell.bounds.y - cell.bounds.height;
 
             // Fill cell background if present
             if let Some(ref bg) = cell.background_color {
@@ -1398,6 +1480,12 @@ fn write_metadata(pdf: &mut Pdf, alloc: &mut RefAllocator, meta: &DocumentMetada
 }
 
 /// Build a minimal ToUnicode CMap.
+///
+/// TODO: The ToUnicode CMap currently maps glyph IDs linearly. For fonts with
+/// ligatures, alternate glyphs, or OpenType features, this mapping may be
+/// incorrect, resulting in wrong text when copy-pasting from the PDF.
+/// A proper implementation should build the CMap from the actual glyph-to-Unicode
+/// mapping used during text shaping.
 fn build_tounicode_cmap() -> Vec<u8> {
     // Minimal CMap that maps glyph IDs to Unicode code points.
     let cmap = b"/CIDInit /ProcSet findresource begin

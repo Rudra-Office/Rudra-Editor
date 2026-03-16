@@ -45,7 +45,14 @@ pub fn hyphenate_word(word: &str, lang: &str) -> Vec<usize> {
 
     let language = match lang {
         "en" | "en-US" | "en-GB" => Language::EnglishUS,
-        _ => return Vec::new(),
+        _ => {
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[s1-text] Note: hyphenation not available for language '{}', skipping",
+                lang
+            );
+            return Vec::new();
+        }
     };
 
     let dict = match Standard::from_embedded(language) {

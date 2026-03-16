@@ -53,6 +53,11 @@ pub fn shape_text_with_script(
     direction: Direction,
     script: Option<rustybuzz::Script>,
 ) -> Result<Vec<ShapedGlyph>, TextError> {
+    // Zero or negative font size is valid (hidden text) — return empty result
+    if font_size <= 0.0 {
+        return Ok(Vec::new());
+    }
+
     // Create a rustybuzz Face from the font data
     let rb_face = rustybuzz::Face::from_slice(font.data(), 0)
         .ok_or_else(|| TextError::ShapingFailed("failed to create shaping face".into()))?;
@@ -96,6 +101,11 @@ pub fn shape_text_with_script(
 
     // Scale factor: font design units → points
     let upem = font.units_per_em() as f64;
+    if upem <= 0.0 {
+        return Err(TextError::FontParse(
+            "Font has invalid units_per_em (0)".into(),
+        ));
+    }
     let scale = font_size / upem;
 
     // Convert output glyphs

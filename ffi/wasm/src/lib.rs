@@ -195,6 +195,11 @@ pub struct WasmDocument {
 
 #[wasm_bindgen]
 impl WasmDocument {
+    /// Explicitly release document memory. The document cannot be used after this.
+    pub fn close(&mut self) {
+        self.inner = None;
+    }
+
     /// Extract all text content as a plain string.
     pub fn to_plain_text(&self) -> Result<String, JsError> {
         let doc = self.doc()?;
@@ -375,10 +380,32 @@ impl WasmDocument {
         let mut pages_json = Vec::new();
         for (i, page) in layout.pages.iter().enumerate() {
             let mut node_ids = Vec::new();
+            let mut table_chunks_json = Vec::new();
             for block in &page.blocks {
                 let id_str = format!("{}:{}", block.source_id.replica, block.source_id.counter);
-                if !node_ids.contains(&id_str) {
+
+                // For table blocks, emit chunk info with row source IDs
+                if let s1_layout::LayoutBlockKind::Table {
+                    rows,
+                    is_continuation,
+                } = &block.kind
+                {
+                    let row_ids: Vec<String> = rows
+                        .iter()
+                        .map(|r| format!("\"{}:{}\"", r.source_id.replica, r.source_id.counter))
+                        .collect();
+                    table_chunks_json.push(format!(
+                        "{{\"tableId\":\"{}\",\"isContinuation\":{},\"rowIds\":[{}]}}",
+                        id_str,
+                        is_continuation,
+                        row_ids.join(","),
+                    ));
+                    // Always include table ID (even duplicates across pages)
                     node_ids.push(id_str);
+                } else {
+                    if !node_ids.contains(&id_str) {
+                        node_ids.push(id_str);
+                    }
                 }
             }
 
@@ -413,8 +440,13 @@ impl WasmDocument {
             let margin_bottom = page.height - page.content_area.y - page.content_area.height;
 
             let ids_arr: Vec<String> = node_ids.iter().map(|id| format!("\"{}\"", id)).collect();
+            let table_chunks_str = if table_chunks_json.is_empty() {
+                String::from("[]")
+            } else {
+                format!("[{}]", table_chunks_json.join(","))
+            };
             pages_json.push(format!(
-                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"footer\":\"{}\",\"header\":\"{}\"}}",
+                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"tableChunks\":{},\"footer\":\"{}\",\"header\":\"{}\"}}",
                 i + 1,
                 page.width,
                 page.height,
@@ -424,6 +456,7 @@ impl WasmDocument {
                 margin_right,
                 page.section_index,
                 ids_arr.join(","),
+                table_chunks_str,
                 footer_text.replace('"', "\\\""),
                 header_text.replace('"', "\\\""),
             ));
@@ -473,6 +506,56 @@ impl WasmDocument {
         let bytes = self.to_pdf_with_fonts(font_db)?;
         let b64 = base64_encode(&bytes);
         Ok(format!("data:application/pdf;base64,{}", b64))
+    }
+
+    /// Get all unique font families used in the document.
+    ///
+    /// Returns a JSON array of font family names, e.g. `["Arial","Calibri","Georgia"]`.
+    /// Useful for determining which fonts need to be loaded before layout.
+    pub fn get_used_fonts(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let mut fonts = std::collections::BTreeSet::new();
+
+        // Collect from docDefaults
+        if let Some(ref ff) = model.doc_defaults().font_family {
+            fonts.insert(ff.clone());
+        }
+
+        // Collect from styles
+        for style in model.styles() {
+            if let Some(AttributeValue::String(f)) = style.attributes.get(&AttributeKey::FontFamily)
+            {
+                fonts.insert(f.clone());
+            }
+        }
+
+        // Walk all nodes for direct font attributes
+        fn collect_fonts(
+            model: &DocumentModel,
+            node_id: NodeId,
+            fonts: &mut std::collections::BTreeSet<String>,
+        ) {
+            if let Some(node) = model.node(node_id) {
+                if let Some(AttributeValue::String(f)) =
+                    node.attributes.get(&AttributeKey::FontFamily)
+                {
+                    fonts.insert(f.clone());
+                }
+                for &child_id in &node.children {
+                    collect_fonts(model, child_id, fonts);
+                }
+            }
+        }
+
+        collect_fonts(model, model.root_id(), &mut fonts);
+
+        // Build JSON array
+        let json_arr: Vec<String> = fonts
+            .iter()
+            .map(|f| format!("\"{}\"", f.replace('"', "\\\"")))
+            .collect();
+        Ok(format!("[{}]", json_arr.join(",")))
     }
 
     /// Render the document as HTML with formatting, images, and hyperlinks.
@@ -1331,7 +1414,9 @@ impl WasmDocument {
 
         // Walk runs to find which run and local offset
         let mut accumulated = 0usize;
-        let mut target_run_id = *run_children.last().unwrap();
+        let mut target_run_id = *run_children
+            .last()
+            .ok_or_else(|| JsError::new("No runs found in paragraph"))?;
         let mut local_offset = 0usize;
         for &run_id in &run_children {
             let rlen = run_char_len(doc.model(), run_id);
@@ -1507,6 +1592,58 @@ impl WasmDocument {
         } else {
             render_node(model, nid, &mut html);
         }
+        Ok(html)
+    }
+
+    /// Render a table with only specific rows (for split-table pagination).
+    ///
+    /// `table_id_str` is the table node ID (e.g., "1:5").
+    /// `row_ids_json` is a JSON array of row node IDs to include (e.g., '["1:6","1:7"]').
+    /// `chunk_id` is a unique identifier for this chunk (used as data-node-id).
+    /// `is_continuation` indicates if this is a continuation chunk (for styling).
+    pub fn render_table_chunk(
+        &self,
+        table_id_str: &str,
+        row_ids_json: &str,
+        chunk_id: &str,
+        is_continuation: bool,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let table_nid = parse_node_id(table_id_str)?;
+        let model = doc.model();
+        let table_node = model
+            .node(table_nid)
+            .ok_or_else(|| JsError::new(&format!("Table node {} not found", table_id_str)))?;
+
+        // Parse row IDs from JSON array
+        let row_ids_str = row_ids_json.trim();
+        let mut row_nids: Vec<NodeId> = Vec::new();
+        if row_ids_str.len() > 2 {
+            // Strip [ and ]
+            let inner = &row_ids_str[1..row_ids_str.len() - 1];
+            for part in inner.split(',') {
+                let id = part.trim().trim_matches('"');
+                if !id.is_empty() {
+                    row_nids.push(parse_node_id(id)?);
+                }
+            }
+        }
+
+        let mut html = String::new();
+        html.push_str(&format!(
+            "<table data-node-id=\"{}\" data-table-source=\"{}\" data-is-continuation=\"{}\" style=\"border-collapse:collapse;margin:0;width:100%\">",
+            chunk_id, table_id_str, is_continuation
+        ));
+
+        // Render only the specified rows
+        let row_set: std::collections::HashSet<NodeId> = row_nids.into_iter().collect();
+        for &row_id in &table_node.children {
+            if row_set.contains(&row_id) {
+                render_node(model, row_id, &mut html);
+            }
+        }
+
+        html.push_str("</table>");
         Ok(html)
     }
 
@@ -1902,9 +2039,16 @@ impl WasmDocument {
                 (false, false, false, false, None, None, None)
             };
 
+        // Paragraph styleId (raw value, not just heading level)
+        let style_id = para
+            .attributes
+            .get_string(&AttributeKey::StyleId)
+            .unwrap_or("");
+
         let mut json = format!(
-            "{{\"bold\":{},\"italic\":{},\"underline\":{},\"strikethrough\":{},\"alignment\":\"{}\",\"headingLevel\":{}",
-            bold, italic, underline, strikethrough, alignment, heading_level
+            "{{\"bold\":{},\"italic\":{},\"underline\":{},\"strikethrough\":{},\"alignment\":\"{}\",\"headingLevel\":{},\"styleId\":\"{}\"",
+            bold, italic, underline, strikethrough, alignment, heading_level,
+            escape_json(style_id)
         );
         if let Some(fs) = font_size {
             json.push_str(&format!(",\"fontSize\":{}", fs));
@@ -1948,6 +2092,36 @@ impl WasmDocument {
             let style_id = format!("Heading{}", level.clamp(1, 6));
             attrs.set(AttributeKey::StyleId, AttributeValue::String(style_id));
         }
+        doc.apply(Operation::set_attributes(para_id, attrs))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Set the paragraph style ID on a paragraph node.
+    ///
+    /// Sets the `StyleId` attribute to any arbitrary style name
+    /// (e.g., "Title", "Subtitle", "Quote", "Code", "Heading1", etc.).
+    /// Pass an empty string to clear the style (revert to Normal).
+    pub fn set_paragraph_style_id(
+        &mut self,
+        node_id_str: &str,
+        style_id: &str,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(node_id_str)?;
+
+        // Validate the node is a paragraph
+        let node = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Node not found"))?;
+        if node.node_type != NodeType::Paragraph {
+            return Err(JsError::new("Node is not a Paragraph"));
+        }
+
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(
+            AttributeKey::StyleId,
+            AttributeValue::String(style_id.to_string()),
+        );
         doc.apply(Operation::set_attributes(para_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))
     }
@@ -3199,6 +3373,95 @@ impl WasmDocument {
         Ok(format!("[{}]", entries.join(",")))
     }
 
+    /// Get page setup properties for the first section as JSON.
+    ///
+    /// Returns JSON: `{"pageWidth":612,"pageHeight":792,"marginTop":72,
+    /// "marginBottom":72,"marginLeft":72,"marginRight":72,"orientation":"portrait"}`
+    ///
+    /// All dimensions are in points (1 inch = 72 points).
+    pub fn get_page_setup_json(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let sections = doc.sections();
+        let sec = sections.first().cloned().unwrap_or_default();
+        let orientation = match sec.orientation {
+            s1_model::PageOrientation::Landscape => "landscape",
+            _ => "portrait",
+        };
+        Ok(format!(
+            "{{\"pageWidth\":{:.2},\"pageHeight\":{:.2},\"marginTop\":{:.2},\"marginBottom\":{:.2},\"marginLeft\":{:.2},\"marginRight\":{:.2},\"orientation\":\"{}\"}}",
+            sec.page_width,
+            sec.page_height,
+            sec.margin_top,
+            sec.margin_bottom,
+            sec.margin_left,
+            sec.margin_right,
+            orientation,
+        ))
+    }
+
+    /// Set page setup properties for all sections from JSON.
+    ///
+    /// Accepts JSON: `{"pageWidth":612,"pageHeight":792,"marginTop":72,
+    /// "marginBottom":72,"marginLeft":72,"marginRight":72,"orientation":"portrait"}`
+    ///
+    /// All dimensions are in points (1 inch = 72 points).
+    /// Updates all sections in the document to use the new page dimensions.
+    pub fn set_page_setup(&mut self, json: &str) -> Result<(), JsError> {
+        // Parse JSON using existing module-level helpers
+        let json = json.trim();
+        let page_width = extract_json_number_opt(json, "pageWidth").unwrap_or(612.0);
+        let page_height = extract_json_number_opt(json, "pageHeight").unwrap_or(792.0);
+        let margin_top = extract_json_number_opt(json, "marginTop").unwrap_or(72.0);
+        let margin_bottom = extract_json_number_opt(json, "marginBottom").unwrap_or(72.0);
+        let margin_left = extract_json_number_opt(json, "marginLeft").unwrap_or(72.0);
+        let margin_right = extract_json_number_opt(json, "marginRight").unwrap_or(72.0);
+        let orientation = extract_json_string_opt(json, "orientation").unwrap_or_default();
+
+        let orient_enum = if orientation == "landscape" {
+            s1_model::PageOrientation::Landscape
+        } else {
+            s1_model::PageOrientation::Portrait
+        };
+
+        // Validate dimensions
+        if !(72.0..=4320.0).contains(&page_width) {
+            return Err(JsError::new("Page width must be between 1 and 60 inches"));
+        }
+        if !(72.0..=4320.0).contains(&page_height) {
+            return Err(JsError::new("Page height must be between 1 and 60 inches"));
+        }
+        if margin_top < 0.0 || margin_bottom < 0.0 || margin_left < 0.0 || margin_right < 0.0 {
+            return Err(JsError::new("Margins cannot be negative"));
+        }
+        // Ensure margins don't exceed page dimensions
+        if margin_left + margin_right >= page_width {
+            return Err(JsError::new("Left + right margins must be less than page width"));
+        }
+        if margin_top + margin_bottom >= page_height {
+            return Err(JsError::new("Top + bottom margins must be less than page height"));
+        }
+
+        let doc = self.doc_mut()?;
+        let sections = doc.model_mut().sections_mut();
+
+        if sections.is_empty() {
+            // Create a default section if none exists
+            sections.push(s1_model::SectionProperties::default());
+        }
+
+        for sec in sections.iter_mut() {
+            sec.page_width = page_width;
+            sec.page_height = page_height;
+            sec.margin_top = margin_top;
+            sec.margin_bottom = margin_bottom;
+            sec.margin_left = margin_left;
+            sec.margin_right = margin_right;
+            sec.orientation = orient_enum;
+        }
+
+        Ok(())
+    }
+
     // ─── P.5: Find & Replace + Clipboard API ────────────────────
 
     /// Find all occurrences of text in the document.
@@ -3417,6 +3680,13 @@ impl WasmDocument {
 
         if paste_data.is_empty() {
             return Ok(());
+        }
+
+        const MAX_PASTE_PARAGRAPHS: usize = 1000;
+        if paste_data.len() > MAX_PASTE_PARAGRAPHS {
+            return Err(JsError::new(&format!(
+                "Paste exceeds maximum paragraph count ({MAX_PASTE_PARAGRAPHS})"
+            )));
         }
 
         /// Helper: apply paragraph-level formatting attributes to a paragraph node.
@@ -4064,10 +4334,15 @@ impl WasmDocument {
 
 // --- WasmDocumentBuilder ---
 
+/// Maximum number of nodes allowed in a builder-created document.
+/// Prevents OOM from excessively large documents in the WASM environment.
+const MAX_BUILDER_NODES: usize = 100_000;
+
 /// A fluent builder for constructing documents.
 #[wasm_bindgen]
 pub struct WasmDocumentBuilder {
     inner: Option<s1engine::DocumentBuilder>,
+    node_count: usize,
 }
 
 #[wasm_bindgen]
@@ -4077,6 +4352,7 @@ impl WasmDocumentBuilder {
     pub fn new() -> Self {
         Self {
             inner: Some(s1engine::DocumentBuilder::new()),
+            node_count: 0,
         }
     }
 
@@ -4084,6 +4360,8 @@ impl WasmDocumentBuilder {
     pub fn heading(mut self, level: u8, text: &str) -> Self {
         if let Some(builder) = self.inner.take() {
             self.inner = Some(builder.heading(level, text));
+            // heading creates ~3 nodes (paragraph, run, text)
+            self.node_count += 3;
         }
         self
     }
@@ -4092,6 +4370,8 @@ impl WasmDocumentBuilder {
     pub fn text(mut self, text: &str) -> Self {
         if let Some(builder) = self.inner.take() {
             self.inner = Some(builder.text(text));
+            // text creates ~3 nodes (paragraph, run, text)
+            self.node_count += 3;
         }
         self
     }
@@ -4113,20 +4393,40 @@ impl WasmDocumentBuilder {
     }
 
     /// Build the document. Consumes the builder.
+    ///
+    /// Returns an error if the document exceeds the maximum node count
+    /// limit (100,000 nodes) to prevent OOM in the WASM environment.
     pub fn build(mut self) -> Result<WasmDocument, JsError> {
         let builder = self
             .inner
             .take()
             .ok_or_else(|| JsError::new("Builder already consumed"))?;
-        Ok(WasmDocument {
-            inner: Some(builder.build()),
-        })
+
+        let doc = builder.build();
+
+        // Safety limit: prevent OOM from excessively large documents
+        let actual_count = doc.model().node_count();
+        if actual_count > MAX_BUILDER_NODES {
+            return Err(JsError::new(&format!(
+                "Document exceeds maximum node limit ({actual_count} > {MAX_BUILDER_NODES})"
+            )));
+        }
+
+        Ok(WasmDocument { inner: Some(doc) })
     }
 }
 
 impl Default for WasmDocumentBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl WasmDocumentBuilder {
+    /// Get the estimated node count added so far.
+    /// This is an approximation used for early limit checking.
+    pub fn estimated_node_count(&self) -> usize {
+        self.node_count
     }
 }
 
@@ -4159,6 +4459,13 @@ impl WasmFontDatabase {
     /// Get the number of loaded font faces.
     pub fn font_count(&self) -> usize {
         self.inner.len()
+    }
+
+    /// Check if a font family is available (exact or via substitution).
+    pub fn has_font(&self, family: &str) -> bool {
+        self.inner
+            .find_with_substitution(family, false, false)
+            .is_some()
     }
 }
 
@@ -5903,12 +6210,6 @@ fn render_paragraph(
         style.push_str("page-break-before:always;");
     }
 
-    let style_attr = if style.is_empty() {
-        String::new()
-    } else {
-        format!(" style=\"{style}\"")
-    };
-
     let list_type_attr = list_info
         .as_ref()
         .map(|li| {
@@ -6034,7 +6335,75 @@ fn render_paragraph(
             html.push_str(&format!("</h{l}>"));
         }
         _ => {
-            html.push_str(&format!("<p{nid_attr}{style_attr}>"));
+            // Apply non-heading paragraph style (Title, Subtitle, Quote, Code)
+            let mut para_style = style.clone();
+            let sid_lower = style_id
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let data_style_attr = if !sid_lower.is_empty() {
+                format!(" data-style-id=\"{}\"", escape_html(style_id.unwrap_or("")))
+            } else {
+                String::new()
+            };
+            match sid_lower.as_str() {
+                "title" => {
+                    if !para_style.contains("font-size:") {
+                        para_style.push_str("font-size:26pt;");
+                    }
+                    if !para_style.contains("font-weight:") {
+                        para_style.push_str("font-weight:400;");
+                    }
+                    if !para_style.contains("margin-top:") {
+                        para_style.push_str("margin-top:0;");
+                    }
+                    if !para_style.contains("margin-bottom:") {
+                        para_style.push_str("margin-bottom:3pt;");
+                    }
+                }
+                "subtitle" => {
+                    if !para_style.contains("font-size:") {
+                        para_style.push_str("font-size:15pt;");
+                    }
+                    if !para_style.contains("color:") {
+                        para_style.push_str("color:#666666;");
+                    }
+                    if !para_style.contains("margin-top:") {
+                        para_style.push_str("margin-top:0;");
+                    }
+                    if !para_style.contains("margin-bottom:") {
+                        para_style.push_str("margin-bottom:16pt;");
+                    }
+                }
+                "quote" => {
+                    if !para_style.contains("font-style:") {
+                        para_style.push_str("font-style:italic;");
+                    }
+                    if !para_style.contains("color:") {
+                        para_style.push_str("color:#666666;");
+                    }
+                    if !para_style.contains("border-left:") {
+                        para_style.push_str("border-left:3px solid #dadce0;padding-left:12pt;");
+                    }
+                }
+                "code" => {
+                    if !para_style.contains("font-family:") {
+                        para_style.push_str("font-family:'Courier New',Courier,monospace;");
+                    }
+                    if !para_style.contains("font-size:") {
+                        para_style.push_str("font-size:11pt;");
+                    }
+                    if !para_style.contains("background") {
+                        para_style.push_str("background:#f5f5f5;padding:2pt 4pt;border-radius:2px;");
+                    }
+                }
+                _ => {}
+            }
+            let p_style_attr = if para_style.is_empty() {
+                String::new()
+            } else {
+                format!(" style=\"{para_style}\"")
+            };
+            html.push_str(&format!("<p{nid_attr}{p_style_attr}{data_style_attr}>"));
             if let Some(marker) = list_marker {
                 html.push_str(&format!(
                     "<span class=\"list-marker\" style=\"user-select:none\" contenteditable=\"false\">{marker}</span>"
@@ -6428,12 +6797,30 @@ fn render_paragraph_clean_partial(
         format!(" style=\"{style}\"")
     };
 
+    // Emit list info as data attributes so paste can restore list formatting
+    let mut list_attrs = String::new();
+    if let Some(AttributeValue::ListInfo(ref li)) = para.attributes.get(&AttributeKey::ListInfo) {
+        let list_type = match li.num_format {
+            ListFormat::Bullet => "bullet",
+            ListFormat::Decimal => "decimal",
+            ListFormat::LowerAlpha => "lowerAlpha",
+            ListFormat::UpperAlpha => "upperAlpha",
+            ListFormat::LowerRoman => "lowerRoman",
+            ListFormat::UpperRoman => "upperRoman",
+            _ => "bullet",
+        };
+        list_attrs = format!(
+            " data-list-type=\"{list_type}\" data-list-level=\"{}\"",
+            li.level
+        );
+    }
+
     let tag = match effective_level {
         Some(l @ 1..=6) => format!("h{l}"),
         _ => "p".to_string(),
     };
 
-    html.push_str(&format!("<{tag}{style_attr}>"));
+    html.push_str(&format!("<{tag}{style_attr}{list_attrs}>"));
 
     // Walk children (runs, images, etc.) with character offset tracking
     let sel_start = start_char.unwrap_or(0);

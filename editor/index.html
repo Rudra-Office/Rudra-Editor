@@ -117,6 +117,7 @@
         <button class="app-menu-entry" id="menuStrike" role="menuitem" tabindex="-1"><span class="msi">strikethrough_s</span> Strikethrough</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuClearFormat" role="menuitem" tabindex="-1"><span class="msi">format_clear</span> Clear formatting</button>
+        <button class="app-menu-entry" id="menuFormatPainter" role="menuitem" tabindex="-1"><span class="msi">format_paint</span> Format Painter</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuPageSetup" role="menuitem" tabindex="-1"><span class="msi">description</span> Page Setup...</button>
       </div>
@@ -228,6 +229,7 @@
     <button class="tb-btn" id="btnItalic" title="Italic (Ctrl+I)" aria-label="Italic" aria-pressed="false"><span class="msi">format_italic</span></button>
     <button class="tb-btn tb-collapsible-480" id="btnUnderline" title="Underline (Ctrl+U)" aria-label="Underline" aria-pressed="false"><span class="msi">format_underlined</span></button>
     <button class="tb-btn tb-collapsible-1024" id="btnStrike" title="Strikethrough" aria-label="Strikethrough" aria-pressed="false"><span class="msi">strikethrough_s</span></button>
+    <button class="tb-btn tb-collapsible-1024" id="btnFormatPainter" title="Format Painter (single-click: apply once, double-click: sticky mode)" aria-label="Format Painter" aria-pressed="false"><span class="msi">format_paint</span></button>
     <div class="tb-sep tb-collapsible-1024" role="separator"></div>
 
     <!-- Superscript / Subscript -->
@@ -310,6 +312,7 @@
       <div class="more-menu" id="moreMenu" role="menu" aria-label="More toolbar options">
         <!-- Formatting options (shown when toolbar items are collapsed) -->
         <button class="ctx-item more-item more-item-1024" data-more="strikethrough" role="menuitem" title="Toggle strikethrough"><span class="msi ctx-icon">strikethrough_s</span> Strikethrough</button>
+        <button class="ctx-item more-item more-item-1024" data-more="formatPainter" role="menuitem" title="Format Painter"><span class="msi ctx-icon">format_paint</span> Format Painter</button>
         <button class="ctx-item more-item more-item-1024" data-more="superscript" role="menuitem" title="Toggle superscript"><span class="msi ctx-icon">superscript</span> Superscript</button>
         <button class="ctx-item more-item more-item-1024" data-more="subscript" role="menuitem" title="Toggle subscript"><span class="msi ctx-icon">subscript</span> Subscript</button>
         <button class="ctx-item more-item more-item-1024" data-more="textColor" role="menuitem" title="Change text color"><span class="msi ctx-icon">format_color_text</span> Text Color...
@@ -904,11 +907,25 @@
     <div style="display:flex;flex-direction:column;gap:12px">
       <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
         <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Page Size</legend>
-        <select id="psPageSize" title="Page size" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg-white);color:var(--text-primary)">
+        <select id="psPageSize" title="Page size preset" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px;background:var(--bg-white);color:var(--text-primary)">
           <option value="letter">Letter (8.5 x 11 in)</option>
           <option value="a4">A4 (8.27 x 11.69 in)</option>
           <option value="legal">Legal (8.5 x 14 in)</option>
+          <option value="a3">A3 (11.69 x 16.54 in)</option>
+          <option value="custom">Custom</option>
         </select>
+        <div id="psCustomSize" style="display:none;margin-top:8px">
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+              Width (in):
+              <input type="number" id="psCustomWidth" value="8.5" min="1" max="60" step="0.01" title="Custom page width in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--text-secondary)">
+              Height (in):
+              <input type="number" id="psCustomHeight" value="11" min="1" max="60" step="0.01" title="Custom page height in inches" style="width:70px;padding:4px 6px;border:1px solid var(--border);border-radius:var(--radius-sm);font-size:13px">
+            </label>
+          </div>
+        </div>
       </fieldset>
       <fieldset style="border:1px solid var(--border);border-radius:var(--radius-sm);padding:10px 12px">
         <legend style="font-size:12px;color:var(--text-secondary);padding:0 4px">Orientation</legend>

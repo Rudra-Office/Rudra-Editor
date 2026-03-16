@@ -33,6 +33,12 @@ struct ParseContext<'a> {
 /// Returns any raw section properties found (both inline in paragraph properties
 /// and the final body-level sectPr). The reader uses these to resolve header/footer
 /// rIds to NodeIds.
+///
+/// Note: Elements in extension namespaces (w14, w15, wp14, mc:AlternateContent)
+/// are captured as raw XML for round-trip preservation but are not semantically
+/// parsed. This means Office 2016+ specific features (e.g., w14:checkbox,
+/// w15:webExtension) are preserved in round-trip but not accessible via the
+/// document model API.
 pub fn parse_document_xml(
     xml: &str,
     doc: &mut DocumentModel,
@@ -80,8 +86,7 @@ fn parse_body(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"p" => {
                         let inline_sect = parse_paragraph(reader, doc, body_id, child_index, ctx)?;
                         if let Some(raw) = inline_sect {
@@ -165,14 +170,28 @@ fn parse_body(
                         )?;
                     }
                     _ => {
+                        // DOCX-07: warn on unknown namespace prefixes (w14, w15, wp14, etc.)
+                        #[cfg(debug_assertions)]
+                        {
+                            let qname = e.name();
+                            let name = String::from_utf8_lossy(qname.as_ref());
+                            if name.starts_with("w14:")
+                                || name.starts_with("w15:")
+                                || name.starts_with("w16:")
+                                || name.starts_with("wp14:")
+                            {
+                                eprintln!(
+                                    "[s1-format-docx] Warning: skipping element with extension namespace prefix: {name}"
+                                );
+                            }
+                        }
                         skip_element(reader)?;
                     }
                 }
             }
             Ok(Event::Empty(e)) => {
                 // Skip move-related range markers at body level
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"moveToRangeStart"
                     | b"moveToRangeEnd"
                     | b"moveFromRangeStart"
@@ -214,71 +233,67 @@ pub(crate) fn parse_block_content(
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"p" => {
-                        let _inline_sect =
-                            parse_paragraph(reader, doc, parent_id, child_index, &ctx)?;
-                        child_index += 1;
-                    }
-                    b"tbl" => {
-                        parse_table(reader, doc, parent_id, child_index, &ctx)?;
-                        child_index += 1;
-                    }
-                    b"ins" => {
-                        let rev = extract_revision_attrs(&e, "Insert");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            parent_id,
-                            &mut child_index,
-                            &ctx,
-                            &rev,
-                            b"ins",
-                        )?;
-                    }
-                    b"del" => {
-                        let rev = extract_revision_attrs(&e, "Delete");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            parent_id,
-                            &mut child_index,
-                            &ctx,
-                            &rev,
-                            b"del",
-                        )?;
-                    }
-                    b"moveTo" => {
-                        let rev = extract_revision_attrs(&e, "MoveTo");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            parent_id,
-                            &mut child_index,
-                            &ctx,
-                            &rev,
-                            b"moveTo",
-                        )?;
-                    }
-                    b"moveFrom" => {
-                        let rev = extract_revision_attrs(&e, "MoveFrom");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            parent_id,
-                            &mut child_index,
-                            &ctx,
-                            &rev,
-                            b"moveFrom",
-                        )?;
-                    }
-                    _ => {
-                        skip_element(reader)?;
-                    }
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"p" => {
+                    let _inline_sect = parse_paragraph(reader, doc, parent_id, child_index, &ctx)?;
+                    child_index += 1;
                 }
-            }
+                b"tbl" => {
+                    parse_table(reader, doc, parent_id, child_index, &ctx)?;
+                    child_index += 1;
+                }
+                b"ins" => {
+                    let rev = extract_revision_attrs(&e, "Insert");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        parent_id,
+                        &mut child_index,
+                        &ctx,
+                        &rev,
+                        b"ins",
+                    )?;
+                }
+                b"del" => {
+                    let rev = extract_revision_attrs(&e, "Delete");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        parent_id,
+                        &mut child_index,
+                        &ctx,
+                        &rev,
+                        b"del",
+                    )?;
+                }
+                b"moveTo" => {
+                    let rev = extract_revision_attrs(&e, "MoveTo");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        parent_id,
+                        &mut child_index,
+                        &ctx,
+                        &rev,
+                        b"moveTo",
+                    )?;
+                }
+                b"moveFrom" => {
+                    let rev = extract_revision_attrs(&e, "MoveFrom");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        parent_id,
+                        &mut child_index,
+                        &ctx,
+                        &rev,
+                        b"moveFrom",
+                    )?;
+                }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == end_tag => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -299,7 +314,11 @@ fn parse_paragraph(
 ) -> Result<Option<RawSectionProperties>, DocxError> {
     let para_id = doc.next_id();
     doc.insert_node(parent_id, index, Node::new(para_id, NodeType::Paragraph))
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Paragraph under parent {parent_id:?} at index {index}: {e}"
+            ))
+        })?;
 
     let mut child_index = 0;
     let mut inline_section: Option<RawSectionProperties> = None;
@@ -308,8 +327,7 @@ fn parse_paragraph(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"pPr" => {
                         let (mut attrs, sect) = parse_paragraph_properties_with_section(reader)?;
                         // Resolve list format from numbering definitions
@@ -355,7 +373,11 @@ fn parse_paragraph(
                                 .set(AttributeKey::BookmarkName, AttributeValue::String(name));
                         }
                         doc.insert_node(para_id, child_index, bk_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting bookmarkStart into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                         skip_element(reader)?;
                     }
@@ -363,7 +385,11 @@ fn parse_paragraph(
                         let bk_id = doc.next_id();
                         let bk_node = Node::new(bk_id, NodeType::BookmarkEnd);
                         doc.insert_node(para_id, child_index, bk_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting bookmarkEnd into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                         skip_element(reader)?;
                     }
@@ -376,7 +402,11 @@ fn parse_paragraph(
                                 .set(AttributeKey::CommentId, AttributeValue::String(id));
                         }
                         doc.insert_node(para_id, child_index, crs_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting commentRangeStart into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                         skip_element(reader)?;
                     }
@@ -389,7 +419,11 @@ fn parse_paragraph(
                                 .set(AttributeKey::CommentId, AttributeValue::String(id));
                         }
                         doc.insert_node(para_id, child_index, cre_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting commentRangeEnd into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                         skip_element(reader)?;
                     }
@@ -413,7 +447,11 @@ fn parse_paragraph(
                             AttributeValue::String(raw_xml),
                         );
                         doc.insert_node(para_id, child_index, eq_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting equation (oMath) into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                     }
                     // Display (block) equation: <m:oMathPara>
@@ -426,7 +464,11 @@ fn parse_paragraph(
                             AttributeValue::String(raw_xml),
                         );
                         doc.insert_node(para_id, child_index, eq_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                            .map_err(|e| {
+                                DocxError::InvalidStructure(format!(
+                                    "inserting equation (oMathPara) into paragraph: {e}"
+                                ))
+                            })?;
                         child_index += 1;
                     }
                     b"ins" => {
@@ -482,59 +524,87 @@ fn parse_paragraph(
                         )?;
                     }
                     _ => {
+                        // DOCX-07: warn on unknown namespace prefixes (w14, w15, wp14, etc.)
+                        #[cfg(debug_assertions)]
+                        {
+                            let qname = e.name();
+                            let name = String::from_utf8_lossy(qname.as_ref());
+                            if name.starts_with("w14:")
+                                || name.starts_with("w15:")
+                                || name.starts_with("w16:")
+                                || name.starts_with("wp14:")
+                            {
+                                eprintln!(
+                                    "[s1-format-docx] Warning: skipping element with extension namespace prefix: {name}"
+                                );
+                            }
+                        }
                         skip_element(reader)?;
                     }
                 }
             }
-            Ok(Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"bookmarkStart" => {
-                        let bk_id = doc.next_id();
-                        let mut bk_node = Node::new(bk_id, NodeType::BookmarkStart);
-                        if let Some(bk_name) = get_attr(&e, b"name") {
-                            bk_node
-                                .attributes
-                                .set(AttributeKey::BookmarkName, AttributeValue::String(bk_name));
-                        }
-                        doc.insert_node(para_id, child_index, bk_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
-                        child_index += 1;
+            Ok(Event::Empty(e)) => match e.local_name().as_ref() {
+                b"bookmarkStart" => {
+                    let bk_id = doc.next_id();
+                    let mut bk_node = Node::new(bk_id, NodeType::BookmarkStart);
+                    if let Some(bk_name) = get_attr(&e, b"name") {
+                        bk_node
+                            .attributes
+                            .set(AttributeKey::BookmarkName, AttributeValue::String(bk_name));
                     }
-                    b"bookmarkEnd" => {
-                        let bk_id = doc.next_id();
-                        let bk_node = Node::new(bk_id, NodeType::BookmarkEnd);
-                        doc.insert_node(para_id, child_index, bk_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
-                        child_index += 1;
-                    }
-                    b"commentRangeStart" => {
-                        let crs_id = doc.next_id();
-                        let mut crs_node = Node::new(crs_id, NodeType::CommentStart);
-                        if let Some(id) = get_attr(&e, b"id") {
-                            crs_node
-                                .attributes
-                                .set(AttributeKey::CommentId, AttributeValue::String(id));
-                        }
-                        doc.insert_node(para_id, child_index, crs_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
-                        child_index += 1;
-                    }
-                    b"commentRangeEnd" => {
-                        let cre_id = doc.next_id();
-                        let mut cre_node = Node::new(cre_id, NodeType::CommentEnd);
-                        if let Some(id) = get_attr(&e, b"id") {
-                            cre_node
-                                .attributes
-                                .set(AttributeKey::CommentId, AttributeValue::String(id));
-                        }
-                        doc.insert_node(para_id, child_index, cre_node)
-                            .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
-                        child_index += 1;
-                    }
-                    _ => {}
+                    doc.insert_node(para_id, child_index, bk_node)
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "inserting bookmarkStart (empty) into paragraph: {e}"
+                            ))
+                        })?;
+                    child_index += 1;
                 }
-            }
+                b"bookmarkEnd" => {
+                    let bk_id = doc.next_id();
+                    let bk_node = Node::new(bk_id, NodeType::BookmarkEnd);
+                    doc.insert_node(para_id, child_index, bk_node)
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "inserting bookmarkEnd (empty) into paragraph: {e}"
+                            ))
+                        })?;
+                    child_index += 1;
+                }
+                b"commentRangeStart" => {
+                    let crs_id = doc.next_id();
+                    let mut crs_node = Node::new(crs_id, NodeType::CommentStart);
+                    if let Some(id) = get_attr(&e, b"id") {
+                        crs_node
+                            .attributes
+                            .set(AttributeKey::CommentId, AttributeValue::String(id));
+                    }
+                    doc.insert_node(para_id, child_index, crs_node)
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "inserting commentRangeStart (empty) into paragraph: {e}"
+                            ))
+                        })?;
+                    child_index += 1;
+                }
+                b"commentRangeEnd" => {
+                    let cre_id = doc.next_id();
+                    let mut cre_node = Node::new(cre_id, NodeType::CommentEnd);
+                    if let Some(id) = get_attr(&e, b"id") {
+                        cre_node
+                            .attributes
+                            .set(AttributeKey::CommentId, AttributeValue::String(id));
+                    }
+                    doc.insert_node(para_id, child_index, cre_node)
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "inserting commentRangeEnd (empty) into paragraph: {e}"
+                            ))
+                        })?;
+                    child_index += 1;
+                }
+                _ => {}
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == b"p" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -556,8 +626,7 @@ fn parse_paragraph_properties_with_section(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"sectPr" => {
                         sect = Some(parse_section_properties(reader)?);
                     }
@@ -570,8 +639,7 @@ fn parse_paragraph_properties_with_section(
                 }
             }
             Ok(Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"sectPr" => {
                         // Empty sectPr — use defaults
                         sect = Some(RawSectionProperties {
@@ -603,8 +671,7 @@ fn parse_ppr_child(
     use crate::property_parser;
     use crate::xml_util::{get_val, is_toggle_on};
 
-    let name = e.local_name().as_ref().to_vec();
-    match name.as_slice() {
+    match e.local_name().as_ref() {
         b"pStyle" => {
             if let Some(val) = get_val(e) {
                 attrs.set(AttributeKey::StyleId, AttributeValue::String(val));
@@ -680,8 +747,7 @@ fn parse_ppr_child(
 fn parse_ppr_child_empty(e: &quick_xml::events::BytesStart<'_>, attrs: &mut AttributeMap) {
     use crate::xml_util::{get_val, is_toggle_on};
 
-    let name = e.local_name().as_ref().to_vec();
-    match name.as_slice() {
+    match e.local_name().as_ref() {
         b"pStyle" => {
             if let Some(val) = get_val(e) {
                 attrs.set(AttributeKey::StyleId, AttributeValue::String(val));
@@ -745,33 +811,34 @@ fn parse_table(
 ) -> Result<(), DocxError> {
     let table_id = doc.next_id();
     doc.insert_node(parent_id, index, Node::new(table_id, NodeType::Table))
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Table under parent {parent_id:?} at index {index}: {e}"
+            ))
+        })?;
 
     let mut row_index = 0;
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"tblPr" => {
-                        let attrs = parse_table_properties(reader)?;
-                        if let Some(node) = doc.node_mut(table_id) {
-                            node.attributes = attrs;
-                        }
-                    }
-                    b"tblGrid" => {
-                        skip_element(reader)?;
-                    }
-                    b"tr" => {
-                        parse_table_row(reader, doc, table_id, row_index, ctx)?;
-                        row_index += 1;
-                    }
-                    _ => {
-                        skip_element(reader)?;
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"tblPr" => {
+                    let attrs = parse_table_properties(reader)?;
+                    if let Some(node) = doc.node_mut(table_id) {
+                        node.attributes = attrs;
                     }
                 }
-            }
+                b"tblGrid" => {
+                    skip_element(reader)?;
+                }
+                b"tr" => {
+                    parse_table_row(reader, doc, table_id, row_index, ctx)?;
+                    row_index += 1;
+                }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == b"tbl" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -792,34 +859,35 @@ fn parse_table_row(
 ) -> Result<(), DocxError> {
     let row_id = doc.next_id();
     doc.insert_node(table_id, index, Node::new(row_id, NodeType::TableRow))
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert TableRow under Table {table_id:?} at index {index}: {e}"
+            ))
+        })?;
 
     let mut cell_index = 0;
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"trPr" => {
-                        let attrs = parse_row_properties(reader)?;
-                        if !attrs.is_empty() {
-                            if let Some(node) = doc.node_mut(row_id) {
-                                for (key, value) in attrs.iter() {
-                                    node.attributes.set(key.clone(), value.clone());
-                                }
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"trPr" => {
+                    let attrs = parse_row_properties(reader)?;
+                    if !attrs.is_empty() {
+                        if let Some(node) = doc.node_mut(row_id) {
+                            for (key, value) in attrs.iter() {
+                                node.attributes.set(key.clone(), value.clone());
                             }
                         }
                     }
-                    b"tc" => {
-                        parse_table_cell(reader, doc, row_id, cell_index, ctx)?;
-                        cell_index += 1;
-                    }
-                    _ => {
-                        skip_element(reader)?;
-                    }
                 }
-            }
+                b"tc" => {
+                    parse_table_cell(reader, doc, row_id, cell_index, ctx)?;
+                    cell_index += 1;
+                }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == b"tr" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -840,82 +908,67 @@ fn parse_table_cell(
 ) -> Result<(), DocxError> {
     let cell_id = doc.next_id();
     doc.insert_node(row_id, index, Node::new(cell_id, NodeType::TableCell))
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert TableCell under TableRow {row_id:?} at index {index}: {e}"
+            ))
+        })?;
 
     let mut child_index = 0;
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"tcPr" => {
-                        let attrs = parse_cell_properties(reader)?;
-                        if let Some(node) = doc.node_mut(cell_id) {
-                            node.attributes = attrs;
-                        }
-                    }
-                    b"p" => {
-                        parse_paragraph(reader, doc, cell_id, child_index, ctx)?;
-                        child_index += 1;
-                    }
-                    b"tbl" => {
-                        parse_table(reader, doc, cell_id, child_index, ctx)?;
-                        child_index += 1;
-                    }
-                    b"ins" => {
-                        let rev = extract_revision_attrs(&e, "Insert");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            cell_id,
-                            &mut child_index,
-                            ctx,
-                            &rev,
-                            b"ins",
-                        )?;
-                    }
-                    b"del" => {
-                        let rev = extract_revision_attrs(&e, "Delete");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            cell_id,
-                            &mut child_index,
-                            ctx,
-                            &rev,
-                            b"del",
-                        )?;
-                    }
-                    b"moveTo" => {
-                        let rev = extract_revision_attrs(&e, "MoveTo");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            cell_id,
-                            &mut child_index,
-                            ctx,
-                            &rev,
-                            b"moveTo",
-                        )?;
-                    }
-                    b"moveFrom" => {
-                        let rev = extract_revision_attrs(&e, "MoveFrom");
-                        parse_tracked_block(
-                            reader,
-                            doc,
-                            cell_id,
-                            &mut child_index,
-                            ctx,
-                            &rev,
-                            b"moveFrom",
-                        )?;
-                    }
-                    _ => {
-                        skip_element(reader)?;
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"tcPr" => {
+                    let attrs = parse_cell_properties(reader)?;
+                    if let Some(node) = doc.node_mut(cell_id) {
+                        node.attributes = attrs;
                     }
                 }
-            }
+                b"p" => {
+                    parse_paragraph(reader, doc, cell_id, child_index, ctx)?;
+                    child_index += 1;
+                }
+                b"tbl" => {
+                    parse_table(reader, doc, cell_id, child_index, ctx)?;
+                    child_index += 1;
+                }
+                b"ins" => {
+                    let rev = extract_revision_attrs(&e, "Insert");
+                    parse_tracked_block(reader, doc, cell_id, &mut child_index, ctx, &rev, b"ins")?;
+                }
+                b"del" => {
+                    let rev = extract_revision_attrs(&e, "Delete");
+                    parse_tracked_block(reader, doc, cell_id, &mut child_index, ctx, &rev, b"del")?;
+                }
+                b"moveTo" => {
+                    let rev = extract_revision_attrs(&e, "MoveTo");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        cell_id,
+                        &mut child_index,
+                        ctx,
+                        &rev,
+                        b"moveTo",
+                    )?;
+                }
+                b"moveFrom" => {
+                    let rev = extract_revision_attrs(&e, "MoveFrom");
+                    parse_tracked_block(
+                        reader,
+                        doc,
+                        cell_id,
+                        &mut child_index,
+                        ctx,
+                        &rev,
+                        b"moveFrom",
+                    )?;
+                }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == b"tc" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -1048,13 +1101,14 @@ fn parse_run(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                let local = e.local_name();
+                let local_ref = local.as_ref();
+                match local_ref {
                     b"rPr" => {
                         run_attrs = parse_run_properties(reader)?;
                     }
                     b"t" | b"delText" => {
-                        let text = read_text_content_tag(reader, &name)?;
+                        let text = read_text_content_tag(reader, local_ref)?;
                         if !text.is_empty() {
                             // When in the "separate" phase of a complex field,
                             // the <w:t> holds the display value — skip it.
@@ -1096,13 +1150,27 @@ fn parse_run(
                         }
                     }
                     _ => {
+                        // DOCX-07: warn on unknown namespace prefixes (w14, w15, wp14, etc.)
+                        #[cfg(debug_assertions)]
+                        {
+                            let qname = e.name();
+                            let name = String::from_utf8_lossy(qname.as_ref());
+                            if name.starts_with("w14:")
+                                || name.starts_with("w15:")
+                                || name.starts_with("w16:")
+                                || name.starts_with("wp14:")
+                            {
+                                eprintln!(
+                                    "[s1-format-docx] Warning: skipping run-level element with extension namespace prefix: {name}"
+                                );
+                            }
+                        }
                         skip_element(reader)?;
                     }
                 }
             }
             Ok(Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"br" => {
                         let break_type = get_attr(&e, b"type");
                         let node_type = match break_type.as_deref() {
@@ -1154,14 +1222,18 @@ fn parse_run(
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
                 let break_id = doc.next_id();
                 doc.insert_node(para_id, *child_index, Node::new(break_id, node_type))
-                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!("inserting break into paragraph: {e}"))
+                    })?;
                 *child_index += 1;
             }
             RunContent::Tab => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
                 let tab_id = doc.next_id();
                 doc.insert_node(para_id, *child_index, Node::new(tab_id, NodeType::Tab))
-                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!("inserting tab into paragraph: {e}"))
+                    })?;
                 *child_index += 1;
             }
             RunContent::Image(info) => {
@@ -1180,7 +1252,9 @@ fn parse_run(
                     .attributes
                     .set(AttributeKey::FieldCode, AttributeValue::String(instr));
                 doc.insert_node(para_id, *child_index, field_node)
-                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!("inserting field into paragraph: {e}"))
+                    })?;
                 *child_index += 1;
             }
             RunContent::Shape(info) => {
@@ -1199,7 +1273,11 @@ fn parse_run(
                     .attributes
                     .set(AttributeKey::FootnoteNumber, AttributeValue::String(id));
                 doc.insert_node(para_id, *child_index, ref_node)
-                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!(
+                            "inserting footnote ref into paragraph: {e}"
+                        ))
+                    })?;
                 *child_index += 1;
             }
             RunContent::EndnoteRef(id) => {
@@ -1210,7 +1288,11 @@ fn parse_run(
                     .attributes
                     .set(AttributeKey::EndnoteNumber, AttributeValue::String(id));
                 doc.insert_node(para_id, *child_index, ref_node)
-                    .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!(
+                            "inserting endnote ref into paragraph: {e}"
+                        ))
+                    })?;
                 *child_index += 1;
             }
         }
@@ -1257,8 +1339,7 @@ fn parse_alternate_content(
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 depth += 1;
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"Fallback" => {
                         in_fallback = true;
                         fallback_depth = depth;
@@ -1316,8 +1397,7 @@ fn parse_alternate_content_into_paragraph(
         match reader.read_event() {
             Ok(Event::Start(e)) => {
                 depth += 1;
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"Fallback" => {
                         in_fallback = true;
                         fallback_depth = depth;
@@ -1401,11 +1481,10 @@ fn parse_drawing(
                 depth += 1;
                 // Capture raw XML
                 raw_xml.push('<');
-                raw_xml.push_str(std::str::from_utf8(&e).unwrap_or("?"));
+                raw_xml.push_str(&String::from_utf8_lossy(&e));
                 raw_xml.push('>');
 
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"anchor" => {
                         is_floating = true;
                         // Extract distance attributes
@@ -1478,7 +1557,7 @@ fn parse_drawing(
             }
             Ok(Event::Text(ref t)) => {
                 // Capture raw XML text
-                raw_xml.push_str(std::str::from_utf8(t.as_ref()).unwrap_or(""));
+                raw_xml.push_str(&String::from_utf8_lossy(t.as_ref()));
 
                 if in_pos_offset {
                     if let Ok(s) = t.unescape() {
@@ -1489,11 +1568,10 @@ fn parse_drawing(
             Ok(Event::Empty(e)) => {
                 // Capture raw XML
                 raw_xml.push('<');
-                raw_xml.push_str(std::str::from_utf8(&e).unwrap_or("?"));
+                raw_xml.push_str(&String::from_utf8_lossy(&e));
                 raw_xml.push_str("/>");
 
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"wrapSquare" => {
                         wrap_type = Some("square".to_string());
                     }
@@ -1533,8 +1611,7 @@ fn parse_drawing(
                 }
             }
             Ok(Event::End(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"posOffset" => {
                         if in_pos_offset {
                             if let Ok(val) = pos_offset_text.trim().parse::<i64>() {
@@ -1557,7 +1634,7 @@ fn parse_drawing(
                 }
                 // Capture raw XML
                 raw_xml.push_str("</");
-                raw_xml.push_str(std::str::from_utf8(e.name().as_ref()).unwrap_or("?"));
+                raw_xml.push_str(&String::from_utf8_lossy(e.name().as_ref()));
                 raw_xml.push('>');
 
                 depth -= 1;
@@ -1567,7 +1644,7 @@ fn parse_drawing(
             }
             Ok(Event::CData(ref cd)) => {
                 raw_xml.push_str("<![CDATA[");
-                raw_xml.push_str(std::str::from_utf8(cd.as_ref()).unwrap_or(""));
+                raw_xml.push_str(&String::from_utf8_lossy(cd.as_ref()));
                 raw_xml.push_str("]]>");
             }
             Ok(Event::Eof) => break,
@@ -1611,14 +1688,27 @@ fn insert_image_node(
     // Look up media bytes
     let data = match ctx.media.get(&info.rel_target) {
         Some(d) => d.clone(),
-        None => return Ok(()), // Media not found — skip silently
+        None => {
+            // Media not found — skip this image (lenient parsing)
+            #[cfg(debug_assertions)]
+            eprintln!(
+                "[s1-format-docx] Warning: image media not found for relationship target: {}",
+                &info.rel_target
+            );
+            return Ok(());
+        }
     };
 
     // Determine content type from extension
-    let ext = info.rel_target.rsplit('.').next().unwrap_or("bin");
+    let ext = std::path::Path::new(&info.rel_target)
+        .extension()
+        .and_then(|e| e.to_str())
+        .unwrap_or("bin");
     let content_type = mime_for_extension(ext).unwrap_or("application/octet-stream");
 
-    // Store in media store (dedup by content hash)
+    // Store in media store — MediaStore::insert() already deduplicates by content hash
+    // (see s1-model/src/media.rs), so identical images referenced multiple times
+    // will share a single MediaId. No additional dedup needed here.
     let media_id = doc
         .media_mut()
         .insert(content_type, data, Some(info.rel_target.clone()));
@@ -1690,7 +1780,12 @@ fn insert_image_node(
     }
 
     doc.insert_node(para_id, *child_index, image_node)
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Image under Paragraph {para_id:?} at index {}: {e}",
+                *child_index
+            ))
+        })?;
     *child_index += 1;
 
     Ok(())
@@ -1715,18 +1810,14 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
         match reader.read_event() {
             Ok(Event::Start(ref e)) => {
                 depth += 1;
-                let name = e.local_name().as_ref().to_vec();
                 // Capture raw XML for round-trip
-                raw_parts.push(format!(
-                    "<{}>",
-                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
-                ));
+                raw_parts.push(format!("<{}>", String::from_utf8_lossy(e.name().as_ref())));
 
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline"
                     | b"group" => {
-                        let type_name = String::from_utf8_lossy(&name).to_string();
-                        shape_type = Some(type_name);
+                        shape_type =
+                            Some(String::from_utf8_lossy(e.local_name().as_ref()).into_owned());
 
                         // Try to extract style attribute for dimensions
                         if let Some(style) = get_attr(e, b"style") {
@@ -1745,15 +1836,11 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                raw_parts.push(format!(
-                    "<{}/>",
-                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
-                ));
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                raw_parts.push(format!("<{}/>", String::from_utf8_lossy(e.name().as_ref())));
+                match e.local_name().as_ref() {
                     b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" => {
-                        let type_name = String::from_utf8_lossy(&name).to_string();
-                        shape_type = Some(type_name);
+                        shape_type =
+                            Some(String::from_utf8_lossy(e.local_name().as_ref()).into_owned());
                         if let Some(style) = get_attr(e, b"style") {
                             parse_vml_style(&style, &mut width_pts, &mut height_pts);
                         }
@@ -1773,10 +1860,7 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
                 }
             }
             Ok(Event::End(ref e)) => {
-                raw_parts.push(format!(
-                    "</{}>",
-                    std::str::from_utf8(e.name().as_ref()).unwrap_or("?")
-                ));
+                raw_parts.push(format!("</{}>", String::from_utf8_lossy(e.name().as_ref())));
                 depth -= 1;
                 if depth == 0 {
                     break;
@@ -1877,7 +1961,12 @@ fn insert_shape_node(
     );
 
     doc.insert_node(para_id, *child_index, shape_node)
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Shape under Paragraph {para_id:?} at index {}: {e}",
+                *child_index
+            ))
+        })?;
     *child_index += 1;
 
     Ok(())
@@ -1903,7 +1992,12 @@ fn insert_drawing_xml_node(
     );
 
     doc.insert_node(para_id, *child_index, drawing_node)
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Drawing under Paragraph {para_id:?} at index {}: {e}",
+                *child_index
+            ))
+        })?;
     *child_index += 1;
 
     Ok(())
@@ -1929,13 +2023,19 @@ fn flush_texts_to_run(
     let run_id = doc.next_id();
     let mut run = Node::new(run_id, NodeType::Run);
     run.attributes = run_attrs.clone();
-    doc.insert_node(para_id, *child_index, run)
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+    doc.insert_node(para_id, *child_index, run).map_err(|e| {
+        DocxError::InvalidStructure(format!(
+            "failed to insert Run under Paragraph {para_id:?} at index {}: {e}",
+            *child_index
+        ))
+    })?;
     *child_index += 1;
 
     let text_id = doc.next_id();
     doc.insert_node(run_id, 0, Node::text(text_id, combined))
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!("failed to insert Text under Run {run_id:?}: {e}"))
+        })?;
 
     Ok(())
 }
@@ -1988,7 +2088,12 @@ fn parse_fld_simple(
         AttributeValue::String(instr.trim().to_string()),
     );
     doc.insert_node(para_id, *child_index, field_node)
-        .map_err(|e| DocxError::InvalidStructure(format!("{e}")))?;
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert Field (fldSimple) under Paragraph {para_id:?} at index {}: {e}",
+                *child_index
+            ))
+        })?;
     *child_index += 1;
 
     // Skip the content (the displayed value which we don't need to store)
@@ -2050,17 +2155,14 @@ fn parse_hyperlink_runs(
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"r" => {
-                        parse_run(reader, doc, para_id, child_index, ctx, field_state)?;
-                    }
-                    _ => {
-                        skip_element(reader)?;
-                    }
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"r" => {
+                    parse_run(reader, doc, para_id, child_index, ctx, field_state)?;
                 }
-            }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == b"hyperlink" => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -2133,8 +2235,7 @@ fn parse_sdt_toc(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"sdtPr" => {
                         in_sdt_pr = true;
                     }
@@ -2162,7 +2263,10 @@ fn parse_sdt_toc(
                                 AttributeKey::TocMaxLevel,
                                 AttributeValue::Int(3), // default; may be updated from field code
                             );
-                            let _ = doc.insert_node(parent_id, child_index, toc);
+                            doc.insert_node(parent_id, child_index, toc)
+                                .map_err(|e| DocxError::InvalidStructure(format!(
+                                    "failed to insert TableOfContents under parent {parent_id:?} at index {child_index}: {e}"
+                                )))?;
                             toc_id = Some(id);
                         }
                     }
@@ -2212,8 +2316,7 @@ fn parse_sdt_toc(
                 }
             }
             Ok(Event::Empty(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                if name == b"docPartGallery" && in_sdt_pr {
+                if e.local_name().as_ref() == b"docPartGallery" && in_sdt_pr {
                     for attr in e.attributes().flatten() {
                         if attr.key.local_name().as_ref() == b"val" {
                             let val = String::from_utf8_lossy(&attr.value);
@@ -2425,8 +2528,7 @@ fn parse_tracked_block(
     loop {
         match reader.read_event() {
             Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
+                match e.local_name().as_ref() {
                     b"p" => {
                         let start_idx = *child_index;
                         parse_paragraph(reader, doc, parent_id, *child_index, ctx)?;
@@ -2474,17 +2576,14 @@ fn parse_tracked_inline_runs(
 
     loop {
         match reader.read_event() {
-            Ok(Event::Start(e)) => {
-                let name = e.local_name().as_ref().to_vec();
-                match name.as_slice() {
-                    b"r" => {
-                        parse_run(reader, doc, para_id, child_index, ctx, field_state)?;
-                    }
-                    _ => {
-                        skip_element(reader)?;
-                    }
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"r" => {
+                    parse_run(reader, doc, para_id, child_index, ctx, field_state)?;
                 }
-            }
+                _ => {
+                    skip_element(reader)?;
+                }
+            },
             Ok(Event::End(e)) if e.local_name().as_ref() == end_tag => break,
             Ok(Event::Eof) => break,
             Err(e) => return Err(DocxError::Xml(format!("{e}"))),
@@ -2519,7 +2618,7 @@ fn capture_element_xml(
 
     // Reconstruct the opening tag: <name attrs...>
     xml.push('<');
-    xml.push_str(std::str::from_utf8(start).unwrap_or("?"));
+    xml.push_str(&String::from_utf8_lossy(start));
     xml.push('>');
 
     let mut depth = 1u32;
@@ -2528,22 +2627,22 @@ fn capture_element_xml(
             Ok(Event::Start(ref e)) => {
                 depth += 1;
                 xml.push('<');
-                xml.push_str(std::str::from_utf8(e).unwrap_or("?"));
+                xml.push_str(&String::from_utf8_lossy(e));
                 xml.push('>');
             }
             Ok(Event::Empty(ref e)) => {
                 xml.push('<');
-                xml.push_str(std::str::from_utf8(e).unwrap_or("?"));
+                xml.push_str(&String::from_utf8_lossy(e));
                 xml.push_str("/>");
             }
             Ok(Event::Text(ref t)) => {
                 // Use the raw escaped text to preserve XML entities
-                xml.push_str(std::str::from_utf8(t.as_ref()).unwrap_or(""));
+                xml.push_str(&String::from_utf8_lossy(t.as_ref()));
             }
             Ok(Event::End(ref e)) => {
                 depth -= 1;
                 xml.push_str("</");
-                xml.push_str(std::str::from_utf8(e.name().as_ref()).unwrap_or("?"));
+                xml.push_str(&String::from_utf8_lossy(e.name().as_ref()));
                 xml.push('>');
                 if depth == 0 {
                     break;
@@ -2551,7 +2650,7 @@ fn capture_element_xml(
             }
             Ok(Event::CData(ref cd)) => {
                 xml.push_str("<![CDATA[");
-                xml.push_str(std::str::from_utf8(cd.as_ref()).unwrap_or(""));
+                xml.push_str(&String::from_utf8_lossy(cd.as_ref()));
                 xml.push_str("]]>");
             }
             Ok(Event::Eof) => break,
@@ -4629,6 +4728,81 @@ mod tests {
         assert_eq!(
             run.attributes.get_string(&AttributeKey::RevisionType),
             Some("MoveFrom")
+        );
+    }
+
+    /// DOCX-09: Verify that MediaStore deduplicates when the same image data is
+    /// referenced by two different rIds (e.g. two <w:drawing> elements embed the
+    /// same PNG bytes). Both Image nodes should share a single MediaId.
+    #[test]
+    fn parse_duplicate_images_share_media_id() {
+        let xml = wrap_doc(
+            r#"<w:p>
+                <w:r><w:drawing><wp:inline>
+                    <wp:extent cx="914400" cy="914400"/>
+                    <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                        <a:blip r:embed="rId4"/>
+                    </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                </wp:inline></w:drawing></w:r>
+                <w:r><w:drawing><wp:inline>
+                    <wp:extent cx="914400" cy="914400"/>
+                    <a:graphic><a:graphicData><pic:pic><pic:blipFill>
+                        <a:blip r:embed="rId5"/>
+                    </pic:blipFill></pic:pic></a:graphicData></a:graphic>
+                </wp:inline></w:drawing></w:r>
+            </w:p>"#,
+        );
+
+        let mut rels = HashMap::new();
+        rels.insert("rId4".to_string(), "media/image1.png".to_string());
+        rels.insert("rId5".to_string(), "media/image2.png".to_string());
+
+        // Both rIds point to different filenames but identical byte content
+        let image_data = vec![0x89, 0x50, 0x4E, 0x47, 1, 2, 3, 4, 5];
+        let mut media = HashMap::new();
+        media.insert("media/image1.png".to_string(), image_data.clone());
+        media.insert("media/image2.png".to_string(), image_data);
+
+        let mut doc = DocumentModel::new();
+        parse_document_xml(
+            &xml,
+            &mut doc,
+            &rels,
+            &media,
+            &s1_model::NumberingDefinitions::default(),
+        )
+        .unwrap();
+
+        // Should have 2 Image nodes in the paragraph
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.children.len(), 2);
+
+        let img1 = doc.node(para.children[0]).unwrap();
+        let img2 = doc.node(para.children[1]).unwrap();
+        assert_eq!(img1.node_type, NodeType::Image);
+        assert_eq!(img2.node_type, NodeType::Image);
+
+        // Both images should share the same MediaId because MediaStore deduplicates
+        let mid1 = match img1.attributes.get(&AttributeKey::ImageMediaId) {
+            Some(AttributeValue::MediaId(id)) => *id,
+            _ => panic!("expected MediaId on first image"),
+        };
+        let mid2 = match img2.attributes.get(&AttributeKey::ImageMediaId) {
+            Some(AttributeValue::MediaId(id)) => *id,
+            _ => panic!("expected MediaId on second image"),
+        };
+        assert_eq!(
+            mid1, mid2,
+            "identical image data should yield the same MediaId"
+        );
+
+        // MediaStore should contain only one entry
+        assert_eq!(
+            doc.media().len(),
+            1,
+            "MediaStore should deduplicate identical content"
         );
     }
 }

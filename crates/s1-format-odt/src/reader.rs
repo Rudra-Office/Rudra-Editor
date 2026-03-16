@@ -81,7 +81,7 @@ fn parse_content(
                     }
                     b"text" => {
                         let ctx = ParseContext {
-                            auto_styles: auto_styles.clone(),
+                            auto_styles,
                             image_map,
                         };
                         parse_content_body(&mut reader, doc, &ctx)?;
@@ -91,7 +91,12 @@ fn parse_content(
                 }
             }
             Ok(quick_xml::events::Event::Eof) => break,
-            Err(e) => return Err(OdtError::Xml(e.to_string())),
+            Err(e) => {
+                return Err(OdtError::Xml(format!(
+                    "XML parse error at position {}: {e}",
+                    reader.buffer_position()
+                )))
+            }
             _ => {}
         }
     }
@@ -152,7 +157,10 @@ fn extract_images(
         let mut data = Vec::new();
         file.read_to_end(&mut data)?;
 
-        let ext = name.rsplit('.').next().unwrap_or("");
+        let ext = std::path::Path::new(&name)
+            .extension()
+            .and_then(|e| e.to_str())
+            .unwrap_or("");
         let mime = mime_for_extension(ext)
             .unwrap_or("application/octet-stream")
             .to_string();

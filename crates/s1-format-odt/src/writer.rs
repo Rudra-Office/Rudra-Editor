@@ -61,17 +61,31 @@ pub fn write(doc: &DocumentModel) -> Result<Vec<u8>, OdtError> {
     zip.start_file("settings.xml", deflated)?;
     zip.write_all(settings_xml.as_bytes())?;
 
-    // 8. Write images to Pictures/
+    // 8. Write media files (images and any other embedded media) to Pictures/
+    let mut media_paths: Vec<String> = Vec::new();
     for entry in &image_entries {
         if let Some(media) = doc.media().get(entry.media_id) {
             zip.start_file(&entry.href, deflated)?;
             zip.write_all(&media.data)?;
+            media_paths.push(entry.href.clone());
         }
     }
 
-    // 9. Write META-INF/manifest.xml
-    let image_paths: Vec<&str> = image_entries.iter().map(|e| e.href.as_str()).collect();
-    let manifest = write_manifest_xml(&image_paths, meta_xml.is_some());
+    // Also write any media items from the store that were not referenced by
+    // Image nodes (e.g., embedded objects, audio, video) so they are not lost.
+    for media_item in doc.media().iter() {
+        if let Some(ref filename) = media_item.filename {
+            if !media_paths.iter().any(|p| p == filename) {
+                zip.start_file(filename, deflated)?;
+                zip.write_all(&media_item.data)?;
+                media_paths.push(filename.clone());
+            }
+        }
+    }
+
+    // 9. Write META-INF/manifest.xml (includes all media file entries)
+    let manifest_media_paths: Vec<&str> = media_paths.iter().map(|s| s.as_str()).collect();
+    let manifest = write_manifest_xml(&manifest_media_paths, meta_xml.is_some());
     zip.start_file("META-INF/manifest.xml", deflated)?;
     zip.write_all(manifest.as_bytes())?;
 

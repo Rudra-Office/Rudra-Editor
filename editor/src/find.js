@@ -43,16 +43,26 @@ export function initFind() {
     doFind();
   });
 
-  // Escape to close
-  $('findInput').addEventListener('keydown', e => {
+  // Escape to close, Tab to cycle within find bar
+  const findBarKeydown = e => {
     if (e.key === 'Escape') { $('findBar').classList.remove('show'); clearHighlights(); }
+    if (e.key === 'Tab') {
+      e.preventDefault();
+      const focusable = $('findBar').querySelectorAll('input, button');
+      const idx = Array.from(focusable).indexOf(document.activeElement);
+      const next = e.shiftKey ? (idx - 1 + focusable.length) % focusable.length : (idx + 1) % focusable.length;
+      focusable[next].focus();
+    }
+  };
+  $('findInput').addEventListener('keydown', e => {
+    findBarKeydown(e);
     if (e.key === 'Enter') navigateMatch(e.shiftKey ? -1 : 1);
     // Alt+C = toggle match case, Alt+W = toggle whole word
     if (e.altKey && e.key === 'c') { e.preventDefault(); $('findMatchCase').click(); }
     if (e.altKey && e.key === 'w') { e.preventDefault(); $('findWholeWord').click(); }
   });
   $('replaceInput').addEventListener('keydown', e => {
-    if (e.key === 'Escape') { $('findBar').classList.remove('show'); clearHighlights(); }
+    findBarKeydown(e);
     if (e.key === 'Enter') doReplace();
   });
 }
