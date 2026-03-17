@@ -178,7 +178,9 @@ export function deselectImage() {
 function startResize(e) {
   e.preventDefault(); e.stopPropagation();
   const handle = e.target.dataset.handle;
-  const img = e.target.closest('.img-wrap').querySelector('img');
+  const wrap = e.target.closest('.img-wrap');
+  if (!wrap) return;
+  const img = wrap.querySelector('img');
   if (!img) return;
   state.resizing = {
     img, handle,

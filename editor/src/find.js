@@ -85,19 +85,6 @@ function doFind() {
     let filtered = results;
     if (_wholeWord) {
       filtered = results.filter(m => {
-        try {
-          const fullText = state.doc.get_document_text();
-          const start = getAbsoluteOffset(m.nodeId, m.offset);
-          if (start === -1) return true; // can't verify, keep it
-          const before = start > 0 ? fullText[start - 1] : ' ';
-          const after = start + m.length < fullText.length ? fullText[start + m.length] : ' ';
-          return /\W/.test(before) && /\W/.test(after);
-        } catch (_) {
-          return true;
-        }
-      });
-      // Simpler approach: check within the node's text
-      filtered = results.filter(m => {
         const page = $('pageContainer');
         const el = page.querySelector(`[data-node-id="${m.nodeId}"]`);
         if (!el) return true;

@@ -306,7 +306,7 @@ function onMouseMove(e) {
     if (handle.includes('r')) { newW = Math.max(20, ob.width + dx); }
     if (handle.includes('l')) { newW = Math.max(20, ob.width - dx); newX = ob.x + dx; }
     if (handle.includes('b')) { newH = Math.max(20, ob.height + dy); }
-    if (handle.includes('t') && handle !== 'textbox') { newH = Math.max(20, ob.height - dy); newY = ob.y + dy; }
+    if (handle.includes('t') && data.type !== 'textbox') { newH = Math.max(20, ob.height - dy); newY = ob.y + dy; }
 
     // Corner handles: preserve aspect ratio for ovals
     if ((handle === 'tl' || handle === 'tr' || handle === 'bl' || handle === 'br') && data.type === 'oval') {

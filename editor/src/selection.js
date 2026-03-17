@@ -299,13 +299,15 @@ export function setSelectionRange(startEl, startOff, endEl, endOff) {
     const container = $('pageContainer');
     if (container) {
       let inRange = false;
+      let done = false;
       for (const pageEl of (state.pageElements || [])) {
+        if (done) break;
         const content = pageEl.querySelector('.page-content') || pageEl;
         for (const el of content.children) {
           if (!el.dataset?.nodeId) continue;
           if (el.dataset.nodeId === startEl.dataset.nodeId) inRange = true;
           if (inRange) el.classList.add('select-all-highlight');
-          if (el.dataset.nodeId === endEl.dataset.nodeId) { inRange = false; break; }
+          if (el.dataset.nodeId === endEl.dataset.nodeId) { done = true; break; }
         }
       }
     }

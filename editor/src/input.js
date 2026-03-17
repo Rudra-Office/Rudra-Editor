@@ -471,7 +471,7 @@ export function initInput() {
           return;
         }
         case 's': e.preventDefault(); saveToLocal(); return;
-        case 'f': e.preventDefault(); $('findBar').classList.add('show'); $('findInput').focus(); return;
+        case 'f': e.preventDefault(); $('findBar')?.classList.add('show'); $('findInput')?.focus(); return;
         case 'h': e.preventDefault(); $('findBar').classList.add('show'); $('replaceInput')?.focus(); return;
         case 'p': e.preventDefault(); window.print(); return;
         case '=':
@@ -990,8 +990,8 @@ export function initInput() {
         doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, text);
         broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text });
         renderDocument();
-        const page = $('pageContainer');
-        const updated = page?.querySelector(`[data-node-id="${info.startNodeId}"]`);
+        const container = $('pageContainer');
+        const updated = container?.querySelector(`[data-node-id="${info.startNodeId}"]`);
         if (updated) setCursorAtOffset(updated, info.startOffset + Array.from(text).length);
         recordUndoAction('Paste text');
         updateUndoRedo();
@@ -1140,10 +1140,13 @@ export function initInput() {
   page.addEventListener('dragend', () => { dragSourceInfo = null; });
 
   // ─── Prevent toolbar from stealing focus ───────
-  $('toolbar').addEventListener('mousedown', e => {
-    const tag = e.target.tagName.toLowerCase();
-    if (tag !== 'select' && tag !== 'input') e.preventDefault();
-  });
+  const toolbar = $('toolbar');
+  if (toolbar) {
+    toolbar.addEventListener('mousedown', e => {
+      const tag = e.target.tagName.toLowerCase();
+      if (tag !== 'select' && tag !== 'input') e.preventDefault();
+    });
+  }
 
   // ─── Global Escape handler — close modals/menus ──
   document.addEventListener('keydown', e => {
@@ -1159,29 +1162,29 @@ export function initInput() {
       return;
     }
     // Close find bar
-    if ($('findBar').classList.contains('show')) {
+    if ($('findBar')?.classList.contains('show')) {
       $('findBar').classList.remove('show');
       const activePage = $('pageContainer')?.querySelector('.page-content');
       if (activePage) activePage.focus();
       return;
     }
     // Close table modal
-    if ($('tableModal').classList.contains('show')) {
+    if ($('tableModal')?.classList.contains('show')) {
       $('tableModal').classList.remove('show');
       return;
     }
     // Close comment modal
-    if ($('commentModal').classList.contains('show')) {
+    if ($('commentModal')?.classList.contains('show')) {
       $('commentModal').classList.remove('show');
       return;
     }
     // Close link modal
-    if ($('linkModal').classList.contains('show')) {
+    if ($('linkModal')?.classList.contains('show')) {
       $('linkModal').classList.remove('show');
       return;
     }
     // Close alt text modal
-    if ($('altTextModal').classList.contains('show')) {
+    if ($('altTextModal')?.classList.contains('show')) {
       $('altTextModal').classList.remove('show');
       return;
     }
@@ -1201,16 +1204,17 @@ export function initInput() {
       return;
     }
     // Close menus
-    $('exportMenu').classList.remove('show');
-    $('insertMenu').classList.remove('show');
-    $('tableContextMenu').style.display = 'none';
+    $('exportMenu')?.classList.remove('show');
+    $('insertMenu')?.classList.remove('show');
+    const tcm = $('tableContextMenu');
+    if (tcm) tcm.style.display = 'none';
     // Close comments panel
-    if ($('commentsPanel').classList.contains('show')) {
+    if ($('commentsPanel')?.classList.contains('show')) {
       $('commentsPanel').classList.remove('show');
       return;
     }
     // Close history panel
-    if ($('historyPanel').classList.contains('show')) {
+    if ($('historyPanel')?.classList.contains('show')) {
       $('historyPanel').classList.remove('show');
       return;
     }
@@ -1827,8 +1831,8 @@ function extractImageElement(img) {
   // Prefer getAttribute to avoid URL resolution by DOMParser
   const src = img.getAttribute('src') || img.src;
   if (!src) return null;
-  // Only accept data URLs and blob URLs (file:/// and http:// won't work in paste)
-  if (!src.startsWith('data:') && !src.startsWith('blob:')) return null;
+  // Accept data URLs, blob URLs, and http(s) URLs (external images will be fetched on paste)
+  if (!src.startsWith('data:') && !src.startsWith('blob:') && !src.startsWith('http://') && !src.startsWith('https://')) return null;
   const style = img.style || {};
   // Parse width/height from inline styles, attributes, or defaults
   let width = parseFloat(style.width) || parseFloat(img.getAttribute('width')) || img.naturalWidth || img.width || 200;
@@ -2051,23 +2055,108 @@ function pasteStructuredContent(doc, info, parsed, page) {
         lastNodeId = getLastParaId();
       } else {
         // Subsequent paragraphs after non-paragraph elements (images, tables, etc.)
-        try {
-          // Use WASM paragraph list instead of DOM to get text length
-          const paraText = doc.get_paragraph_text(lastNodeId);
-          const lastLen = paraText ? Array.from(paraText).length : 0;
-          const newId = doc.split_paragraph(lastNodeId, lastLen);
-          const text = el.runs ? el.runs.map(r => r.text).join('') : '';
-          if (text) doc.insert_text_in_paragraph(newId, 0, text);
-          lastNodeId = newId;
-          anyPasted = true;
-        } catch (e) {
-          // Fallback: append paragraph
+        // Collect consecutive paragraphs for batch paste (same as first batch)
+        const textParas = [];
+        let j = i;
+        while (j < elements.length && elements[j].type === 'paragraph') {
+          textParas.push(elements[j]);
+          j++;
+        }
+
+        if (textParas.length > 0) {
+          // Create a new paragraph to paste into
+          let targetNodeId = null;
           try {
-            const text = el.runs ? el.runs.map(r => r.text).join('') : '';
-            const newId = doc.append_paragraph(text);
-            lastNodeId = newId;
-            anyPasted = true;
-          } catch (e2) { console.warn('paste paragraph:', e2); }
+            const paraText = doc.get_paragraph_text(lastNodeId);
+            const lastLen = paraText ? Array.from(paraText).length : 0;
+            targetNodeId = doc.split_paragraph(lastNodeId, lastLen);
+          } catch (_) {
+            try { targetNodeId = doc.append_paragraph(''); } catch (_2) {}
+          }
+
+          if (targetNodeId) {
+            const cleanedParas = textParas.map(p => {
+              const runs = (p.runs || []).filter(r => r.text && r.text.length > 0);
+              return { ...p, runs };
+            }).filter(p => p.runs.length > 0);
+
+            if (cleanedParas.length > 0) {
+              const sanitizedParas = cleanedParas.map(p => {
+                const runs = (p.runs || []).map(r => {
+                  const sr = { text: r.text || '' };
+                  if (r.bold === true) sr.bold = true;
+                  if (r.italic === true) sr.italic = true;
+                  if (r.underline === true) sr.underline = true;
+                  if (r.strikethrough === true) sr.strikethrough = true;
+                  if (r.superscript === true) sr.superscript = true;
+                  if (r.subscript === true) sr.subscript = true;
+                  if (typeof r.fontSize === 'number' && r.fontSize > 0) sr.fontSize = r.fontSize;
+                  if (typeof r.fontFamily === 'string' && r.fontFamily) sr.fontFamily = r.fontFamily;
+                  if (typeof r.color === 'string' && r.color) sr.color = r.color;
+                  if (typeof r.highlightColor === 'string' && r.highlightColor) sr.highlightColor = r.highlightColor;
+                  if (typeof r.hyperlinkUrl === 'string' && r.hyperlinkUrl) sr.hyperlinkUrl = r.hyperlinkUrl;
+                  return sr;
+                });
+                return { ...p, runs };
+              });
+
+              let richPasteOk = false;
+              // Strategy 1: batch paste via paste_formatted_runs_json
+              try {
+                const pasteJson = JSON.stringify({
+                  paragraphs: sanitizedParas.map(p => ({
+                    runs: p.runs,
+                    ...extractParaFmtForJson(p)
+                  }))
+                });
+                doc.paste_formatted_runs_json(targetNodeId, 0, pasteJson);
+                broadcastOp({ action: 'pasteFormattedRuns', nodeId: targetNodeId, offset: 0, runsJson: pasteJson });
+                richPasteOk = true;
+                anyPasted = true;
+              } catch (_) {}
+
+              // Strategy 2: manual formatting
+              if (!richPasteOk) {
+                richPasteOk = pasteWithManualFormatting(doc, targetNodeId, 0, sanitizedParas);
+                if (richPasteOk) anyPasted = true;
+              }
+
+              // Strategy 3: plain text fallback
+              if (!richPasteOk) {
+                try {
+                  const plainText = sanitizedParas.map(p => p.runs.map(r => r.text).join('')).join('\n');
+                  if (plainText) {
+                    doc.paste_plain_text(targetNodeId, 0, plainText);
+                    anyPasted = true;
+                  }
+                } catch (_) {}
+              }
+
+              // Apply list formatting
+              if (anyPasted) {
+                const hasLists = cleanedParas.some(p => p.listType);
+                if (hasLists) {
+                  try {
+                    const allIds = JSON.parse(doc.paragraph_ids_json());
+                    const startIdx = allIds.indexOf(targetNodeId);
+                    if (startIdx >= 0) {
+                      for (let pi = 0; pi < cleanedParas.length; pi++) {
+                        const p = cleanedParas[pi];
+                        if (p.listType) {
+                          const paraIdx = startIdx + pi;
+                          if (paraIdx < allIds.length) {
+                            try { doc.set_list_format(allIds[paraIdx], p.listType, p.listLevel || 0); } catch (_) {}
+                          }
+                        }
+                      }
+                    }
+                  } catch (_) {}
+                }
+              }
+            }
+            lastNodeId = getLastParaId();
+          }
+          i = j - 1; // skip pasted paragraphs
         }
       }
       continue;
@@ -2093,6 +2182,22 @@ function pasteStructuredContent(doc, info, parsed, page) {
           }
           lastNodeId = newId;
           anyPasted = true;
+        } else if (el.src && (el.src.startsWith('http://') || el.src.startsWith('https://'))) {
+          // Fetch external image and insert it
+          const bodyId = getBodyNodeId(lastNodeId);
+          const fetchNodeId = bodyId;
+          fetch(el.src).then(resp => {
+            if (!resp.ok) return;
+            return resp.arrayBuffer();
+          }).then(buf => {
+            if (!buf) return;
+            const bytes = new Uint8Array(buf);
+            const contentType = el.src.match(/\.(png|gif|bmp|webp|svg)$/i) ? `image/${RegExp.$1.toLowerCase()}` : 'image/jpeg';
+            try {
+              doc.insert_image(fetchNodeId, bytes, contentType, el.width || 200, el.height || 200);
+              renderDocument();
+            } catch (_) {}
+          }).catch(() => {});
         }
       } catch (e) { console.warn('paste image:', e); }
       continue;
@@ -2801,7 +2906,8 @@ function closeSlashMenu() {
   state.slashMenuOpen = false;
   state.slashQuery = '';
   state.slashMenuIndex = 0;
-  $('slashMenu').style.display = 'none';
+  const menu = $('slashMenu');
+  if (menu) menu.style.display = 'none';
 }
 
 function updateSlashFilter(query) {

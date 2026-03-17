@@ -182,7 +182,6 @@ function sendOp(opData) {
     if (offlineBuffer.length < MAX_OFFLINE_BUFFER) {
       offlineBuffer.push(opData);
     } else if (offlineBuffer.length === MAX_OFFLINE_BUFFER) {
-      offlineBuffer.push(opData);
       console.warn('Offline buffer limit reached. Some changes may not sync when reconnected.');
     }
     // Update offline pending count in sync status

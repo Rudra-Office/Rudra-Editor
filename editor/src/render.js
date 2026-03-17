@@ -1338,6 +1338,7 @@ function collapseBlock(entry, idx, vs) {
 function restoreBlock(entry, idx) {
   if (entry.visible || !entry.el || !entry.el.parentNode) return;
   const vs = state.virtualScroll;
+  if (!vs) return;
 
   // E8.1d: Save scroll position before restoring to prevent displacement
   const canvas = $('editorCanvas');
