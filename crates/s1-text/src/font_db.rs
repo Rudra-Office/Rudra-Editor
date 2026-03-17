@@ -536,10 +536,14 @@ mod tests {
         // alternatives (Helvetica, Arial, Liberation Sans) should be.
         let id = db.find_with_substitution("Calibri", false, false);
         // If Calibri itself exists, that's fine too; we just need a result
-        assert!(
-            id.is_some() || db.find("Calibri", false, false).is_some() || true,
-            "substitution should find an alternative for Calibri"
-        );
+        // On CI/systems without fonts, substitution may not find anything;
+        // only assert if the system has at least some fonts loaded.
+        if db.len() > 0 {
+            assert!(
+                id.is_some() || db.find("Calibri", false, false).is_some(),
+                "substitution should find an alternative for Calibri when fonts are available"
+            );
+        }
     }
 
     #[test]

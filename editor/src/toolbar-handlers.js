@@ -1,6 +1,6 @@
 // Toolbar event handler wiring
 import { state, $ } from './state.js';
-import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo } from './toolbar.js';
+import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction } from './toolbar.js';
 import { doUndo, doRedo, closeSlashMenu, insertFootnoteAtCursor, insertEndnoteAtCursor } from './input.js';
 import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty } from './render.js';
 import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
@@ -58,10 +58,13 @@ function restoreSelectionForPickers() {
   if (!page) return false;
   const startEl = page.querySelector(`[data-node-id="${info.startNodeId}"]`);
   if (!startEl) return false;
-  // For collapsed selections, just place cursor and let applyFormat handle as pending
+
+  // CRITICAL: Focus the page-content BEFORE setting the range.
+  // Without focus, addRange() silently fails on contenteditable elements.
+  const content = startEl.closest('.page-content');
+  if (content) content.focus();
+
   if (info.collapsed) {
-    const content = startEl.closest('.page-content');
-    if (content) content.focus();
     setSelectionRange(startEl, info.startOffset, startEl, info.startOffset);
     return true;
   }
@@ -175,36 +178,69 @@ export function initToolbar() {
   // Text color
   const colorPicker = $('colorPicker');
   if (colorPicker) {
+    let _colorSelInfo = null;
     colorPicker.addEventListener('pointerdown', () => {
       saveSelection();
-      // Also save the modal-style selection as backup (survives native picker dialog)
-      saveModalSelection();
+      _colorSelInfo = state.lastSelInfo ? { ...state.lastSelInfo } : null;
     });
     colorPicker.addEventListener('input', e => {
       const hex = e.target.value.replace('#', '').toUpperCase();
       $('colorSwatch').style.background = '#' + hex;
-      // Restore selection (native picker may have destroyed it)
-      if (!restoreSelectionForPickers()) {
-        restoreModalSelection();
+      // Restore saved selection and apply directly via WASM
+      if (_colorSelInfo && !_colorSelInfo.collapsed && state.doc) {
+        // Apply format directly using saved selection info (bypasses DOM selection issues)
+        try {
+          syncAllText();
+          state.doc.format_selection(
+            _colorSelInfo.startNodeId, _colorSelInfo.startOffset,
+            _colorSelInfo.endNodeId, _colorSelInfo.endOffset,
+            'color', hex
+          );
+          restoreSelectionForPickers();
+          renderNodesById(collectNodeIdsBetween($('pageContainer'), _colorSelInfo.startNodeId, _colorSelInfo.endNodeId));
+          updateToolbarState();
+          updateUndoRedo();
+          markDirty();
+          broadcastOp({ action: 'formatSelection', startNode: _colorSelInfo.startNodeId, startOffset: _colorSelInfo.startOffset, endNode: _colorSelInfo.endNodeId, endOffset: _colorSelInfo.endOffset, key: 'color', value: hex });
+        } catch (err) { console.error('color apply:', err); }
+      } else {
+        // Collapsed cursor — store as pending format
+        restoreSelectionForPickers();
+        applyFormat('color', hex);
       }
-      applyFormat('color', hex);
     });
   }
 
   // Highlight color
   const highlightPicker = $('highlightPicker');
   if (highlightPicker) {
+    let _hlSelInfo = null;
     highlightPicker.addEventListener('pointerdown', () => {
       saveSelection();
-      saveModalSelection();
+      _hlSelInfo = state.lastSelInfo ? { ...state.lastSelInfo } : null;
     });
     highlightPicker.addEventListener('input', e => {
       const hex = e.target.value.replace('#', '').toUpperCase();
-      // Restore selection (native picker may have destroyed it)
-      if (!restoreSelectionForPickers()) {
-        restoreModalSelection();
+      // Apply highlight directly using saved selection info
+      if (_hlSelInfo && !_hlSelInfo.collapsed && state.doc) {
+        try {
+          syncAllText();
+          state.doc.format_selection(
+            _hlSelInfo.startNodeId, _hlSelInfo.startOffset,
+            _hlSelInfo.endNodeId, _hlSelInfo.endOffset,
+            'highlightColor', hex
+          );
+          restoreSelectionForPickers();
+          renderNodesById(collectNodeIdsBetween($('pageContainer'), _hlSelInfo.startNodeId, _hlSelInfo.endNodeId));
+          updateToolbarState();
+          updateUndoRedo();
+          markDirty();
+          broadcastOp({ action: 'formatSelection', startNode: _hlSelInfo.startNodeId, startOffset: _hlSelInfo.startOffset, endNode: _hlSelInfo.endNodeId, endOffset: _hlSelInfo.endOffset, key: 'highlightColor', value: hex });
+        } catch (err) { console.error('highlight apply:', err); }
+      } else {
+        restoreSelectionForPickers();
+        applyFormat('highlightColor', hex);
       }
-      applyFormat('highlightColor', hex);
     });
   }
 
@@ -1045,7 +1081,9 @@ export function applyFormatPainter() {
 
     renderDocument();
     updateToolbarState();
+    recordUndoAction('Apply format painter');
     updateUndoRedo();
+    markDirty();
     announce('Format applied');
 
     // In "once" mode, exit after first application
@@ -2437,6 +2475,12 @@ function initTableContextMenu() {
   cmAction('cmInsertColRight', () => { state.doc.insert_table_column(state.ctxTable, state.ctxCol + 1); broadcastOp({ action: 'insertTableColumn', tableId: state.ctxTable, index: state.ctxCol + 1 }); });
   cmAction('cmDeleteCol', () => { state.doc.delete_table_column(state.ctxTable, state.ctxCol); broadcastOp({ action: 'deleteTableColumn', tableId: state.ctxTable, index: state.ctxCol }); });
 
+  // Delete entire table
+  cmAction('cmDeleteTable', () => {
+    state.doc.delete_node(state.ctxTable);
+    broadcastOp({ action: 'deleteNode', nodeId: state.ctxTable });
+  });
+
   // UXP-12: Merge cells — uses existing WASM merge_cells API
   cmAction('cmMergeCells', () => {
     // Merge a 2x2 block starting from the right-clicked cell.
@@ -2970,31 +3014,53 @@ function initMoreMenu() {
 
   // Wire up color pickers inside the More menu
   const moreColorPicker = $('moreColorPicker');
+  let _moreColorSelInfo = null;
   if (moreColorPicker) {
     moreColorPicker.addEventListener('pointerdown', () => {
       saveSelection();
-      saveModalSelection();
+      _moreColorSelInfo = state.lastSelInfo ? { ...state.lastSelInfo } : null;
     });
     moreColorPicker.addEventListener('input', e => {
       const hex = e.target.value.replace('#', '').toUpperCase();
       $('colorSwatch').style.background = '#' + hex;
-      if (!restoreSelectionForPickers()) restoreModalSelection();
-      applyFormat('color', hex);
+      if (_moreColorSelInfo && !_moreColorSelInfo.collapsed && state.doc) {
+        try {
+          syncAllText();
+          state.doc.format_selection(_moreColorSelInfo.startNodeId, _moreColorSelInfo.startOffset, _moreColorSelInfo.endNodeId, _moreColorSelInfo.endOffset, 'color', hex);
+          restoreSelectionForPickers();
+          renderDocument();
+          updateToolbarState(); updateUndoRedo(); markDirty();
+        } catch (err) { console.error('more color:', err); }
+      } else {
+        restoreSelectionForPickers();
+        applyFormat('color', hex);
+      }
     });
     moreColorPicker.addEventListener('change', () => {
       closeMoreMenu();
     });
   }
+  let _moreHlSelInfo = null;
   const moreHighlightPicker = $('moreHighlightPicker');
   if (moreHighlightPicker) {
     moreHighlightPicker.addEventListener('pointerdown', () => {
       saveSelection();
-      saveModalSelection();
+      _moreHlSelInfo = state.lastSelInfo ? { ...state.lastSelInfo } : null;
     });
     moreHighlightPicker.addEventListener('input', e => {
       const hex = e.target.value.replace('#', '').toUpperCase();
-      if (!restoreSelectionForPickers()) restoreModalSelection();
-      applyFormat('highlightColor', hex);
+      if (_moreHlSelInfo && !_moreHlSelInfo.collapsed && state.doc) {
+        try {
+          syncAllText();
+          state.doc.format_selection(_moreHlSelInfo.startNodeId, _moreHlSelInfo.startOffset, _moreHlSelInfo.endNodeId, _moreHlSelInfo.endOffset, 'highlightColor', hex);
+          restoreSelectionForPickers();
+          renderDocument();
+          updateToolbarState(); updateUndoRedo(); markDirty();
+        } catch (err) { console.error('more highlight:', err); }
+      } else {
+        restoreSelectionForPickers();
+        applyFormat('highlightColor', hex);
+      }
     });
     moreHighlightPicker.addEventListener('change', () => {
       closeMoreMenu();

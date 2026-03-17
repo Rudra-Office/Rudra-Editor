@@ -627,6 +627,8 @@ export function initInput() {
             broadcastOp({ action: 'insertText', nodeId, offset, text: '\t' });
             const updated = renderNodeById(nodeId);
             if (updated) setCursorAtOffset(updated, offset + 1);
+            recordUndoAction('Insert tab');
+            updateUndoRedo();
             markDirty();
           } catch (err) { console.error('tab insert:', err); }
         }
@@ -1149,6 +1151,7 @@ export function initInput() {
           renderDocument();
         }
       }
+      recordUndoAction('Drop text');
       updateUndoRedo();
       markDirty();
     } catch (err) { console.error('text drop:', err); }
@@ -1394,6 +1397,10 @@ export function initInput() {
       addItem('Delete column', '', () => {
         const colIdx = cell ? Array.from(cell.parentNode.children).indexOf(cell) : 0;
         try { state.doc.delete_table_column(tableId, colIdx); broadcastOp({ action: 'deleteTableColumn', tableNodeId: tableId, colIndex: colIdx }); renderDocument(); recordUndoAction('Delete column'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
+      });
+      addSep();
+      addItem('Delete table', '', () => {
+        try { state.doc.delete_node(tableId); broadcastOp({ action: 'deleteNode', nodeId: tableId }); renderDocument(); recordUndoAction('Delete table'); updateUndoRedo(); markDirty(); } catch (e) { console.error(e); }
       });
       addSep();
     }
@@ -2669,6 +2676,8 @@ function doUndo() {
   if (!state.doc) return;
   clearTimeout(state.syncTimer);
   syncAllText();
+  // Save cursor position before undo for restoration
+  const savedSel = state.lastSelInfo ? { ...state.lastSelInfo } : null;
   try {
     // E3.1: Batch undo — if we're in a typing session, undo all typing steps at once
     const batch = state._typingBatch;
@@ -2686,6 +2695,8 @@ function doUndo() {
     // E3.2: Advance undo history position
     state.undoHistoryPos = Math.min(state.undoHistoryPos + 1, state.undoHistory.length);
     renderDocument();
+    // Restore cursor position after undo
+    restoreCursorAfterUndoRedo(savedSel);
     updateToolbarState();
     renderUndoHistory();
     broadcastOp({ action: 'fullDocSync' });
@@ -2696,15 +2707,42 @@ function doRedo() {
   if (!state.doc) return;
   clearTimeout(state.syncTimer);
   syncAllText();
+  const savedSel = state.lastSelInfo ? { ...state.lastSelInfo } : null;
   try {
     state.doc.redo();
     // E3.2: Move undo history position back
     state.undoHistoryPos = Math.max(state.undoHistoryPos - 1, 0);
     renderDocument();
+    restoreCursorAfterUndoRedo(savedSel);
     updateToolbarState();
     renderUndoHistory();
     broadcastOp({ action: 'fullDocSync' });
   } catch (e) { console.error('redo:', e); }
+}
+
+/** Restore cursor to the best available position after undo/redo re-render */
+function restoreCursorAfterUndoRedo(savedSel) {
+  const page = $('pageContainer');
+  if (!page) return;
+  // Try saved position first
+  if (savedSel && savedSel.startNodeId) {
+    const el = page.querySelector(`[data-node-id="${savedSel.startNodeId}"]`);
+    if (el) {
+      const content = el.closest('.page-content');
+      if (content) content.focus();
+      const maxLen = Array.from(getEditableText(el)).length;
+      const offset = Math.min(savedSel.startOffset || 0, maxLen);
+      setCursorAtOffset(el, offset);
+      return;
+    }
+  }
+  // Fallback: first paragraph
+  const firstEl = page.querySelector('[data-node-id]');
+  if (firstEl) {
+    const content = firstEl.closest('.page-content');
+    if (content) content.focus();
+    setCursorAtStart(firstEl);
+  }
 }
 
 function doCut() {

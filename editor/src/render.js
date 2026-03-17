@@ -619,7 +619,15 @@ export function debouncedSync(el) {
     // Text-only edits within a single paragraph use the debounced path
     // so rapid typing doesn't trigger layout on every keystroke.
     debouncedRepaginate();
-    updateUndoRedo();
+    // Record typing in undo history so the panel isn't empty
+    if (state._typingBatch && !state._typingUndoRecorded) {
+      state._typingUndoRecorded = true;
+      updateUndoRedo();
+      // Defer the record slightly so batch count stabilizes
+      setTimeout(() => { state._typingUndoRecorded = false; }, 600);
+    } else {
+      updateUndoRedo();
+    }
     updateStatusBar();
     state._onTextChanged?.();
   }, 200);
