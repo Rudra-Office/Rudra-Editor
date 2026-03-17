@@ -53,12 +53,20 @@ export function announce(msg) {
 
 function restoreSelectionForPickers() {
   const info = state.lastSelInfo;
-  if (!info || info.collapsed) return false;
+  if (!info) return false;
   const page = $('pageContainer');
   if (!page) return false;
   const startEl = page.querySelector(`[data-node-id="${info.startNodeId}"]`);
+  if (!startEl) return false;
+  // For collapsed selections, just place cursor and let applyFormat handle as pending
+  if (info.collapsed) {
+    const content = startEl.closest('.page-content');
+    if (content) content.focus();
+    setSelectionRange(startEl, info.startOffset, startEl, info.startOffset);
+    return true;
+  }
   const endEl = page.querySelector(`[data-node-id="${info.endNodeId}"]`);
-  if (!startEl || !endEl) return false;
+  if (!endEl) return false;
   setSelectionRange(startEl, info.startOffset, endEl, info.endOffset);
   return true;
 }
@@ -167,11 +175,18 @@ export function initToolbar() {
   // Text color
   const colorPicker = $('colorPicker');
   if (colorPicker) {
-    colorPicker.addEventListener('pointerdown', () => saveSelection());
+    colorPicker.addEventListener('pointerdown', () => {
+      saveSelection();
+      // Also save the modal-style selection as backup (survives native picker dialog)
+      saveModalSelection();
+    });
     colorPicker.addEventListener('input', e => {
-      const hex = e.target.value.replace('#', '');
+      const hex = e.target.value.replace('#', '').toUpperCase();
       $('colorSwatch').style.background = '#' + hex;
-      restoreSelectionForPickers();
+      // Restore selection (native picker may have destroyed it)
+      if (!restoreSelectionForPickers()) {
+        restoreModalSelection();
+      }
       applyFormat('color', hex);
     });
   }
@@ -179,10 +194,16 @@ export function initToolbar() {
   // Highlight color
   const highlightPicker = $('highlightPicker');
   if (highlightPicker) {
-    highlightPicker.addEventListener('pointerdown', () => saveSelection());
+    highlightPicker.addEventListener('pointerdown', () => {
+      saveSelection();
+      saveModalSelection();
+    });
     highlightPicker.addEventListener('input', e => {
-      const hex = e.target.value.replace('#', '');
-      restoreSelectionForPickers();
+      const hex = e.target.value.replace('#', '').toUpperCase();
+      // Restore selection (native picker may have destroyed it)
+      if (!restoreSelectionForPickers()) {
+        restoreModalSelection();
+      }
       applyFormat('highlightColor', hex);
     });
   }
@@ -269,7 +290,20 @@ export function initToolbar() {
     }
     $('tableModal').classList.remove('show');
     if (!state.doc) return;
-    const nodeId = getActiveNodeId();
+    // Restore cursor position saved before modal opened
+    restoreModalSelection();
+    let nodeId = getActiveNodeId();
+    // Fallback: if selection was lost, use the last known selection
+    if (!nodeId && state.lastSelInfo) {
+      nodeId = state.lastSelInfo.startNodeId;
+    }
+    // Last resort: use the first paragraph in the document
+    if (!nodeId) {
+      try {
+        const allIds = JSON.parse(state.doc.paragraph_ids_json());
+        if (allIds.length > 0) nodeId = allIds[0];
+      } catch (_) {}
+    }
     if (!nodeId) return;
     syncAllText();
     try {
@@ -277,6 +311,7 @@ export function initToolbar() {
       broadcastOp({ action: 'insertTable', afterNodeId: nodeId, rows, cols });
       renderDocument();
       updateUndoRedo();
+      markDirty();
       announce(`Table inserted ${rows} by ${cols}`);
     } catch (e) { console.error('insert table:', e); }
   });
@@ -1425,22 +1460,54 @@ function initAppMenubar() {
       entries[prev].focus();
     } else if (e.key === 'ArrowRight') {
       e.preventDefault();
+      // Check if focused element is a submenu trigger — open submenu instead of switching top-level menu
+      const submenuTrigger = document.activeElement?.closest('.app-menu-submenu');
+      if (submenuTrigger) {
+        submenuTrigger.classList.add('open');
+        const subItems = submenuTrigger.querySelectorAll('.app-submenu-dropdown .app-menu-entry');
+        if (subItems.length > 0) subItems[0].focus();
+        return;
+      }
       const nextIdx = (idx + 1) % menuItems.length;
       openMenu(menuItems[nextIdx], true);
       menuBtns[nextIdx].focus();
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
+      // Check if we're inside a submenu — close it and return to parent
+      const openSubmenu = document.activeElement?.closest('.app-menu-submenu.open');
+      if (openSubmenu) {
+        openSubmenu.classList.remove('open');
+        const trigger = openSubmenu.querySelector('.app-menu-submenu-trigger');
+        if (trigger) trigger.focus();
+        return;
+      }
       const prevIdx = (idx - 1 + menuItems.length) % menuItems.length;
       openMenu(menuItems[prevIdx], true);
       menuBtns[prevIdx].focus();
     } else if (e.key === 'Escape') {
       e.preventDefault();
+      // Close submenu first if open, then close menu
+      const openSubmenu = document.activeElement?.closest('.app-menu-submenu.open');
+      if (openSubmenu) {
+        openSubmenu.classList.remove('open');
+        const trigger = openSubmenu.querySelector('.app-menu-submenu-trigger');
+        if (trigger) trigger.focus();
+        return;
+      }
       const btn = openItem.querySelector('.app-menu-btn');
       closeMenubar();
       if (btn) btn.focus();
     } else if (e.key === 'Enter' || e.key === ' ') {
       if (document.activeElement && entries.includes(document.activeElement)) {
         e.preventDefault();
+        // If it's a submenu trigger, open submenu instead of clicking
+        const submenuTrigger = document.activeElement.closest('.app-menu-submenu');
+        if (submenuTrigger && document.activeElement.classList.contains('app-menu-submenu-trigger')) {
+          submenuTrigger.classList.add('open');
+          const subItems = submenuTrigger.querySelectorAll('.app-submenu-dropdown .app-menu-entry');
+          if (subItems.length > 0) subItems[0].focus();
+          return;
+        }
         document.activeElement.click();
       }
     } else if (e.key === 'Home') {
@@ -2076,7 +2143,7 @@ function refreshHistory() {
 
     list.innerHTML = versions.map((v, i) => {
       const diff = i > 0 ? v.wordCount - currentWordCount : 0;
-      const diffStr = diff > 0 ? `<span style="color:#34a853">+${diff}</span>` : diff < 0 ? `<span style="color:#ea4335">${diff}</span>` : '';
+      const diffStr = diff > 0 ? `<span class="diff-added">+${diff}</span>` : diff < 0 ? `<span class="diff-removed">${diff}</span>` : '';
       return `
       <div class="version-card" data-version-id="${v.id}">
         <div class="version-info">
@@ -2167,8 +2234,8 @@ function showTextDiffPopup(oldText, newText, versionLabel) {
       <div class="version-diff-header">
         <span class="version-diff-title">Changes since ${escapeHtml(versionLabel)}</span>
         <span class="version-diff-stats">
-          <span style="color:#34a853">+${added} added</span>,
-          <span style="color:#ea4335">-${removed} removed</span>,
+          <span class="diff-added">+${added} added</span>,
+          <span class="diff-removed">-${removed} removed</span>,
           ${unchanged} unchanged
         </span>
         <button class="version-diff-close" title="Close">&times;</button>
@@ -2904,9 +2971,14 @@ function initMoreMenu() {
   // Wire up color pickers inside the More menu
   const moreColorPicker = $('moreColorPicker');
   if (moreColorPicker) {
+    moreColorPicker.addEventListener('pointerdown', () => {
+      saveSelection();
+      saveModalSelection();
+    });
     moreColorPicker.addEventListener('input', e => {
-      const hex = e.target.value.replace('#', '');
+      const hex = e.target.value.replace('#', '').toUpperCase();
       $('colorSwatch').style.background = '#' + hex;
+      if (!restoreSelectionForPickers()) restoreModalSelection();
       applyFormat('color', hex);
     });
     moreColorPicker.addEventListener('change', () => {
@@ -2915,8 +2987,13 @@ function initMoreMenu() {
   }
   const moreHighlightPicker = $('moreHighlightPicker');
   if (moreHighlightPicker) {
+    moreHighlightPicker.addEventListener('pointerdown', () => {
+      saveSelection();
+      saveModalSelection();
+    });
     moreHighlightPicker.addEventListener('input', e => {
-      const hex = e.target.value.replace('#', '');
+      const hex = e.target.value.replace('#', '').toUpperCase();
+      if (!restoreSelectionForPickers()) restoreModalSelection();
       applyFormat('highlightColor', hex);
     });
     moreHighlightPicker.addEventListener('change', () => {

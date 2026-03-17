@@ -615,6 +615,23 @@ export function initInput() {
           return;
         }
       }
+      // Regular paragraph (not list, not table) — insert tab character
+      if (el && !el.closest?.('td, th')) {
+        e.preventDefault();
+        const nodeId = el.dataset.nodeId;
+        if (nodeId) {
+          const offset = getCursorOffset(el);
+          syncParagraphText(el);
+          try {
+            doc.insert_text_in_paragraph(nodeId, offset, '\t');
+            broadcastOp({ action: 'insertText', nodeId, offset, text: '\t' });
+            const updated = renderNodeById(nodeId);
+            if (updated) setCursorAtOffset(updated, offset + 1);
+            markDirty();
+          } catch (err) { console.error('tab insert:', err); }
+        }
+        return;
+      }
       const cell = el?.closest?.('td, th');
       if (cell) {
         e.preventDefault();
@@ -3038,12 +3055,17 @@ function selectAll() {
   const page = $('pageContainer');
   if (!page || !state.doc) return;
 
-  // Collect all paragraph-level elements across all pages
+  // Collect all paragraph-level elements across all pages (including footnotes/endnotes)
   const allNodes = [];
   const pages = state.pageElements.length > 0 ? state.pageElements : [page];
   for (const pageEl of pages) {
     const content = pageEl.querySelector('.page-content') || pageEl;
+    // Direct children with data-node-id (body paragraphs, tables, images)
     content.querySelectorAll(':scope > [data-node-id]').forEach(el => allNodes.push(el));
+    // Also include footnotes/endnotes sections' children
+    content.querySelectorAll('.footnotes-section [data-node-id], .endnotes-section [data-node-id]').forEach(el => {
+      if (!allNodes.includes(el)) allNodes.push(el);
+    });
   }
   if (allNodes.length === 0) return;
 

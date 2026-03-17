@@ -457,8 +457,8 @@ impl WasmDocument {
                 page.section_index,
                 ids_arr.join(","),
                 table_chunks_str,
-                footer_text.replace('"', "\\\""),
-                header_text.replace('"', "\\\""),
+                escape_json(&footer_text),
+                escape_json(&header_text),
             ));
         }
         Ok(format!("{{\"pages\":[{}]}}", pages_json.join(",")))
@@ -553,7 +553,7 @@ impl WasmDocument {
         // Build JSON array
         let json_arr: Vec<String> = fonts
             .iter()
-            .map(|f| format!("\"{}\"", f.replace('"', "\\\"")))
+            .map(|f| format!("\"{}\"", escape_json(f)))
             .collect();
         Ok(format!("[{}]", json_arr.join(",")))
     }
@@ -2830,6 +2830,10 @@ impl WasmDocument {
         // Bounds-check row indices
         if start_row as usize >= row_ids.len() || end_row as usize >= row_ids.len() {
             return Err(JsError::new("Row index out of bounds"));
+        }
+        // Validate that start <= end to prevent unsigned underflow
+        if start_row > end_row || start_col > end_col {
+            return Err(JsError::new("Invalid merge range: start must be <= end"));
         }
 
         let col_span = (end_col - start_col + 1) as i64;

@@ -591,7 +591,8 @@ export function renderRuler() {
   if (firstLineHandle) firstLineHandle.addEventListener('mousedown', (e) => startDrag('firstLine', e));
   if (rightHandle) rightHandle.addEventListener('mousedown', (e) => startDrag('right', e));
 
-  // UXP-15: Click on ruler to add tab stops
+  // UXP-15: Click on ruler to add tab stops (remove old listener to prevent accumulation)
+  ruler.removeEventListener('click', handleRulerClick);
   ruler.addEventListener('click', handleRulerClick);
 
   // Reset indent cache so they get positioned
