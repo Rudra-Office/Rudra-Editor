@@ -1,24 +1,31 @@
 // Image selection, resize, drag, alignment
 import { state, $ } from './state.js';
 import { renderDocument } from './render.js';
-import { updateUndoRedo } from './toolbar.js';
+import { updateUndoRedo, recordUndoAction } from './toolbar.js';
 import { getActiveNodeId } from './selection.js';
 import { broadcastOp } from './collab.js';
 
 let _imgDelegationSetup = false;
 export function setupImages(scope) {
+  // Set up event delegation ONCE on pageContainer — check flag BEFORE any listener work
+  if (!_imgDelegationSetup) {
+    const page = $('pageContainer');
+    if (page) {
+      _imgDelegationSetup = true;
+      _setupImageDelegation(page);
+    }
+  }
+
   // Mark all images as draggable (no per-element event listeners)
   const root = scope || $('pageContainer');
+  if (!root) return;
   const imgs = root.tagName === 'IMG' ? [root] : root.querySelectorAll('img');
   imgs.forEach(img => {
     img.setAttribute('draggable', 'true');
   });
+}
 
-  // Set up event delegation ONCE on pageContainer — no listener accumulation
-  if (_imgDelegationSetup) return;
-  const page = $('pageContainer');
-  if (!page) return;
-  _imgDelegationSetup = true;
+function _setupImageDelegation(page) {
 
   // Delegated click for image selection
   page.addEventListener('click', e => {
@@ -70,7 +77,7 @@ function onDragOver(e) {
   if (target) {
     if (!_dropIndicator) {
       _dropIndicator = document.createElement('div');
-      _dropIndicator.style.cssText = 'height:3px;background:var(--accent,#1a73e8);margin:2px 0;border-radius:2px;pointer-events:none;transition:opacity .1s';
+      _dropIndicator.className = 'img-drop-indicator';
     }
     const rect = target.getBoundingClientRect();
     const midY = rect.top + rect.height / 2;
@@ -107,6 +114,8 @@ function onDrop(e) {
           broadcastOp({ action: 'moveNodeAfter', nodeId: _draggedImgNodeId, afterId: targetNodeId });
         }
         renderDocument();
+        // ED2-28: Record undo action for image drag & drop so Ctrl+Z works
+        recordUndoAction('Move image');
         updateUndoRedo();
       } catch (err) {
         console.error('move image:', err);
@@ -152,6 +161,8 @@ export function selectImage(img) {
     h.addEventListener('mousedown', startResize);
     wrap.appendChild(h);
   });
+  // Notify properties panel of image selection change
+  document.dispatchEvent(new CustomEvent('s1-selection-context-change'));
 }
 
 export function deselectImage() {
@@ -173,6 +184,8 @@ export function deselectImage() {
   const wrap = img.closest('.img-wrap');
   if (wrap) { wrap.parentNode.insertBefore(img, wrap); wrap.remove(); }
   state.selectedImg = null;
+  // Notify properties panel of image deselection
+  document.dispatchEvent(new CustomEvent('s1-selection-context-change'));
 }
 
 function startResize(e) {
@@ -182,6 +195,9 @@ function startResize(e) {
   if (!wrap) return;
   const img = wrap.querySelector('img');
   if (!img) return;
+  // ED2-14: Remove any stale listeners before adding new ones (prevents leaks on tab switch)
+  document.removeEventListener('mousemove', doResize);
+  document.removeEventListener('mouseup', stopResize);
   state.resizing = {
     img, handle,
     startX: e.clientX, startY: e.clientY,
@@ -244,6 +260,13 @@ function stopResize() {
   _resizePersistTimer = null;
   state.resizing = null;
 }
+
+// ED2-14: Clean up resize listeners when tab loses visibility (prevents leaks on tab switch)
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden && state.resizing) {
+    stopResize();
+  }
+});
 
 export function insertImage(file) {
   const { doc } = state;
@@ -468,4 +491,84 @@ export function initImageContextMenu() {
     document.getElementById('imageContextMenu').style.display = 'none';
     deleteSelectedImage();
   });
+
+  // UXP-21: Image text wrapping submenu
+  const wrapSubmenu = document.getElementById('imWrapSubmenu');
+  if (wrapSubmenu) {
+    wrapSubmenu.querySelectorAll('[data-wrap]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.getElementById('imageContextMenu').style.display = 'none';
+        if (!state._ctxImageNodeId || !state.doc) return;
+        const mode = btn.dataset.wrap;
+        try {
+          // Find the actual image node (not the paragraph).
+          // _ctxImageNodeId is the containing paragraph; walk to find Image child.
+          const imgNodeId = findImageNodeId(state._ctxImageNodeId);
+          if (!imgNodeId) {
+            console.warn('Could not find image node for wrap mode');
+            return;
+          }
+          state.doc.set_image_wrap_mode(imgNodeId, mode);
+          broadcastOp({ action: 'setImageWrapMode', nodeId: imgNodeId, mode });
+          renderDocument();
+          updateUndoRedo();
+        } catch (e) { console.error('set wrap mode:', e); }
+      });
+    });
+
+    // Highlight current wrap mode when opening submenu
+    const wrapWrapper = wrapSubmenu.closest('.ctx-submenu-wrapper');
+    if (wrapWrapper) {
+      wrapWrapper.addEventListener('mouseenter', () => {
+        if (!state._ctxImageNodeId || !state.doc) return;
+        const imgNodeId = findImageNodeId(state._ctxImageNodeId);
+        let currentMode = 'inline';
+        if (imgNodeId) {
+          try { currentMode = state.doc.get_image_wrap_mode(imgNodeId) || 'inline'; } catch (_) {}
+        }
+        wrapSubmenu.querySelectorAll('[data-wrap]').forEach(b => {
+          b.classList.toggle('ctx-item-active', b.dataset.wrap === currentMode);
+        });
+      });
+    }
+  }
+}
+
+/**
+ * Walk from a paragraph-level node ID to find the Image node ID beneath it.
+ * Context menu stores the paragraph node ID; we need the image child's ID
+ * for attribute operations.
+ */
+function findImageNodeId(paraNodeIdStr) {
+  if (!state.doc) return null;
+  // The context menu may have stored either the paragraph or the image itself.
+  // Try to get the node type; if it is already Image, return it.
+  try {
+    const nodeJson = state.doc.node_info_json(paraNodeIdStr);
+    if (nodeJson) {
+      const info = JSON.parse(nodeJson);
+      if (info.type === 'Image') return paraNodeIdStr;
+      // Walk children to find the first Image
+      if (info.children && info.children.length) {
+        for (const childId of info.children) {
+          const childJson = state.doc.node_info_json(childId);
+          if (childJson) {
+            const childInfo = JSON.parse(childJson);
+            if (childInfo.type === 'Image') return childId;
+            // Check grandchildren (Paragraph -> Run -> Image)
+            if (childInfo.children) {
+              for (const gcId of childInfo.children) {
+                const gcJson = state.doc.node_info_json(gcId);
+                if (gcJson) {
+                  const gcInfo = JSON.parse(gcJson);
+                  if (gcInfo.type === 'Image') return gcId;
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  } catch (_) {}
+  return null;
 }

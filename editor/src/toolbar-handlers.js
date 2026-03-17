@@ -32,9 +32,27 @@ function saveModalSelection() {
 function restoreModalSelection() {
   if (!_savedModalSelection) return;
   try {
-    const sel = window.getSelection();
-    sel.removeAllRanges();
-    sel.addRange(_savedModalSelection);
+    // ED2-18: Verify saved range nodes are still in the DOM after re-render
+    const startOk = _savedModalSelection.startContainer && _savedModalSelection.startContainer.isConnected;
+    const endOk = _savedModalSelection.endContainer && _savedModalSelection.endContainer.isConnected;
+    if (startOk && endOk) {
+      const sel = window.getSelection();
+      sel.removeAllRanges();
+      sel.addRange(_savedModalSelection);
+    } else {
+      // Fall back: place cursor at start of first paragraph
+      const firstPara = $('pageContainer')?.querySelector('.page-content p[data-node-id], .page-content h1[data-node-id]');
+      if (firstPara) {
+        const content = firstPara.closest('.page-content');
+        if (content) content.focus();
+        const range = document.createRange();
+        range.setStart(firstPara, 0);
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+    }
   } catch (_) {
     // Range may be invalid if DOM changed; fall back to focusing editor
   }
@@ -441,6 +459,24 @@ export function initToolbar() {
     } catch (e) { console.error('insert page break:', e); }
   });
 
+  // UXP-22: Insert column break
+  if ($('miColumnBreak')) {
+    $('miColumnBreak').addEventListener('click', () => {
+      $('insertMenu').classList.remove('show');
+      if (!state.doc) return;
+      const nodeId = getActiveNodeId();
+      if (!nodeId) return;
+      syncAllText();
+      try {
+        state.doc.insert_column_break(nodeId);
+        broadcastOp({ action: 'insertColumnBreak', paraNodeId: nodeId });
+        renderDocument();
+        updateUndoRedo();
+        announce('Column break inserted');
+      } catch (e) { console.error('insert column break:', e); }
+    });
+  }
+
   // UXP-08: Insert section break (all 4 types via app menu bar)
   const sectionBreakTypes = [
     { id: 'miSectionNextPage', type: 'nextPage', label: 'Section break (next page)' },
@@ -751,16 +787,17 @@ export function initToolbar() {
     toggleDarkMode();
   });
 
-  // Print Preview (E10.3) — switch to Pages view then print
+  // Print Preview (UXP-16) — full-screen read-only preview overlay
   if ($('menuPrintPreview')) $('menuPrintPreview').addEventListener('click', () => {
     closeAllMenus();
-    if (!state.doc) return;
-    // Dynamic import to avoid circular dependency
-    import('./file.js').then(({ switchView }) => {
-      switchView('pages');
-      // Short delay to let pages render before opening print dialog
-      setTimeout(() => window.print(), 300);
-    });
+    openPrintPreview();
+  });
+  // Wire up print preview overlay buttons
+  if ($('printPreviewClose')) $('printPreviewClose').addEventListener('click', closePrintPreview);
+  if ($('printPreviewPrint')) $('printPreviewPrint').addEventListener('click', () => {
+    closePrintPreview();
+    // Short delay so the overlay is removed before the print dialog opens
+    setTimeout(() => window.print(), 120);
   });
 
   // F4.3: Canvas mode toggle — switch between DOM and Canvas rendering
@@ -835,7 +872,10 @@ export function initToolbar() {
         else if (action === 'headerfooter') $('miHeaderFooter').click();
         else if (action === 'footnote') $('miFootnote')?.click();
         else if (action === 'endnote') $('miEndnote')?.click();
+        else if (action === 'equation') $('miEquation')?.click();
+        else if (action === 'bookmark') $('miBookmark')?.click();
         else if (action === 'drawing') $('miDrawing')?.click();
+        else if (action === 'columnbreak') $('miColumnBreak')?.click();
       });
     });
   }
@@ -856,11 +896,17 @@ export function initToolbar() {
   // Page Setup dialog
   initPageSetup();
 
+  // UXP-22: Columns dialog
+  initColumnsModal();
+
   // Touch selection support (double-tap word select, long-press context menu)
   initTouchSelection();
 
   // E9.3: Equation editor
   initEquationModal();
+
+  // UXP-20: Bookmark editor
+  initBookmarkModal();
 
   // E9.1: Custom dictionary & auto-correct
   initDictModal();
@@ -2317,39 +2363,41 @@ export function applyParagraphStyle(styleName) {
   if (!info) return;
 
   syncAllText();
-  const paraIds = getSelectedParagraphIds(info);
-  paraIds.forEach(nodeId => {
-    // Set the style ID on the paragraph node (authoritative for model/export)
-    if (typeof state.doc.set_paragraph_style_id === 'function') {
-      state.doc.set_paragraph_style_id(nodeId, def.styleId);
-      broadcastOp({ action: 'setStyle', nodeId, styleId: def.styleId });
-    }
-    // Also set heading level for backward compatibility with rendering
-    state.doc.set_heading_level(nodeId, def.heading);
-    broadcastOp({ action: 'setHeading', nodeId, level: def.heading });
-
-    // Apply run-level formatting overrides (whole paragraph text)
-    const pEl = $('pageContainer')?.querySelector(`[data-node-id="${nodeId}"]`);
-    const textLen = pEl ? Array.from(pEl.textContent || '').length : 0;
-    if (textLen > 0) {
-      const bcast = (key, value) => {
-        state.doc.format_selection(nodeId, 0, nodeId, textLen, key, value);
-        broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: textLen, key, value });
-      };
-      if (def.fontSize) bcast('fontSize', def.fontSize);
-      if (def.fontFamily) bcast('fontFamily', def.fontFamily);
-      if (def.color) bcast('color', def.color);
-      if (def.italic) {
-        bcast('italic', 'true');
-      } else {
-        try { bcast('italic', 'false'); } catch(_) {}
+  try {
+    const paraIds = getSelectedParagraphIds(info);
+    paraIds.forEach(nodeId => {
+      // Set the style ID on the paragraph node (authoritative for model/export)
+      if (typeof state.doc.set_paragraph_style_id === 'function') {
+        state.doc.set_paragraph_style_id(nodeId, def.styleId);
+        broadcastOp({ action: 'setStyle', nodeId, styleId: def.styleId });
       }
-    }
-  });
+      // Also set heading level for backward compatibility with rendering
+      state.doc.set_heading_level(nodeId, def.heading);
+      broadcastOp({ action: 'setHeading', nodeId, level: def.heading });
 
-  renderDocument();
-  updateToolbarState();
-  updateUndoRedo();
+      // Apply run-level formatting overrides (whole paragraph text)
+      const pEl = $('pageContainer')?.querySelector(`[data-node-id="${nodeId}"]`);
+      const textLen = pEl ? Array.from(pEl.textContent || '').length : 0;
+      if (textLen > 0) {
+        const bcast = (key, value) => {
+          state.doc.format_selection(nodeId, 0, nodeId, textLen, key, value);
+          broadcastOp({ action: 'formatSelection', startNode: nodeId, startOffset: 0, endNode: nodeId, endOffset: textLen, key, value });
+        };
+        if (def.fontSize) bcast('fontSize', def.fontSize);
+        if (def.fontFamily) bcast('fontFamily', def.fontFamily);
+        if (def.color) bcast('color', def.color);
+        if (def.italic) {
+          bcast('italic', 'true');
+        } else {
+          try { bcast('italic', 'false'); } catch(_) {}
+        }
+      }
+    });
+
+    renderDocument();
+    updateToolbarState();
+    updateUndoRedo();
+  } catch (e) { console.warn('applyParagraphStyle:', e); }
 }
 
 function initStyleGallery() {
@@ -2848,7 +2896,7 @@ function applyTableProps(tableId) {
 // When a modal is open, Tab/Shift+Tab cycle only within the modal.
 // Escape closes the modal. Focus returns to the element that opened it.
 // Selection is saved before open and restored after close.
-const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'equationModal', 'dictModal', 'autoCorrectModal', 'shortcutsModal', 'usageStatsModal', 'errorDetailModal', 'whatsNewModal', 'welcomeModal'];
+const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'columnsModal', 'equationModal', 'bookmarkModal', 'dictModal', 'autoCorrectModal', 'shortcutsModal', 'usageStatsModal', 'errorDetailModal', 'whatsNewModal', 'welcomeModal'];
 const FOCUSABLE_SELECTOR = 'button, [href], input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 function initModalFocusTrap() {
@@ -3411,71 +3459,73 @@ function createFromTemplate(templateName) {
   state.doc = state.engine.create();
   state.currentFormat = 'new';
 
-  switch (templateName) {
-    case 'letter':
-      state.doc.append_heading(1, 'Letter');
-      state.doc.append_paragraph(new Date().toLocaleDateString());
-      state.doc.append_paragraph('');
-      state.doc.append_paragraph('Dear [Recipient],');
-      state.doc.append_paragraph('');
-      state.doc.append_paragraph('I am writing to you regarding...');
-      state.doc.append_paragraph('');
-      state.doc.append_paragraph('Sincerely,');
-      state.doc.append_paragraph('[Your Name]');
-      break;
+  try {
+    switch (templateName) {
+      case 'letter':
+        state.doc.append_heading(1, 'Letter');
+        state.doc.append_paragraph(new Date().toLocaleDateString());
+        state.doc.append_paragraph('');
+        state.doc.append_paragraph('Dear [Recipient],');
+        state.doc.append_paragraph('');
+        state.doc.append_paragraph('I am writing to you regarding...');
+        state.doc.append_paragraph('');
+        state.doc.append_paragraph('Sincerely,');
+        state.doc.append_paragraph('[Your Name]');
+        break;
 
-    case 'resume':
-      state.doc.append_heading(1, 'Your Name');
-      state.doc.append_heading(2, 'Contact');
-      state.doc.append_paragraph('Email: your.email@example.com | Phone: (555) 123-4567 | Location: City, State');
-      state.doc.append_heading(2, 'Experience');
-      state.doc.append_paragraph('Job Title - Company Name (Start Date - End Date)');
-      state.doc.append_paragraph('Describe your responsibilities and achievements.');
-      state.doc.append_heading(2, 'Education');
-      state.doc.append_paragraph('Degree - University Name (Graduation Year)');
-      state.doc.append_heading(2, 'Skills');
-      state.doc.append_paragraph('List your relevant skills, technologies, and competencies.');
-      break;
+      case 'resume':
+        state.doc.append_heading(1, 'Your Name');
+        state.doc.append_heading(2, 'Contact');
+        state.doc.append_paragraph('Email: your.email@example.com | Phone: (555) 123-4567 | Location: City, State');
+        state.doc.append_heading(2, 'Experience');
+        state.doc.append_paragraph('Job Title - Company Name (Start Date - End Date)');
+        state.doc.append_paragraph('Describe your responsibilities and achievements.');
+        state.doc.append_heading(2, 'Education');
+        state.doc.append_paragraph('Degree - University Name (Graduation Year)');
+        state.doc.append_heading(2, 'Skills');
+        state.doc.append_paragraph('List your relevant skills, technologies, and competencies.');
+        break;
 
-    case 'report':
-      state.doc.append_heading(1, 'Report Title');
-      state.doc.append_heading(2, 'Executive Summary');
-      state.doc.append_paragraph('Provide a brief overview of the report findings and recommendations.');
-      state.doc.append_heading(2, 'Introduction');
-      state.doc.append_paragraph('Describe the background, purpose, and scope of this report.');
-      state.doc.append_heading(2, 'Conclusion');
-      state.doc.append_paragraph('Summarize the key findings and recommended next steps.');
-      break;
+      case 'report':
+        state.doc.append_heading(1, 'Report Title');
+        state.doc.append_heading(2, 'Executive Summary');
+        state.doc.append_paragraph('Provide a brief overview of the report findings and recommendations.');
+        state.doc.append_heading(2, 'Introduction');
+        state.doc.append_paragraph('Describe the background, purpose, and scope of this report.');
+        state.doc.append_heading(2, 'Conclusion');
+        state.doc.append_paragraph('Summarize the key findings and recommended next steps.');
+        break;
 
-    case 'meeting':
-      state.doc.append_heading(1, 'Meeting Notes');
-      state.doc.append_paragraph('Date: ' + new Date().toLocaleDateString());
-      state.doc.append_paragraph('Attendees: [Name 1], [Name 2], [Name 3]');
-      state.doc.append_heading(2, 'Agenda');
-      state.doc.append_paragraph('1. Topic one');
-      state.doc.append_paragraph('2. Topic two');
-      state.doc.append_heading(2, 'Discussion');
-      state.doc.append_paragraph('Summary of discussion points and decisions made.');
-      state.doc.append_heading(2, 'Action Items');
-      state.doc.append_paragraph('- [Action item 1] - Assigned to [Person] - Due [Date]');
-      state.doc.append_paragraph('- [Action item 2] - Assigned to [Person] - Due [Date]');
-      break;
+      case 'meeting':
+        state.doc.append_heading(1, 'Meeting Notes');
+        state.doc.append_paragraph('Date: ' + new Date().toLocaleDateString());
+        state.doc.append_paragraph('Attendees: [Name 1], [Name 2], [Name 3]');
+        state.doc.append_heading(2, 'Agenda');
+        state.doc.append_paragraph('1. Topic one');
+        state.doc.append_paragraph('2. Topic two');
+        state.doc.append_heading(2, 'Discussion');
+        state.doc.append_paragraph('Summary of discussion points and decisions made.');
+        state.doc.append_heading(2, 'Action Items');
+        state.doc.append_paragraph('- [Action item 1] - Assigned to [Person] - Due [Date]');
+        state.doc.append_paragraph('- [Action item 2] - Assigned to [Person] - Due [Date]');
+        break;
 
-    case 'essay':
-      state.doc.append_heading(1, 'Essay Title');
-      state.doc.append_paragraph('Begin your introduction here. Present the main topic and your thesis statement.');
-      state.doc.append_paragraph('');
-      state.doc.append_paragraph('Develop your argument in the body paragraphs. Each paragraph should focus on a single supporting point with evidence and analysis.');
-      state.doc.append_paragraph('');
-      state.doc.append_paragraph('Conclude by summarizing your main points and restating your thesis in light of the evidence presented.');
-      break;
+      case 'essay':
+        state.doc.append_heading(1, 'Essay Title');
+        state.doc.append_paragraph('Begin your introduction here. Present the main topic and your thesis statement.');
+        state.doc.append_paragraph('');
+        state.doc.append_paragraph('Develop your argument in the body paragraphs. Each paragraph should focus on a single supporting point with evidence and analysis.');
+        state.doc.append_paragraph('');
+        state.doc.append_paragraph('Conclude by summarizing your main points and restating your thesis in light of the evidence presented.');
+        break;
 
-    default:
-      state.doc.append_paragraph('');
-      break;
-  }
+      default:
+        state.doc.append_paragraph('');
+        break;
+    }
 
-  state.doc.clear_history();
+    state.doc.clear_history();
+  } catch (e) { console.warn('createFromTemplate:', e); }
 
   // Activate editor (same pattern as newDocument)
   $('welcomeScreen').style.display = 'none';
@@ -3773,6 +3823,150 @@ function applyPageSetup() {
 }
 
 // ═══════════════════════════════════════════════════
+// UXP-22: Columns Modal
+// ═══════════════════════════════════════════════════
+
+function initColumnsModal() {
+  const menuBtn = $('menuColumns');
+  if (!menuBtn) return;
+
+  menuBtn.addEventListener('click', () => {
+    closeAllMenus();
+    openColumnsModal();
+  });
+
+  // Preset buttons
+  document.querySelectorAll('.columns-preset-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      const cols = parseInt(btn.dataset.cols) || 1;
+      $('colCount').value = cols;
+      // Highlight active preset
+      document.querySelectorAll('.columns-preset-btn').forEach(b => b.classList.remove('active'));
+      btn.classList.add('active');
+    });
+  });
+
+  // Cancel
+  $('colCancelBtn')?.addEventListener('click', () => {
+    $('columnsModal').classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  });
+
+  // Apply
+  $('colApplyBtn')?.addEventListener('click', () => {
+    applyColumns();
+    $('columnsModal').classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  });
+
+  // Sync preset highlight when custom input changes
+  $('colCount')?.addEventListener('input', () => {
+    const val = parseInt($('colCount').value) || 1;
+    document.querySelectorAll('.columns-preset-btn').forEach(b => {
+      b.classList.toggle('active', parseInt(b.dataset.cols) === val);
+    });
+  });
+
+  // Backdrop click to close
+  const modal = $('columnsModal');
+  if (modal) {
+    modal.addEventListener('click', e => {
+      if (e.target === modal) {
+        modal.classList.remove('show');
+        ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+      }
+    });
+  }
+
+  // Enter key to apply
+  [$('colCount'), $('colSpacing')].forEach(input => {
+    if (input) {
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') { e.preventDefault(); $('colApplyBtn')?.click(); }
+        if (e.key === 'Escape') { $('columnsModal').classList.remove('show'); }
+      });
+    }
+  });
+}
+
+function openColumnsModal() {
+  if (!state.doc) return;
+  saveModalSelection();
+
+  // Read current column settings from section 0
+  let currentCols = 1;
+  let currentSpacing = 0.5; // inches
+  try {
+    const json = state.doc.get_section_columns(0);
+    if (json) {
+      const info = JSON.parse(json);
+      currentCols = info.columns || 1;
+      currentSpacing = (info.spacing || 36) / 72; // pt to inches
+    }
+  } catch (_) {}
+
+  $('colCount').value = currentCols;
+  $('colSpacing').value = currentSpacing.toFixed(2);
+
+  // Highlight matching preset
+  document.querySelectorAll('.columns-preset-btn').forEach(b => {
+    b.classList.toggle('active', parseInt(b.dataset.cols) === currentCols);
+  });
+
+  $('columnsModal').classList.add('show');
+}
+
+function applyColumns() {
+  if (!state.doc) return;
+
+  const cols = Math.max(1, Math.min(6, parseInt($('colCount').value) || 1));
+  const spacingIn = Math.max(0, Math.min(3, parseFloat($('colSpacing').value) || 0.5));
+  const spacingPt = spacingIn * 72; // Convert inches to points
+
+  try {
+    state.doc.set_section_columns(0, cols, spacingPt);
+    broadcastOp({ action: 'setSectionColumns', sectionIndex: 0, columns: cols, spacingPt });
+  } catch (e) {
+    console.error('set columns:', e);
+    announce('Failed to set columns');
+    return;
+  }
+
+  // Store in state for render.js to pick up
+  state.sectionColumns = cols;
+  state.sectionColumnSpacing = spacingPt;
+
+  markDirty();
+  renderDocument();
+  announce(`Layout set to ${cols} column${cols > 1 ? 's' : ''}`);
+}
+
+/**
+ * Apply column-count CSS to page-content elements based on section properties.
+ * Called from render.js after rendering the document HTML.
+ */
+export function applyColumnLayout() {
+  if (!state.doc) return;
+  try {
+    const json = state.doc.get_section_columns(0);
+    if (json) {
+      const info = JSON.parse(json);
+      const cols = info.columns || 1;
+      const spacing = info.spacing || 36;
+      document.querySelectorAll('.page-content').forEach(el => {
+        if (cols > 1) {
+          el.setAttribute('data-columns', String(cols));
+          el.style.columnGap = spacing + 'pt';
+        } else {
+          el.removeAttribute('data-columns');
+          el.style.columnGap = '';
+        }
+      });
+    }
+  } catch (_) {}
+}
+
+// ═══════════════════════════════════════════════════
 // E9.3: Equation Editor
 // ═══════════════════════════════════════════════════
 
@@ -3951,6 +4145,235 @@ export function renderDocumentEquations() {
     } catch (_) {
       // Leave raw text
     }
+  });
+}
+
+// ═══════════════════════════════════════════════════
+// UXP-20: Bookmarks & Cross-References
+// ═══════════════════════════════════════════════════
+
+export function openBookmarkModal() {
+  closeAllMenus();
+  saveModalSelection();
+  const input = $('bookmarkNameInput');
+  const errorEl = $('bookmarkNameError');
+  input.value = '';
+  errorEl.style.display = 'none';
+  errorEl.textContent = '';
+  refreshBookmarkList();
+  $('bookmarkModal').classList.add('show');
+  input.focus();
+}
+
+function refreshBookmarkList() {
+  const listSection = $('bookmarkListSection');
+  const listEl = $('bookmarkList');
+  if (!listEl || !listSection) return;
+  listEl.innerHTML = '';
+
+  const container = $('pageContainer');
+  if (!container) { listSection.style.display = 'none'; return; }
+
+  const markers = container.querySelectorAll('[data-bookmark]');
+  if (markers.length === 0) { listSection.style.display = 'none'; return; }
+
+  listSection.style.display = '';
+  markers.forEach(marker => {
+    const name = marker.dataset.bookmark;
+    if (!name) return;
+    const item = document.createElement('div');
+    item.className = 'bookmark-list-item';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    item.title = 'Jump to bookmark: ' + name;
+
+    const nameSpan = document.createElement('span');
+    nameSpan.className = 'bookmark-list-name';
+    nameSpan.textContent = name;
+    item.appendChild(nameSpan);
+
+    const deleteBtn = document.createElement('button');
+    deleteBtn.className = 'bookmark-list-delete';
+    deleteBtn.title = 'Delete bookmark: ' + name;
+    deleteBtn.textContent = '\u00D7';
+    deleteBtn.addEventListener('click', e => {
+      e.stopPropagation();
+      deleteBookmark(name, marker);
+      refreshBookmarkList();
+    });
+    item.appendChild(deleteBtn);
+
+    item.addEventListener('click', () => {
+      $('bookmarkModal').classList.remove('show');
+      scrollToBookmark(name);
+    });
+    item.addEventListener('keydown', e => {
+      if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        $('bookmarkModal').classList.remove('show');
+        scrollToBookmark(name);
+      }
+    });
+    listEl.appendChild(item);
+  });
+}
+
+function scrollToBookmark(name) {
+  const container = $('pageContainer');
+  if (!container) return;
+  const target = container.querySelector('[data-bookmark="' + CSS.escape(name) + '"]');
+  if (target) {
+    target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    // Brief highlight
+    target.classList.add('bookmark-highlight');
+    setTimeout(() => target.classList.remove('bookmark-highlight'), 1500);
+  }
+}
+
+function deleteBookmark(name, markerEl) {
+  if (!state.doc) return;
+  const nodeId = markerEl?.dataset?.nodeId;
+  if (nodeId && typeof state.doc.remove_node === 'function') {
+    try {
+      state.doc.remove_node(nodeId);
+      broadcastOp({ action: 'removeNode', nodeId });
+      renderDocument();
+      updateUndoRedo();
+      announce('Bookmark "' + name + '" deleted');
+    } catch (e) {
+      console.error('delete bookmark:', e);
+    }
+  } else {
+    // Fallback: remove DOM element
+    markerEl?.remove();
+    announce('Bookmark "' + name + '" removed');
+  }
+}
+
+function validateBookmarkName(name) {
+  if (!name || !name.trim()) return 'Bookmark name is required.';
+  if (name.length > 80) return 'Bookmark name must be 80 characters or fewer.';
+  if (!/^[A-Za-z0-9_-][A-Za-z0-9_ -]*$/.test(name)) return 'Use letters, numbers, hyphens, underscores, and spaces only.';
+  // Check uniqueness
+  const container = $('pageContainer');
+  if (container) {
+    const existing = container.querySelector('[data-bookmark="' + CSS.escape(name.trim()) + '"]');
+    if (existing) return 'A bookmark named "' + name.trim() + '" already exists.';
+  }
+  return null;
+}
+
+function insertBookmark(name) {
+  if (!state.doc) return;
+  const nodeId = getActiveNodeId();
+  if (!nodeId) {
+    showToast('Place the cursor in a paragraph first.', 'warning');
+    return;
+  }
+  syncAllText();
+  try {
+    if (typeof state.doc.insert_bookmark === 'function') {
+      const bkId = state.doc.insert_bookmark(nodeId, name);
+      broadcastOp({ action: 'insertBookmark', paraId: nodeId, name });
+      renderDocument();
+      updateUndoRedo();
+      announce('Bookmark "' + name + '" inserted');
+    } else {
+      showToast('Bookmark insertion not available in this build.', 'warning');
+    }
+  } catch (e) {
+    console.error('insert bookmark:', e);
+    showToast('Failed to insert bookmark: ' + e.message, 'error');
+  }
+}
+
+function initBookmarkModal() {
+  const modal = $('bookmarkModal');
+  if (!modal) return;
+
+  const input = $('bookmarkNameInput');
+  const errorEl = $('bookmarkNameError');
+
+  // Validate on input
+  input.addEventListener('input', () => {
+    const err = validateBookmarkName(input.value.trim());
+    if (err && input.value.trim().length > 0) {
+      errorEl.textContent = err;
+      errorEl.style.display = '';
+    } else {
+      errorEl.style.display = 'none';
+    }
+  });
+
+  // Cancel
+  $('bkCancelBtn').addEventListener('click', () => {
+    modal.classList.remove('show');
+  });
+
+  // Insert
+  $('bkInsertBtn').addEventListener('click', () => {
+    const name = input.value.trim();
+    const err = validateBookmarkName(name);
+    if (err) {
+      errorEl.textContent = err;
+      errorEl.style.display = '';
+      input.focus();
+      return;
+    }
+    modal.classList.remove('show');
+    insertBookmark(name);
+  });
+
+  // Enter to submit
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      $('bkInsertBtn').click();
+    }
+  });
+
+  // Backdrop click
+  modal.addEventListener('click', e => {
+    if (e.target === modal) modal.classList.remove('show');
+  });
+
+  // Menu bar entry
+  const miBookmark = $('miBookmark');
+  if (miBookmark) {
+    miBookmark.addEventListener('click', () => {
+      closeAllMenus();
+      $('insertMenu')?.classList.remove('show');
+      openBookmarkModal();
+    });
+  }
+
+  // Tooltip on bookmark markers in document (show on hover, click to scroll)
+  $('pageContainer')?.addEventListener('click', e => {
+    const marker = e.target.closest('[data-bookmark]');
+    if (!marker) return;
+    const name = marker.dataset.bookmark;
+    if (name) {
+      showToast('Bookmark: ' + name, 'info', 2000);
+    }
+  });
+}
+
+/**
+ * Post-render: style bookmark markers with an icon via CSS.
+ * Called after renderDocument().
+ */
+export function renderDocumentBookmarks() {
+  const container = $('pageContainer');
+  if (!container) return;
+  // Bookmark markers are already rendered by WASM with the bookmark-marker class.
+  // This function ensures they have the visual indicator if not already present.
+  container.querySelectorAll('.bookmark-marker').forEach(el => {
+    if (el.querySelector('.bookmark-flag')) return;
+    const flag = document.createElement('span');
+    flag.className = 'bookmark-flag';
+    flag.setAttribute('aria-hidden', 'true');
+    flag.textContent = '';
+    el.prepend(flag);
   });
 }
 
@@ -5079,21 +5502,23 @@ function loadCustomTemplate(idx) {
   state.currentFormat = 'new';
 
   // Try to import the HTML content
-  if (tpl.html && typeof state.doc.import_html === 'function') {
-    try {
-      state.doc.import_html(tpl.html);
-    } catch (_) {
+  try {
+    if (tpl.html && typeof state.doc.import_html === 'function') {
+      try {
+        state.doc.import_html(tpl.html);
+      } catch (_) {
+        const tmp = document.createElement('div');
+        tmp.innerHTML = tpl.html;
+        state.doc.append_paragraph(tmp.textContent || '');
+      }
+    } else {
       const tmp = document.createElement('div');
-      tmp.innerHTML = tpl.html;
+      tmp.innerHTML = tpl.html || '';
       state.doc.append_paragraph(tmp.textContent || '');
     }
-  } else {
-    const tmp = document.createElement('div');
-    tmp.innerHTML = tpl.html || '';
-    state.doc.append_paragraph(tmp.textContent || '');
-  }
 
-  state.doc.clear_history();
+    state.doc.clear_history();
+  } catch (e) { console.warn('loadCustomTemplate:', e); }
 
   $('welcomeScreen').style.display = 'none';
   $('toolbar').classList.add('show');
@@ -5638,6 +6063,149 @@ function initTOCInteraction() {
       entry.click();
     }
   });
+}
+
+/* ═══════════════════════════════════════════════════
+   UXP-16: PRINT PREVIEW — Full-screen read-only preview
+   ═══════════════════════════════════════════════════ */
+
+/** Keyboard handler reference so we can remove it on close */
+let _printPreviewKeyHandler = null;
+
+/**
+ * Open the print preview overlay.
+ * Clones all .doc-page elements from the editor into a scrollable read-only view.
+ * Handles virtual-scroll placeholders by re-rendering content from WASM.
+ */
+function openPrintPreview() {
+  if (!state.doc) return;
+
+  const overlay = $('printPreviewOverlay');
+  const body = $('printPreviewBody');
+  if (!overlay || !body) return;
+
+  // Clear any previous preview content
+  body.innerHTML = '';
+
+  // Gather all rendered pages
+  const pageContainer = $('pageContainer');
+  if (!pageContainer) return;
+  const pages = pageContainer.querySelectorAll('.doc-page');
+
+  if (pages.length === 0) {
+    body.innerHTML = '<p style="color:#9aa0a6;font-size:14px;margin-top:80px">No pages to preview. Open a document first.</p>';
+    overlay.classList.add('show');
+    return;
+  }
+
+  // Clone each page into the preview body
+  for (let i = 0; i < pages.length; i++) {
+    const wrap = document.createElement('div');
+    wrap.className = 'print-preview-page-wrap';
+
+    const clone = pages[i].cloneNode(true);
+    clone.className = 'print-preview-page';
+    // Preserve original page dimensions
+    clone.style.width = pages[i].style.width;
+    clone.style.minHeight = pages[i].style.minHeight;
+
+    // Restore any virtual-scroll placeholders by re-rendering from WASM
+    clone.querySelectorAll('.vs-placeholder').forEach(ph => {
+      const nodeId = ph.dataset?.nodeId;
+      if (nodeId && state.doc) {
+        try {
+          const html = state.doc.render_node_html(nodeId);
+          const temp = document.createElement('div');
+          temp.innerHTML = html;
+          const rendered = temp.firstElementChild;
+          if (rendered) {
+            ph.replaceWith(rendered);
+          }
+        } catch (_) {
+          // Leave placeholder in place if render fails
+        }
+      }
+    });
+
+    // Restore any images that were released by virtual scroll (placeholder src)
+    clone.querySelectorAll('img[data-original-src]').forEach(img => {
+      img.src = img.dataset.originalSrc;
+    });
+
+    // Make all content non-editable
+    clone.querySelectorAll('[contenteditable]').forEach(el => {
+      el.contentEditable = 'false';
+    });
+
+    // Remove any active selection highlights from cloned content
+    clone.querySelectorAll('.select-all-highlight').forEach(el => {
+      el.classList.remove('select-all-highlight');
+    });
+
+    wrap.appendChild(clone);
+
+    // Page number label below each page
+    const label = document.createElement('div');
+    label.className = 'print-preview-page-num';
+    label.textContent = 'Page ' + (i + 1) + ' of ' + pages.length;
+    wrap.appendChild(label);
+
+    body.appendChild(wrap);
+  }
+
+  // Update page count in toolbar
+  const pageInfo = $('printPreviewPageInfo');
+  if (pageInfo) {
+    pageInfo.textContent = pages.length + (pages.length === 1 ? ' page' : ' pages');
+  }
+
+  // Show overlay
+  overlay.classList.add('show');
+
+  // Prevent body scroll when overlay is open
+  document.body.style.overflow = 'hidden';
+
+  // Keyboard handler: Escape to close, Ctrl+P to print
+  _printPreviewKeyHandler = (e) => {
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePrintPreview();
+    } else if ((e.ctrlKey || e.metaKey) && e.key === 'p') {
+      e.preventDefault();
+      e.stopPropagation();
+      closePrintPreview();
+      setTimeout(() => window.print(), 120);
+    }
+  };
+  document.addEventListener('keydown', _printPreviewKeyHandler, true);
+
+  // Focus the close button for accessibility
+  const closeBtn = $('printPreviewClose');
+  if (closeBtn) closeBtn.focus();
+
+  trackEvent('view', 'print-preview-open');
+}
+
+/**
+ * Close the print preview overlay and return to normal editing.
+ */
+function closePrintPreview() {
+  const overlay = $('printPreviewOverlay');
+  if (!overlay) return;
+
+  overlay.classList.remove('show');
+  document.body.style.overflow = '';
+
+  // Clean up cloned content to free memory
+  const body = $('printPreviewBody');
+  if (body) body.innerHTML = '';
+
+  // Remove keyboard handler
+  if (_printPreviewKeyHandler) {
+    document.removeEventListener('keydown', _printPreviewKeyHandler, true);
+    _printPreviewKeyHandler = null;
+  }
 }
 
 /** Re-render page thumbnails / outline after document changes. */

@@ -7,8 +7,13 @@ import { broadcastOp } from './collab.js';
 let _findRefreshTimer = null;
 let _matchCase = false;
 let _wholeWord = false;
+let _findInitialized = false;
 
 export function initFind() {
+  // ED2-08: Prevent duplicate listener registration on reinit
+  if (_findInitialized) return;
+  _findInitialized = true;
+
   // E1.5: Register callback so render.js can trigger find refresh without circular import
   state._onTextChanged = refreshFindIfOpen;
 
@@ -18,8 +23,7 @@ export function initFind() {
   });
 
   $('findClose').addEventListener('click', () => {
-    $('findBar').classList.remove('show');
-    clearHighlights();
+    closeFindBar();
   });
 
   $('findInput').addEventListener('input', () => doFind());
@@ -45,7 +49,7 @@ export function initFind() {
 
   // Escape to close, Tab to cycle within find bar
   const findBarKeydown = e => {
-    if (e.key === 'Escape') { $('findBar').classList.remove('show'); clearHighlights(); }
+    if (e.key === 'Escape') { closeFindBar(); }
     if (e.key === 'Tab') {
       e.preventDefault();
       const focusable = $('findBar').querySelectorAll('input, button');
@@ -215,6 +219,18 @@ function doReplaceAll() {
     state.findMatches = [];
     state.findIndex = -1;
   } catch (e) { console.error('replace all:', e); }
+}
+
+/**
+ * ED2-22/ED2-29: Close the find bar and clean up debounce timer.
+ * Exported so other modules (file.js, input.js) can close the bar properly.
+ */
+export function closeFindBar() {
+  clearTimeout(_findRefreshTimer);
+  _findRefreshTimer = null;
+  const bar = $('findBar');
+  if (bar) bar.classList.remove('show');
+  clearHighlights();
 }
 
 /**

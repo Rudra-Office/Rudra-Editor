@@ -13,12 +13,29 @@ import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
 import { broadcastOp } from './collab.js';
 import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter, enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './toolbar-handlers.js';
+import { closeFindBar } from './find.js';
 
 export function initInput() {
   const page = $('pageContainer');
 
   // ─── Clear pending formats on editor blur ───
-  page.addEventListener('blur', () => {
+  // ED2-06: Only clear when blur goes outside the editor UI (not toolbar/modal)
+  page.addEventListener('blur', (e) => {
+    const related = e.relatedTarget;
+    if (related) {
+      // Don't clear if blur target is inside toolbar, menubar, or a modal
+      if (related.closest && (
+        related.closest('.toolbar') ||
+        related.closest('#toolbar') ||
+        related.closest('.menubar') ||
+        related.closest('.modal-overlay') ||
+        related.closest('.modal') ||
+        related.closest('.find-bar') ||
+        related.closest('.props-panel')
+      )) {
+        return;
+      }
+    }
     state.pendingFormats = {};
   }, true);
 
@@ -498,6 +515,15 @@ export function initInput() {
         return;
       }
 
+      // Ctrl+Shift+B — insert bookmark
+      if (e.shiftKey && e.key.toLowerCase() === 'b') {
+        e.preventDefault();
+        import('./toolbar-handlers.js').then(mod => {
+          if (typeof mod.openBookmarkModal === 'function') mod.openBookmarkModal();
+        });
+        return;
+      }
+
       // Ctrl+Shift+O — toggle document outline panel
       if (e.shiftKey && e.key.toLowerCase() === 'o') {
         e.preventDefault();
@@ -615,7 +641,7 @@ export function initInput() {
           return;
         }
       }
-      // Regular paragraph (not list, not table) — insert tab character
+      // Regular paragraph (not list, not table) — insert tab node
       if (el && !el.closest?.('td, th')) {
         e.preventDefault();
         const nodeId = el.dataset.nodeId;
@@ -623,8 +649,13 @@ export function initInput() {
           const offset = getCursorOffset(el);
           syncParagraphText(el);
           try {
-            doc.insert_text_in_paragraph(nodeId, offset, '\t');
-            broadcastOp({ action: 'insertText', nodeId, offset, text: '\t' });
+            if (typeof doc.insert_tab === 'function') {
+              doc.insert_tab(nodeId, offset);
+            } else {
+              // Fallback: insert tab as text (renders as whitespace)
+              doc.insert_text_in_paragraph(nodeId, offset, '\t');
+            }
+            broadcastOp({ action: 'insertTab', nodeId, offset });
             const updated = renderNodeById(nodeId);
             if (updated) setCursorAtOffset(updated, offset + 1);
             recordUndoAction('Insert tab');
@@ -961,7 +992,9 @@ export function initInput() {
       }
     }
 
-    const text = e.clipboardData.getData('text/plain');
+    // ED2-13: Normalize \r\n to \n for consistent line break handling
+    const rawText = e.clipboardData.getData('text/plain');
+    const text = rawText ? rawText.replace(/\r\n/g, '\n').replace(/\r/g, '\n') : '';
     const html = e.clipboardData.getData('text/html');
 
     // E2.2: Try rich paste (HTML → structured content via WASM)
@@ -1181,9 +1214,9 @@ export function initInput() {
       closeSlashMenu();
       return;
     }
-    // Close find bar
+    // Close find bar (ED2-22: properly clears debounce timer via closeFindBar)
     if ($('findBar')?.classList.contains('show')) {
-      $('findBar').classList.remove('show');
+      closeFindBar();
       const activePage = $('pageContainer')?.querySelector('.page-content');
       if (activePage) activePage.focus();
       return;
@@ -1313,9 +1346,13 @@ export function initInput() {
     addItem('Paste', '\u2318V', async () => {
       try {
         const items = await navigator.clipboard.read();
+        // ED2-19: Guard against null/empty clipboard items
+        if (!items || items.length === 0) return;
         for (const item of items) {
+          if (!item || !item.types) continue;
           if (item.types.includes('text/html')) {
             const blob = await item.getType('text/html');
+            if (!blob) continue;
             const html = await blob.text();
             const parsed = parseClipboardHtml(html);
             if (parsed && parsed.elements.length > 0) {
@@ -1332,6 +1369,7 @@ export function initInput() {
           }
           if (item.types.includes('text/plain')) {
             const blob = await item.getType('text/plain');
+            if (!blob) continue;
             const text = await blob.text();
             const freshInfo = getSelectionInfo();
             if (text && freshInfo && state.doc) {
@@ -1679,6 +1717,20 @@ function walkBlockElements(container, elements) {
 
     // Skip MS Office namespace elements, style/meta/link tags
     if (tag.includes(':') || tag === 'style' || tag === 'meta' || tag === 'link' || tag === 'script') continue;
+
+    // ED2-13: Handle <br> at block level as paragraph separator
+    if (tag === 'br') {
+      // A <br> at the block level breaks the current inline run into a new paragraph
+      const prev = elements[elements.length - 1];
+      if (prev && prev.type === 'paragraph' && prev._fromInline) {
+        // Mark current inline paragraph as complete and start a new one
+        prev._fromInline = false;
+      }
+      // If no previous inline paragraph, the <br> creates an empty paragraph
+      // (equivalent to pressing Enter in an editor)
+      elements.push({ type: 'paragraph', runs: [{ text: '' }], _fromInline: true });
+      continue;
+    }
 
     // Inline-only elements at block level (span, b, i, a, etc.)
     // Merge consecutive inline elements into a single paragraph instead
@@ -2674,6 +2726,10 @@ function placeCursorAfterPaste(page, text, pasteNodeId, pasteOffset) {
 
 function doUndo() {
   if (!state.doc) return;
+  // ED2-21: Reset format painter on undo to prevent stale painter state
+  if (state.formatPainterMode) {
+    exitFormatPainter();
+  }
   clearTimeout(state.syncTimer);
   syncAllText();
   // Save cursor position before undo for restoration
@@ -2705,6 +2761,10 @@ function doUndo() {
 
 function doRedo() {
   if (!state.doc) return;
+  // ED2-21: Reset format painter on redo to prevent stale painter state
+  if (state.formatPainterMode) {
+    exitFormatPainter();
+  }
   clearTimeout(state.syncTimer);
   syncAllText();
   const savedSel = state.lastSelInfo ? { ...state.lastSelInfo } : null;
