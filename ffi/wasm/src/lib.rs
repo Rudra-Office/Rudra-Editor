@@ -47,7 +47,11 @@ impl WasmEngine {
             .inner
             .open(data)
             .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(WasmDocument { batch_label: None, batch_count: 0, inner: Some(doc) })
+        Ok(WasmDocument {
+            batch_label: None,
+            batch_count: 0,
+            inner: Some(doc),
+        })
     }
 
     /// Open a document from bytes with an explicit format.
@@ -59,7 +63,11 @@ impl WasmEngine {
             .inner
             .open_as(data, fmt)
             .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(WasmDocument { batch_label: None, batch_count: 0, inner: Some(doc) })
+        Ok(WasmDocument {
+            batch_label: None,
+            batch_count: 0,
+            inner: Some(doc),
+        })
     }
 }
 
@@ -1695,11 +1703,7 @@ impl WasmDocument {
     /// Like `insert_line_break`, this inserts a `Tab` node inside the
     /// appropriate run, splitting text nodes as needed. Tab nodes render
     /// as `&emsp;` in HTML and as proper tab stops in layout.
-    pub fn insert_tab(
-        &mut self,
-        node_id_str: &str,
-        char_offset: usize,
-    ) -> Result<(), JsError> {
+    pub fn insert_tab(&mut self, node_id_str: &str, char_offset: usize) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
 
@@ -2405,7 +2409,9 @@ impl WasmDocument {
             json.push_str(&format!(",\"spacingAfter\":{:.2}", v));
         }
         // Line spacing
-        if let Some(AttributeValue::LineSpacing(ls)) = para.attributes.get(&AttributeKey::LineSpacing) {
+        if let Some(AttributeValue::LineSpacing(ls)) =
+            para.attributes.get(&AttributeKey::LineSpacing)
+        {
             use s1_model::LineSpacing;
             let ls_str = match ls {
                 LineSpacing::Single => "1.0".to_string(),
@@ -5462,9 +5468,7 @@ impl WasmDocument {
         let start_id = parse_node_id(start_node_str)?;
         let end_id = parse_node_id(end_node_str)?;
 
-        let body_id = model
-            .body_id()
-            .ok_or_else(|| JsError::new("No body"))?;
+        let body_id = model.body_id().ok_or_else(|| JsError::new("No body"))?;
         let body = model
             .node(body_id)
             .ok_or_else(|| JsError::new("Body not found"))?;
@@ -5688,7 +5692,11 @@ impl WasmDocumentBuilder {
             )));
         }
 
-        Ok(WasmDocument { batch_label: None, batch_count: 0, inner: Some(doc) })
+        Ok(WasmDocument {
+            batch_label: None,
+            batch_count: 0,
+            inner: Some(doc),
+        })
     }
 }
 
@@ -7862,7 +7870,9 @@ fn render_paragraph(
             } else {
                 format!(" style=\"{para_style}\"")
             };
-            html.push_str(&format!("<p{nid_attr}{p_style_attr}{data_style_attr}{dir_attr}>"));
+            html.push_str(&format!(
+                "<p{nid_attr}{p_style_attr}{data_style_attr}{dir_attr}>"
+            ));
             if let Some(marker) = list_marker {
                 html.push_str(&format!(
                     "<span class=\"list-marker\" style=\"user-select:none\" contenteditable=\"false\">{marker}</span>"

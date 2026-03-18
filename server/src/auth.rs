@@ -91,10 +91,7 @@ pub struct ApiKeyEntry {
 ///
 /// Checks for JWT (Authorization: Bearer ...) or API key (X-API-Key: ...).
 /// If auth is disabled, passes through with anonymous identity.
-pub async fn auth_middleware(
-    mut request: Request,
-    next: Next,
-) -> Result<Response, StatusCode> {
+pub async fn auth_middleware(mut request: Request, next: Next) -> Result<Response, StatusCode> {
     // Extract auth config from extensions (set by the app state layer)
     let config = request
         .extensions()

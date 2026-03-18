@@ -87,7 +87,10 @@ pub fn parse_section_properties(
                         #[cfg(debug_assertions)]
                         {
                             let tag = String::from_utf8_lossy(e.local_name().as_ref()).to_string();
-                            if matches!(tag.as_str(), "pgBorders" | "lnNumType" | "docGrid" | "vAlign") {
+                            if matches!(
+                                tag.as_str(),
+                                "pgBorders" | "lnNumType" | "docGrid" | "vAlign"
+                            ) {
                                 eprintln!(
                                     "[s1-format-docx] Note: section property <w:{tag}> skipped (not yet modeled)"
                                 );
