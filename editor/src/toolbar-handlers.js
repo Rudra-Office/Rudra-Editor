@@ -2909,7 +2909,7 @@ function applyTableProps(tableId) {
 // When a modal is open, Tab/Shift+Tab cycle only within the modal.
 // Escape closes the modal. Focus returns to the element that opened it.
 // Selection is saved before open and restored after close.
-const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'columnsModal', 'equationModal', 'bookmarkModal', 'dictModal', 'autoCorrectModal', 'shortcutsModal', 'usageStatsModal', 'errorDetailModal', 'whatsNewModal', 'welcomeModal'];
+const MODAL_IDS = ['tableModal', 'commentModal', 'linkModal', 'altTextModal', 'tablePropsModal', 'headerFooterModal', 'templateModal', 'pageSetupModal', 'columnsModal', 'equationModal', 'bookmarkModal', 'dictModal', 'autoCorrectModal', 'shortcutsModal', 'usageStatsModal', 'errorDetailModal', 'whatsNewModal', 'welcomeModal', 'specialCharsModal', 'bordersModal', 'captionModal'];
 const FOCUSABLE_SELECTOR = 'button, [href], input:not([type=hidden]), select, textarea, [tabindex]:not([tabindex="-1"])';
 
 function initModalFocusTrap() {

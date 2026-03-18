@@ -2174,7 +2174,8 @@ function walkBlockElements(container, elements) {
       // Check for images inside the paragraph
       const imgs = child.querySelectorAll('img');
       const runs = extractRunsFromElement(child);
-      if (runs.length > 0) {
+      // Always create paragraph element — empty runs = blank line
+      {
         const para = { type: 'paragraph', runs };
         extractParagraphFormat(child, para);
 
@@ -2214,7 +2215,7 @@ function walkBlockElements(container, elements) {
           if (cls.includes('MsoSubtitle')) para.headingLevel = 2;
         }
 
-        if (runs.length > 0) elements.push(para);
+        elements.push(para);
       }
       // Add any images found inside the paragraph as separate elements
       imgs.forEach(img => {
@@ -2359,11 +2360,12 @@ function pasteStructuredContent(doc, info, parsed, page) {
           j++;
         }
         if (textParas.length > 0) {
-          // Filter runs: drop empty text runs, sanitize data
+          // Clean runs: drop empty text runs but PRESERVE empty paragraphs (blank lines)
           const cleanedParas = textParas.map(p => {
             const runs = (p.runs || []).filter(r => r.text && r.text.length > 0);
             return { ...p, runs };
-          }).filter(p => p.runs.length > 0);
+          });
+          // Don't filter out empty paragraphs — they represent blank lines
 
           if (cleanedParas.length > 0) {
             let richPasteOk = false;
@@ -2492,10 +2494,11 @@ function pasteStructuredContent(doc, info, parsed, page) {
           }
 
           if (targetNodeId) {
+            // Clean runs but preserve empty paragraphs (blank lines)
             const cleanedParas = textParas.map(p => {
               const runs = (p.runs || []).filter(r => r.text && r.text.length > 0);
               return { ...p, runs };
-            }).filter(p => p.runs.length > 0);
+            });
 
             if (cleanedParas.length > 0) {
               const sanitizedParas = cleanedParas.map(p => {
