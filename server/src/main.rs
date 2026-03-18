@@ -1,32 +1,32 @@
 //! s1-server — HTTP API server for s1engine.
 //!
 //! Provides REST API for document management, format conversion,
-//! and serves the web editor as static files.
-//!
-//! # Usage
-//!
-//! ```bash
-//! s1-server                    # Start with defaults (port 8080)
-//! s1-server --port 3000        # Custom port
-//! s1-server --config s1.toml   # Custom config file
-//! ```
+//! real-time collaboration via WebSocket, and serves the web editor.
 
 use axum::{
     extract::DefaultBodyLimit,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use std::net::SocketAddr;
+use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod collab;
 mod config;
 mod routes;
+mod storage;
+mod webhooks;
+
+use collab::RoomManager;
+use routes::AppState;
+use storage::{LocalStorage, MemoryStorage};
+use webhooks::WebhookRegistry;
 
 #[tokio::main]
 async fn main() {
-    // Initialize logging
     tracing_subscriber::registry()
         .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
             "s1_server=info,tower_http=info".into()
@@ -36,32 +36,65 @@ async fn main() {
 
     let config = config::Config::load();
 
+    // Initialize storage backend
+    let storage: Arc<dyn storage::StorageBackend> = match config.storage.as_str() {
+        "memory" => {
+            tracing::info!("Using in-memory storage (data lost on restart)");
+            Arc::new(MemoryStorage::new())
+        }
+        _ => {
+            tracing::info!("Using local storage at {}", config.data_dir);
+            Arc::new(
+                LocalStorage::new(&config.data_dir)
+                    .expect("Failed to create storage directory"),
+            )
+        }
+    };
+
+    let webhook_registry = Arc::new(WebhookRegistry::new());
+    let room_manager = Arc::new(RoomManager::new());
+
+    let state = Arc::new(AppState {
+        storage,
+        webhooks: webhook_registry,
+        rooms: room_manager,
+    });
+
     let app = Router::new()
-        // Health check
         .route("/health", get(routes::health))
-        // API v1
+        // WebSocket collaboration
+        .route("/ws/collab/{room_id}", get(collab::ws_collab_handler))
+        // REST API
         .nest("/api/v1", api_routes())
-        // CORS
+        .with_state(state)
         .layer(CorsLayer::permissive())
-        // Request tracing
         .layer(TraceLayer::new_for_http())
-        // Body limit (64MB for document uploads)
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024));
 
     let addr = SocketAddr::from(([0, 0, 0, 0], config.port));
-    tracing::info!("s1-server starting on {}", addr);
+    tracing::info!("s1-server starting on http://{}", addr);
+    tracing::info!("  REST API: http://{}/api/v1/", addr);
+    tracing::info!("  WebSocket: ws://{}/ws/collab/{{room_id}}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();
 }
 
-fn api_routes() -> Router {
+fn api_routes() -> Router<Arc<AppState>> {
     Router::new()
-        // Document operations
+        // Documents
         .route("/documents", post(routes::create_document))
         .route("/documents", get(routes::list_documents))
+        .route("/documents/{id}", get(routes::get_document_meta))
+        .route("/documents/{id}/content", get(routes::get_document))
+        .route("/documents/{id}", delete(routes::delete_document))
+        .route("/documents/{id}/thumbnail", get(routes::get_thumbnail))
         // Conversion
         .route("/convert", post(routes::convert_document))
+        // Webhooks
+        .route("/webhooks", post(routes::register_webhook))
+        .route("/webhooks", get(routes::list_webhooks))
+        .route("/webhooks/{id}", delete(routes::delete_webhook))
         // Info
         .route("/info", get(routes::server_info))
 }

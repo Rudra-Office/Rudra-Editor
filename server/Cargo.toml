@@ -17,10 +17,17 @@ s1engine = { workspace = true }
 s1-convert = { workspace = true }
 
 # Web framework
-axum = { version = "0.8", features = ["multipart"] }
+axum = { version = "0.8", features = ["multipart", "ws"] }
 tokio = { version = "1", features = ["full"] }
 tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace", "fs"] }
+
+# WebSocket
+axum-extra = { version = "0.10", features = ["typed-header"] }
+futures-util = "0.3"
+
+# Error handling
+thiserror = { workspace = true }
 
 # Serialization
 serde = { version = "1", features = ["derive"] }
@@ -32,6 +39,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # Configuration
 toml = "0.8"
+
+# HTTP client (for webhook delivery)
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 
 # Utilities
 uuid = { version = "1", features = ["v4"] }

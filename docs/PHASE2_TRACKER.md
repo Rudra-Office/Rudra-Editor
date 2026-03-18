@@ -22,8 +22,8 @@
 | P2-08 | Implement S1Editor class (create, open, destroy, setToolbar, setTheme) | DONE |
 | P2-09 | Implement EditorOptions (theme, toolbar, collab, callbacks) | DONE |
 | P2-10 | Implement ToolbarConfig (presets: full, standard, minimal, none) | DONE |
-| P2-11 | Extract existing editor JS into the package structure | OPEN |
-| P2-12 | Vite library mode build (UMD + ESM output) | OPEN |
+| P2-11 | Extract existing editor JS into the package structure | DEFERRED |
+| P2-12 | Vite library mode build (UMD + ESM output) | DONE |
 
 ## Milestone 2.3 — Framework Adapters
 
