@@ -117,6 +117,8 @@ function createHighlightFromSelection() {
   const annotation = new PdfAnnotation('highlight', pageNum, {
     quads,
     selectedText: sel.toString(),
+    pageWidth: pageRect.width,
+    pageHeight: pageRect.height,
   });
   state.pdfAnnotations.push(annotation);
   state.pdfModified = true;
@@ -178,9 +180,11 @@ function addComment(page) {
     const content = input.value.trim();
     document.removeEventListener('mousedown', onOutsideClick, true);
     if (!content) { cleanup(); return; }
-    const annotation = new PdfAnnotation('comment', page.pageNum, {
-      x: page.x, y: page.y, content, replies: [],
-    });
+  const annotation = new PdfAnnotation('comment', page.pageNum, {
+    x: page.x, y: page.y, content, replies: [],
+    pageWidth: page.rect.width,
+    pageHeight: page.rect.height,
+  });
     annotation.color = '#1a73e8';
     state.pdfAnnotations.push(annotation);
     state.pdfModified = true;
@@ -340,6 +344,8 @@ function endRedact(e) {
   } else {
     const annotation = new PdfAnnotation('redact', _redactStart.pageNum, {
       rects: [{ x: left, y: top, width, height }],
+      pageWidth: _redactStart.pageEl.getBoundingClientRect().width,
+      pageHeight: _redactStart.pageEl.getBoundingClientRect().height,
     });
     state.pdfAnnotations.push(annotation);
     state.pdfModified = true;
@@ -378,13 +384,20 @@ export function renderAnnotationsForPage(pageNum) {
 }
 
 function renderHighlightOverlay(ann, container) {
+  const overlayWidth = container.clientWidth || parseFloat(container.style.width) || 1;
+  const overlayHeight = container.clientHeight || parseFloat(container.style.height) || 1;
+  const baseWidth = ann.props.pageWidth || overlayWidth;
+  const baseHeight = ann.props.pageHeight || overlayHeight;
+  const scaleX = overlayWidth / (baseWidth || overlayWidth);
+  const scaleY = overlayHeight / (baseHeight || overlayHeight);
+
   for (const quad of ann.props.quads) {
     const div = document.createElement('div');
     div.className = 'pdf-highlight-overlay';
-    div.style.left = quad.x + 'px';
-    div.style.top = quad.y + 'px';
-    div.style.width = quad.width + 'px';
-    div.style.height = quad.height + 'px';
+    div.style.left = (quad.x * scaleX) + 'px';
+    div.style.top = (quad.y * scaleY) + 'px';
+    div.style.width = (quad.width * scaleX) + 'px';
+    div.style.height = (quad.height * scaleY) + 'px';
     div.title = ann.props.selectedText || '';
     div.dataset.annotId = ann.id;
     div.addEventListener('click', (e) => { e.stopPropagation(); selectAnnotation(ann.id); });
@@ -393,10 +406,17 @@ function renderHighlightOverlay(ann, container) {
 }
 
 function renderCommentMarker(ann, container) {
+  const overlayWidth = container.clientWidth || parseFloat(container.style.width) || 1;
+  const overlayHeight = container.clientHeight || parseFloat(container.style.height) || 1;
+  const baseWidth = ann.props.pageWidth || overlayWidth;
+  const baseHeight = ann.props.pageHeight || overlayHeight;
+  const scaleX = overlayWidth / (baseWidth || overlayWidth);
+  const scaleY = overlayHeight / (baseHeight || overlayHeight);
+
   const marker = document.createElement('div');
   marker.className = 'pdf-comment-marker';
-  marker.style.left = (ann.props.x - 12) + 'px';
-  marker.style.top = (ann.props.y - 12) + 'px';
+  marker.style.left = (ann.props.x * scaleX) - 12 + 'px';
+  marker.style.top = (ann.props.y * scaleY) - 12 + 'px';
   marker.innerHTML = '<span class="msi">comment</span>';
   marker.title = ann.props.content;
   marker.dataset.annotId = ann.id;
@@ -409,13 +429,19 @@ function renderCommentMarker(ann, container) {
 }
 
 function renderRedactOverlay(ann, container) {
+  const overlayWidth = container.clientWidth || parseFloat(container.style.width) || 1;
+  const overlayHeight = container.clientHeight || parseFloat(container.style.height) || 1;
+  const baseWidth = ann.props.pageWidth || overlayWidth;
+  const baseHeight = ann.props.pageHeight || overlayHeight;
+  const scaleX = overlayWidth / (baseWidth || overlayWidth);
+  const scaleY = overlayHeight / (baseHeight || overlayHeight);
   for (const rect of ann.props.rects) {
     const div = document.createElement('div');
     div.className = 'pdf-redact-overlay';
-    div.style.left = rect.x + 'px';
-    div.style.top = rect.y + 'px';
-    div.style.width = rect.width + 'px';
-    div.style.height = rect.height + 'px';
+    div.style.left = (rect.x * scaleX) + 'px';
+    div.style.top = (rect.y * scaleY) + 'px';
+    div.style.width = (rect.width * scaleX) + 'px';
+    div.style.height = (rect.height * scaleY) + 'px';
     div.title = 'Redaction area';
     div.dataset.annotId = ann.id;
     div.addEventListener('click', (e) => { e.stopPropagation(); selectAnnotation(ann.id); });
@@ -511,6 +537,13 @@ export function savePdfWithAnnotations() {
   state.pdfModified = false;
   showToast('PDF downloaded');
 }
+
+document.addEventListener('pdfPageRendered', (event) => {
+  const pageNum = event?.detail?.pageNum;
+  if (pageNum) {
+    renderAnnotationsForPage(pageNum);
+  }
+});
 
 // ─── Helpers ─────────────────────────────────────────
 
