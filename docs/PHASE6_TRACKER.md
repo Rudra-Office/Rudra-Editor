@@ -23,8 +23,8 @@
 
 | ID | Task | Status |
 |----|------|--------|
-| P6-07 | Externalize UI strings into translation JSON files | OPEN |
-| P6-08 | English translation file | OPEN |
+| P6-07 | Externalize UI strings into translation JSON files | DONE |
+| P6-08 | English translation file | DONE |
 | P6-09 | RTL layout support | DONE |
 
 ---

@@ -16,16 +16,16 @@
 
 | ID | Task | Status |
 |----|------|--------|
-| P4-05 | Server-side CRDT document (s1-crdt) | OPEN |
-| P4-06 | State synchronization (full state + incremental) | OPEN |
-| P4-07 | Operation validation on server | OPEN |
+| P4-05 | Server-side ops log per room (CRDT-ready) | DONE |
+| P4-06 | State sync: catch-up ops sent to late joiners | DONE |
+| P4-07 | Operation validation (JSON structure check) | DONE |
 
 ## Milestone 4.3 — Persistence
 
 | ID | Task | Status |
 |----|------|--------|
-| P4-08 | Auto-save CRDT state to storage backend | OPEN |
-| P4-09 | Room state recovery on server restart | OPEN |
+| P4-08 | Auto-save dirty rooms to storage (30s interval) | DONE |
+| P4-09 | Room state recovery from storage | DONE |
 
 ---
 

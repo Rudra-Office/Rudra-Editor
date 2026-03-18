@@ -16,15 +16,15 @@
 
 | ID | Task | Status |
 |----|------|--------|
-| P8-05 | examples/ directory structure | OPEN |
-| P8-06 | React embedding example | OPEN |
-| P8-07 | Document converter CLI example | OPEN |
+| P8-05 | examples/ directory structure | DONE |
+| P8-06 | React embedding example | DONE |
+| P8-07 | Document converter CLI example | DONE |
 
 ## Milestone 8.3 — Community
 
 | ID | Task | Status |
 |----|------|--------|
-| P8-08 | GitHub Discussions enabled | OPEN |
+| P8-08 | GitHub Discussions enabled | READY |
 | P8-09 | Issue templates (done in Phase 0) | DONE |
 | P8-10 | Contributing guide (done in Phase 0) | DONE |
 
