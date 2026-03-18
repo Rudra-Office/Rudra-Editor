@@ -15,7 +15,10 @@ import { renderDocument, renderNodeById } from './render.js';
 
 // ─── Configuration ────────────────────────────────────
 
-const DEFAULT_RELAY_URL = 'ws://localhost:8787';
+// Default WebSocket URL — points to s1-server (not the static file server).
+// Override via URL param ?relay=ws://... or via share dialog.
+const DEFAULT_RELAY_URL = window.S1_CONFIG?.relayUrl
+  || (window.location.protocol === 'https:' ? 'wss://' : 'ws://') + window.location.hostname + ':8080/ws/collab';
 const RECONNECT_DELAYS = [2000, 4000, 8000, 16000, 30000];
 const MAX_RECONNECT_ATTEMPTS = 5;
 const CURSOR_BROADCAST_INTERVAL = 2000;
@@ -113,8 +116,15 @@ export function getCollabRoom() {
 function connect(url) {
   if (ws) { try { ws.close(); } catch (_) {} }
 
+  // Append room ID to URL path if the URL ends with /ws/collab
+  // (s1-server expects /ws/collab/{room_id})
+  let wsUrl = url;
+  if (roomId && url.includes('/ws/collab') && !url.includes('/ws/collab/')) {
+    wsUrl = url.replace(/\/?$/, '/') + encodeURIComponent(roomId);
+  }
+
   try {
-    ws = new WebSocket(url);
+    ws = new WebSocket(wsUrl);
   } catch (_) {
     scheduleReconnect(url);
     return;
@@ -1010,8 +1020,12 @@ export function showShareDialog() {
     return;
   }
 
-  // Generate a room ID and shareable URL with permission level
-  const generatedRoom = Math.random().toString(36).substring(2, 10);
+  // Generate a room ID from document name or a random ID.
+  // In production, this should come from the server (document ID).
+  const docName = $('docName')?.value?.trim().replace(/\s+/g, '-').toLowerCase() || '';
+  const generatedRoom = docName
+    ? `doc-${docName}-${Date.now().toString(36)}`
+    : `room-${Math.random().toString(36).substring(2, 10)}`;
   const permSelect = $('sharePermission');
   const access = permSelect ? permSelect.value : 'edit';
   const shareUrl = `${window.location.origin}${window.location.pathname}?room=${generatedRoom}&relay=${encodeURIComponent(DEFAULT_RELAY_URL)}&access=${access}`;
