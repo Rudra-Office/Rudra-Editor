@@ -67,11 +67,7 @@ pub async fn create_document(
             let now = chrono::Utc::now().to_rfc3339();
 
             // Detect format from filename
-            let format = filename
-                .rsplit('.')
-                .next()
-                .unwrap_or("bin")
-                .to_lowercase();
+            let format = filename.rsplit('.').next().unwrap_or("bin").to_lowercase();
 
             let meta = DocumentMeta {
                 id: doc_id.clone(),
@@ -85,10 +81,12 @@ pub async fn create_document(
                 updated_at: now,
             };
 
-            state
-                .storage
-                .put(&doc_id, &data, &meta)
-                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {e}")))?;
+            state.storage.put(&doc_id, &data, &meta).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Storage error: {e}"),
+                )
+            })?;
 
             return Ok((
                 StatusCode::CREATED,
@@ -115,8 +113,12 @@ pub struct ListParams {
     pub page_size: usize,
 }
 
-fn default_page() -> usize { 1 }
-fn default_page_size() -> usize { 20 }
+fn default_page() -> usize {
+    1
+}
+fn default_page_size() -> usize {
+    20
+}
 
 /// List documents (paginated).
 pub async fn list_documents(
@@ -124,10 +126,12 @@ pub async fn list_documents(
     Query(params): Query<ListParams>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
     let offset = (params.page.saturating_sub(1)) * params.page_size;
-    let (docs, total) = state
-        .storage
-        .list(offset, params.page_size)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {e}")))?;
+    let (docs, total) = state.storage.list(offset, params.page_size).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {e}"),
+        )
+    })?;
 
     Ok(Json(json!({
         "documents": docs,
@@ -142,15 +146,15 @@ pub async fn get_document(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    state
-        .storage
-        .get(&id)
-        .map_err(|e| match e {
-            crate::storage::StorageError::NotFound(_) => {
-                (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
-            }
-            other => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {other}")),
-        })
+    state.storage.get(&id).map_err(|e| match e {
+        crate::storage::StorageError::NotFound(_) => {
+            (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
+        }
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {other}"),
+        ),
+    })
 }
 
 /// Get document metadata by ID.
@@ -158,15 +162,15 @@ pub async fn get_document_meta(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Json<Value>, (StatusCode, String)> {
-    let meta = state
-        .storage
-        .get_meta(&id)
-        .map_err(|e| match e {
-            crate::storage::StorageError::NotFound(_) => {
-                (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
-            }
-            other => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {other}")),
-        })?;
+    let meta = state.storage.get_meta(&id).map_err(|e| match e {
+        crate::storage::StorageError::NotFound(_) => {
+            (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
+        }
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {other}"),
+        ),
+    })?;
 
     Ok(Json(serde_json::to_value(meta).unwrap_or_default()))
 }
@@ -176,23 +180,21 @@ pub async fn delete_document(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<StatusCode, (StatusCode, String)> {
-    state
-        .storage
-        .delete(&id)
-        .map_err(|e| match e {
-            crate::storage::StorageError::NotFound(_) => {
-                (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
-            }
-            other => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {other}")),
-        })?;
+    state.storage.delete(&id).map_err(|e| match e {
+        crate::storage::StorageError::NotFound(_) => {
+            (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
+        }
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {other}"),
+        ),
+    })?;
 
     Ok(StatusCode::NO_CONTENT)
 }
 
 /// Stateless format conversion.
-pub async fn convert_document(
-    mut multipart: Multipart,
-) -> Result<Vec<u8>, (StatusCode, String)> {
+pub async fn convert_document(mut multipart: Multipart) -> Result<Vec<u8>, (StatusCode, String)> {
     let mut file_data: Option<Vec<u8>> = None;
     let mut target_format = String::from("pdf");
 
@@ -239,8 +241,12 @@ pub async fn convert_document(
         }
     };
 
-    doc.export(format)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Export failed: {e}")))
+    doc.export(format).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Export failed: {e}"),
+        )
+    })
 }
 
 // ─── Thumbnail ──────────────────────────────────────
@@ -253,25 +259,32 @@ pub async fn get_thumbnail(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    let data = state
-        .storage
-        .get(&id)
-        .map_err(|e| match e {
-            crate::storage::StorageError::NotFound(_) => {
-                (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
-            }
-            other => (StatusCode::INTERNAL_SERVER_ERROR, format!("Storage error: {other}")),
-        })?;
+    let data = state.storage.get(&id).map_err(|e| match e {
+        crate::storage::StorageError::NotFound(_) => {
+            (StatusCode::NOT_FOUND, format!("Document not found: {id}"))
+        }
+        other => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Storage error: {other}"),
+        ),
+    })?;
 
     let engine = s1engine::Engine::new();
-    let doc = engine
-        .open(&data)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("Open failed: {e}")))?;
+    let doc = engine.open(&data).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Open failed: {e}"),
+        )
+    })?;
 
     // Export as PDF (first page thumbnail would require a rasterizer;
     // for now we return a full PDF — consumers can render page 1 client-side).
-    doc.export(s1engine::Format::Pdf)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, format!("PDF export failed: {e}")))
+    doc.export(s1engine::Format::Pdf).map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("PDF export failed: {e}"),
+        )
+    })
 }
 
 // ─── Webhooks ───────────────────────────────────────
@@ -288,7 +301,11 @@ pub async fn register_webhook(
 
     let events: Vec<String> = body["events"]
         .as_array()
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_else(|| vec!["*".to_string()]);
 
     let webhook = Webhook {
@@ -306,9 +323,7 @@ pub async fn register_webhook(
 }
 
 /// List all registered webhooks.
-pub async fn list_webhooks(
-    State(state): State<Arc<AppState>>,
-) -> Json<Value> {
+pub async fn list_webhooks(State(state): State<Arc<AppState>>) -> Json<Value> {
     let hooks = state.webhooks.list();
     Json(json!({ "webhooks": hooks, "total": hooks.len() }))
 }

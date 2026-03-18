@@ -184,7 +184,11 @@ async fn handle_collab_socket(socket: WebSocket, room_id: String, state: Arc<App
             "type": "catchUp",
             "op": serde_json::from_str::<serde_json::Value>(op).unwrap_or_default(),
         });
-        if sender.send(Message::Text(catch_up.to_string().into())).await.is_err() {
+        if sender
+            .send(Message::Text(catch_up.to_string().into()))
+            .await
+            .is_err()
+        {
             state.rooms.leave(&room_id).await;
             return;
         }

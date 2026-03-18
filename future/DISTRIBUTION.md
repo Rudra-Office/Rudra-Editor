@@ -71,7 +71,7 @@ edition = "2021"
 rust-version = "1.75"
 license = "MIT OR Apache-2.0"
 description = "Core document model for s1engine — document tree, nodes, attributes, styles"
-repository = "https://github.com/nicholasgasior/s1engine"
+repository = "https://github.com/schnsrw/s1engine"
 homepage = "https://s1engine.dev"
 documentation = "https://docs.rs/s1-model"
 readme = "README.md"
@@ -200,7 +200,7 @@ packages/
   "files": ["dist", "LICENSE", "README.md"],
   "repository": {
     "type": "git",
-    "url": "https://github.com/nicholasgasior/s1engine",
+    "url": "https://github.com/schnsrw/s1engine",
     "directory": "packages/editor"
   },
   "homepage": "https://s1engine.dev",

@@ -16,8 +16,8 @@
 
 | ID | Task | Status |
 |----|------|--------|
-| P7-05 | Middleware hooks (pre-save, post-save, pre-export) | OPEN |
-| P7-06 | Custom API endpoints under /api/v1/plugins/ | OPEN |
+| P7-05 | Middleware hooks (pre-save, post-save, pre-export) | DONE |
+| P7-06 | Custom API endpoints under /api/v1/plugins/ | DEFERRED |
 
 ## Milestone 7.3 — Built-in Plugins
 

@@ -17,6 +17,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 mod auth;
 mod collab;
 mod config;
+mod hooks;
 mod routes;
 mod storage;
 mod webhooks;
@@ -29,9 +30,10 @@ use webhooks::WebhookRegistry;
 #[tokio::main]
 async fn main() {
     tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| {
-            "s1_server=info,tower_http=info".into()
-        }))
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "s1_server=info,tower_http=info".into()),
+        )
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -46,8 +48,7 @@ async fn main() {
         _ => {
             tracing::info!("Using local storage at {}", config.data_dir);
             Arc::new(
-                LocalStorage::new(&config.data_dir)
-                    .expect("Failed to create storage directory"),
+                LocalStorage::new(&config.data_dir).expect("Failed to create storage directory"),
             )
         }
     };

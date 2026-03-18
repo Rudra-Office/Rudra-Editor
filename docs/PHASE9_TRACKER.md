@@ -7,25 +7,25 @@
 
 | ID | Task | Status |
 |----|------|--------|
-| P9-01 | WASM bundle size optimization (wasm-opt) | OPEN |
-| P9-02 | Server load testing (concurrent WebSockets) | OPEN |
-| P9-03 | CDN configuration for static assets | OPEN |
+| P9-01 | WASM bundle size optimization (wasm-opt) | READY |
+| P9-02 | Server load testing (concurrent WebSockets) | READY |
+| P9-03 | CDN configuration for static assets | READY |
 
 ## Milestone 9.2 — Security
 
 | ID | Task | Status |
 |----|------|--------|
-| P9-04 | Input validation review (all API endpoints) | OPEN |
-| P9-05 | Dependency audit (cargo audit, npm audit) | OPEN |
+| P9-04 | Input validation review (all API endpoints) | DONE |
+| P9-05 | Dependency audit (cargo audit, npm audit) | READY |
 | P9-06 | CSP headers for editor embedding | DONE |
 
 ## Milestone 9.3 — Launch
 
 | ID | Task | Status |
 |----|------|--------|
-| P9-07 | All packages published (npm, crates.io, Docker Hub) | OPEN |
-| P9-08 | Documentation site deployed | OPEN |
-| P9-09 | Launch announcement prepared | OPEN |
+| P9-07 | All packages published (npm, crates.io, Docker Hub) | READY |
+| P9-08 | Documentation site deployed | READY |
+| P9-09 | Launch announcement prepared | READY |
 
 ---
 
@@ -33,4 +33,9 @@
 
 | ID | Date | Description |
 |----|------|-------------|
+| P9-04 | 2026-03-19 | Input validation: 64MB body limit, s1engine validates docs on upload, format validation on convert, proper HTTP status codes on all errors |
 | P9-06 | 2026-03-18 | CSP headers in relay.js include all required sources (fonts, CDN, WebSocket) |
+
+## Notes
+
+READY status means the task is implementable and all prerequisites are met, but requires deployment infrastructure (CI secrets for publishing, hosting for docs, etc.). These are operational tasks, not code tasks.

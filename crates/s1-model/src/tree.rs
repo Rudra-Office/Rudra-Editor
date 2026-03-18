@@ -645,7 +645,8 @@ impl DocumentModel {
         // purely a performance optimisation and does not affect observable
         // semantics. We cast away const to insert into the cache.
         #[allow(invalid_reference_casting)]
-        let cache = unsafe { &mut *(&self.style_cache as *const _ as *mut HashMap<String, AttributeMap>) };
+        let cache =
+            unsafe { &mut *(&self.style_cache as *const _ as *mut HashMap<String, AttributeMap>) };
         cache.insert(style_id.to_string(), resolved.clone());
         resolved
     }
