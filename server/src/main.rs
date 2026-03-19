@@ -26,6 +26,7 @@ mod collab;
 mod config;
 mod file_sessions;
 mod hooks;
+mod integration;
 mod plugins;
 mod routes;
 mod storage;
@@ -91,6 +92,8 @@ async fn main() {
         // WebSocket editing (per file) — supports both URL patterns
         .route("/ws/edit/{file_id}", get(collab::ws_collab_handler))
         .route("/ws/collab/{file_id}", get(collab::ws_collab_handler))
+        // Integration entry point: /edit?token=<jwt>
+        .route("/edit", get(integration::handle_edit))
         // REST API
         .nest("/api/v1", api_routes())
         // Admin panel (protected by Basic Auth)
@@ -147,6 +150,7 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/files/{id}", get(routes::get_file_info))
         .route("/files/{id}/download", get(routes::download_file))
         .route("/files/{id}", delete(routes::close_file))
+        .route("/files/{id}/save", post(integration::trigger_save_callback))
         // Documents (persistent storage)
         .route("/documents", post(routes::create_document))
         .route("/documents", get(routes::list_documents))
