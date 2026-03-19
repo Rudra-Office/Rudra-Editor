@@ -1,16 +1,18 @@
-//! Real-time collaboration via WebSocket.
+//! Real-time collaborative editing via WebSocket.
 //!
-//! Each document gets a "room". Peers join the room and broadcast operations.
-//! The server maintains authoritative CRDT state and persists periodically.
+//! Each file being edited gets a room keyed by `file_id`.
+//! The server maintains authoritative document state via file sessions.
+//! New editors receive the latest snapshot on connect.
 
 use axum::{
     extract::{
         ws::{Message, WebSocket},
-        Path, State, WebSocketUpgrade,
+        Path, Query, State, WebSocketUpgrade,
     },
     response::IntoResponse,
 };
 use futures_util::{SinkExt, StreamExt};
+use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
@@ -20,16 +22,11 @@ use crate::storage::StorageBackend;
 
 /// A collaboration room for a document.
 struct Room {
-    /// Broadcast channel for operations.
     tx: broadcast::Sender<String>,
-    /// Connected peer count.
     peer_count: usize,
-    /// Operation log for late-joiners and persistence.
     ops_log: Vec<String>,
-    /// Document ID this room is for.
     #[allow(dead_code)]
     doc_id: String,
-    /// Whether room state has been modified since last save.
     dirty: bool,
 }
 
@@ -45,7 +42,6 @@ impl RoomManager {
         }
     }
 
-    /// Get or create a room. Returns (broadcast sender, ops log for catch-up).
     async fn join(&self, room_id: &str) -> (broadcast::Sender<String>, Vec<String>) {
         let mut rooms = self.rooms.lock().await;
         if let Some(room) = rooms.get_mut(room_id) {
@@ -67,30 +63,23 @@ impl RoomManager {
         }
     }
 
-    /// Record an operation in the room's log.
     async fn record_op(&self, room_id: &str, op: &str) {
         let mut rooms = self.rooms.lock().await;
         if let Some(room) = rooms.get_mut(room_id) {
             room.ops_log.push(op.to_string());
             room.dirty = true;
-            // Cap log size to prevent unbounded growth
             if room.ops_log.len() > 10_000 {
                 room.ops_log.drain(..5_000);
             }
         }
     }
 
-    /// Validate an operation message (basic JSON structure check).
     fn validate_op(msg: &str) -> bool {
-        // Must be valid JSON with a "type" field
-        if let Ok(val) = serde_json::from_str::<serde_json::Value>(msg) {
-            val.get("type").is_some()
-        } else {
-            false
-        }
+        serde_json::from_str::<serde_json::Value>(msg)
+            .map(|v| v.get("type").is_some() || v.get("action").is_some())
+            .unwrap_or(false)
     }
 
-    /// Remove a peer from a room. Returns true if room was closed.
     async fn leave(&self, room_id: &str) -> bool {
         let mut rooms = self.rooms.lock().await;
         if let Some(room) = rooms.get_mut(room_id) {
@@ -104,12 +93,10 @@ impl RoomManager {
         false
     }
 
-    /// Save dirty rooms to storage.
     pub async fn save_dirty_rooms(&self, storage: &dyn StorageBackend) {
         let mut rooms = self.rooms.lock().await;
         for (room_id, room) in rooms.iter_mut() {
             if room.dirty && !room.ops_log.is_empty() {
-                // Serialize ops log as JSON and save as a sidecar file
                 let ops_json = serde_json::to_string(&room.ops_log).unwrap_or_default();
                 let meta = crate::storage::DocumentMeta {
                     id: format!("{}_ops", room_id),
@@ -126,75 +113,135 @@ impl RoomManager {
                     tracing::warn!("Failed to save room {} ops: {}", room_id, e);
                 } else {
                     room.dirty = false;
-                    tracing::debug!("Saved {} ops for room {}", room.ops_log.len(), room_id);
                 }
             }
         }
     }
 
-    /// Load room state from storage on restart.
-    #[allow(dead_code)]
-    pub async fn recover_room(&self, room_id: &str, storage: &dyn StorageBackend) {
-        let ops_id = format!("{}_ops", room_id);
-        if let Ok(data) = storage.get(&ops_id) {
-            if let Ok(ops) = serde_json::from_slice::<Vec<String>>(&data) {
-                let mut rooms = self.rooms.lock().await;
-                if let Some(room) = rooms.get_mut(room_id) {
-                    room.ops_log = ops;
-                    tracing::info!("Recovered {} ops for room {}", room.ops_log.len(), room_id);
-                }
-            }
-        }
-    }
-
-    /// Get active room count.
     #[allow(dead_code)]
     pub async fn room_count(&self) -> usize {
         self.rooms.lock().await.len()
     }
 }
 
-/// WebSocket upgrade handler for collaboration.
-pub async fn ws_collab_handler(
-    ws: WebSocketUpgrade,
-    Path(room_id): Path<String>,
-    State(state): State<Arc<AppState>>,
-) -> impl IntoResponse {
-    ws.on_upgrade(move |socket| handle_collab_socket(socket, room_id, state))
+/// Query params for WebSocket connection.
+#[derive(Debug, Deserialize)]
+pub struct WsParams {
+    /// User name for presence display.
+    #[serde(default = "default_user_name")]
+    pub user: String,
+    /// User ID for session tracking.
+    #[serde(default = "default_user_id")]
+    pub uid: String,
+    /// Editing mode.
+    #[serde(default = "default_mode")]
+    pub mode: String,
 }
 
-/// Handle a single WebSocket connection.
-async fn handle_collab_socket(socket: WebSocket, room_id: String, state: Arc<AppState>) {
-    let (tx, catch_up_ops) = state.rooms.join(&room_id).await;
+fn default_user_name() -> String {
+    format!("User-{}", rand_id())
+}
+fn default_user_id() -> String {
+    rand_id()
+}
+fn default_mode() -> String {
+    "edit".to_string()
+}
+fn rand_id() -> String {
+    uuid::Uuid::new_v4().to_string()[..8].to_string()
+}
+
+/// WebSocket upgrade handler.
+///
+/// Route: `GET /ws/edit/{file_id}?user=Alice&uid=u123&mode=edit`
+pub async fn ws_collab_handler(
+    ws: WebSocketUpgrade,
+    Path(file_id): Path<String>,
+    Query(params): Query<WsParams>,
+    State(state): State<Arc<AppState>>,
+) -> impl IntoResponse {
+    ws.on_upgrade(move |socket| handle_socket(socket, file_id, params, state))
+}
+
+/// Handle a WebSocket connection for collaborative editing.
+async fn handle_socket(socket: WebSocket, file_id: String, params: WsParams, state: Arc<AppState>) {
+    // Check if file session exists
+    let has_session = state.sessions.exists(&file_id).await;
+
+    // Join the room (creates if first peer)
+    let (tx, catch_up_ops) = state.rooms.join(&file_id).await;
     let mut rx = tx.subscribe();
+
+    // Track editor in session
+    if has_session {
+        state
+            .sessions
+            .editor_join(&file_id, &params.uid, &params.user, &params.mode)
+            .await;
+    }
 
     let (mut sender, mut receiver) = socket.split();
 
-    // Send welcome + catch-up operations
+    // Send welcome with session info
+    let file_info = if has_session {
+        state
+            .sessions
+            .get_info(&file_id)
+            .await
+            .map(|i| {
+                serde_json::json!({
+                    "filename": i.filename,
+                    "size": i.size,
+                    "editorCount": i.editor_count,
+                })
+            })
+            .unwrap_or(serde_json::json!(null))
+    } else {
+        serde_json::json!(null)
+    };
+
     let welcome = serde_json::json!({
         "type": "welcome",
-        "roomId": room_id,
+        "fileId": file_id,
+        "user": params.user,
         "opsCount": catch_up_ops.len(),
+        "file": file_info,
     });
     let _ = sender.send(Message::Text(welcome.to_string().into())).await;
 
-    // Send catch-up ops for late joiners
+    // Send document snapshot if session has data (new editor gets full doc)
+    if has_session {
+        if let Some(data) = state.sessions.get_data(&file_id).await {
+            // Send as base64 for transport
+            use base64::Engine as _;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&data);
+            let snapshot = serde_json::json!({
+                "type": "snapshot",
+                "data": b64,
+                "size": data.len(),
+            });
+            let _ = sender
+                .send(Message::Text(snapshot.to_string().into()))
+                .await;
+        }
+    }
+
+    // Send catch-up ops
     for op in &catch_up_ops {
-        let catch_up = serde_json::json!({
+        let msg = serde_json::json!({
             "type": "catchUp",
             "op": serde_json::from_str::<serde_json::Value>(op).unwrap_or_default(),
         });
         if sender
-            .send(Message::Text(catch_up.to_string().into()))
+            .send(Message::Text(msg.to_string().into()))
             .await
             .is_err()
         {
-            state.rooms.leave(&room_id).await;
-            return;
+            break;
         }
     }
 
-    // Spawn broadcast → peer task
+    // Broadcast → this peer
     let mut send_task = tokio::spawn(async move {
         while let Ok(msg) = rx.recv().await {
             if sender.send(Message::Text(msg.into())).await.is_err() {
@@ -203,21 +250,18 @@ async fn handle_collab_socket(socket: WebSocket, room_id: String, state: Arc<App
         }
     });
 
-    // Receive from peer → validate → broadcast + record
+    // This peer → validate → broadcast + record
     let rooms = state.rooms.clone();
     let tx_clone = tx.clone();
-    let room_id_recv = room_id.clone();
+    let file_id_recv = file_id.clone();
     let mut recv_task = tokio::spawn(async move {
         while let Some(Ok(msg)) = receiver.next().await {
             match msg {
                 Message::Text(text) => {
                     let text_str = text.to_string();
-                    // P4-07: Validate operation structure
                     if RoomManager::validate_op(&text_str) {
                         let _ = tx_clone.send(text_str.clone());
-                        rooms.record_op(&room_id_recv, &text_str).await;
-                    } else {
-                        tracing::debug!("Invalid op rejected in room {}", room_id_recv);
+                        rooms.record_op(&file_id_recv, &text_str).await;
                     }
                 }
                 Message::Close(_) => break,
@@ -231,5 +275,20 @@ async fn handle_collab_socket(socket: WebSocket, room_id: String, state: Arc<App
         _ = &mut recv_task => send_task.abort(),
     }
 
-    state.rooms.leave(&room_id).await;
+    // Cleanup: remove editor from session, leave room
+    if has_session {
+        state.sessions.editor_leave(&file_id, &params.uid).await;
+    }
+    let room_closed = state.rooms.leave(&file_id).await;
+
+    tracing::debug!(
+        "Editor {} disconnected from {} (room {})",
+        params.user,
+        file_id,
+        if room_closed {
+            "closed"
+        } else {
+            "still active"
+        }
+    );
 }

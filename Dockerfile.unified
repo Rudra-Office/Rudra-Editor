@@ -52,15 +52,11 @@ RUN apt-get update \
 # Copy stripped server binary (~15MB)
 COPY --from=rust-builder /app/target/release/s1-server /usr/local/bin/s1-server
 
-# Copy editor static files
+# Copy editor static files — Vite build output only
+# The dist/ directory contains the built index.html that references
+# hashed assets in /assets/ (not /src/main.js which needs Vite dev server)
 RUN mkdir -p /app/public
-# Vite build output (if available)
 COPY --from=web-builder /app/editor/dist/ /app/public/
-# Source fallback (overwrites dist if both exist — dist takes priority for bundled assets)
-COPY --from=web-builder /app/editor/index.html /app/public/
-COPY --from=web-builder /app/editor/src/ /app/public/src/
-COPY --from=web-builder /app/editor/wasm-pkg/ /app/public/wasm-pkg/
-COPY --from=web-builder /app/editor/fonts/ /app/public/fonts/
 
 RUN mkdir -p /data
 

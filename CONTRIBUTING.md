@@ -139,7 +139,7 @@ crates/
 ffi/
   wasm/              WASM bindings
   c/                 C FFI bindings
-editor/              Folio web editor
+editor/              S1 editor web editor
 scripts/             Build and utility scripts
 docs/                Technical documentation
 ```

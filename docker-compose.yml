@@ -15,6 +15,8 @@ services:
       - S1_AUTH_ENABLED=${S1_AUTH_ENABLED:-false}
       - S1_JWT_SECRET=${S1_JWT_SECRET:-}
       - S1_ALLOW_ANONYMOUS=${S1_ALLOW_ANONYMOUS:-true}
+      - S1_ADMIN_USER=${S1_ADMIN_USER:-admin}
+      - S1_ADMIN_PASS=${S1_ADMIN_PASS:-admin}
       - RUST_LOG=${RUST_LOG:-s1_server=info,tower_http=info}
     volumes:
       - s1-data:/data

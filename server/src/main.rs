@@ -20,6 +20,7 @@ use tower_http::services::ServeDir;
 use tower_http::trace::TraceLayer;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+mod admin;
 mod auth;
 mod collab;
 mod config;
@@ -81,13 +82,19 @@ async fn main() {
     // Static editor files directory
     let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| "./public".to_string());
 
+    // Initialize admin start time
+    admin::init_start_time();
+
     let app = Router::new()
         // Health
         .route("/health", get(routes::health))
-        // WebSocket editing (per file)
+        // WebSocket editing (per file) — supports both URL patterns
         .route("/ws/edit/{file_id}", get(collab::ws_collab_handler))
+        .route("/ws/collab/{file_id}", get(collab::ws_collab_handler))
         // REST API
         .nest("/api/v1", api_routes())
+        // Admin panel (protected by Basic Auth)
+        .nest("/admin", admin_routes())
         .with_state(state)
         // Static editor files (fallback for SPA routing)
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
@@ -124,6 +131,7 @@ async fn main() {
     tracing::info!("  Editor:    http://{}/", addr);
     tracing::info!("  API:       http://{}/api/v1/", addr);
     tracing::info!("  WebSocket: ws://{}/ws/edit/{{file_id}}", addr);
+    tracing::info!("  Admin:     http://{}/admin/dashboard", addr);
     tracing::info!("  Static:    {}", static_dir);
     tracing::info!("═══════════════════════════════════════");
 
@@ -154,4 +162,20 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/webhooks/{id}", delete(routes::delete_webhook))
         // Info
         .route("/info", get(routes::server_info))
+}
+
+fn admin_routes() -> Router<Arc<AppState>> {
+    use axum::middleware;
+    use axum::routing::post;
+
+    Router::new()
+        .route("/login", get(admin::admin_login_page))
+        .route("/login", post(admin::admin_login_submit))
+        .route("/logout", get(admin::admin_logout))
+        .route("/dashboard", get(admin::admin_dashboard))
+        .route("/api/stats", get(admin::admin_stats))
+        .route("/api/sessions", get(admin::admin_sessions))
+        .route("/api/sessions/{id}", delete(admin::admin_close_session))
+        .route("/api/config", get(admin::admin_config))
+        .layer(middleware::from_fn(admin::admin_auth))
 }
