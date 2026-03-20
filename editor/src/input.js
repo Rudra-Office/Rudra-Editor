@@ -12,7 +12,7 @@ import { deleteSelectedImage, setupImages } from './images.js';
 import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
-import { broadcastOp } from './collab.js';
+import { broadcastOp, broadcastCrdtOp } from './collab.js';
 import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter, enterHeaderFooterEditMode, exitHeaderFooterEditMode, showToast } from './toolbar-handlers.js';
 import { closeFindBar } from './find.js';
 
@@ -173,6 +173,55 @@ export function initInput() {
       e.preventDefault();
       return;
     }
+
+    // ── CRDT Mode: intercept text insert/delete for native CRDT ops ──
+    if (state.collabDoc && !state._composing) {
+      const info = getSelectionInfo();
+      if (info && info.startNodeId) {
+        if (e.inputType === 'insertText' && e.data && state.multiSelections.length === 0) {
+          // Single character insert — apply via CRDT
+          try {
+            const crdtOps = state.collabDoc.apply_local_insert_text(
+              info.startNodeId, info.startOffset, e.data
+            );
+            if (crdtOps && crdtOps !== '[]') {
+              broadcastCrdtOp(crdtOps);
+            }
+            // Also update the non-collab doc for rendering
+            if (state.doc) {
+              try { state.doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, e.data); } catch (_) {}
+            }
+          } catch (err) {
+            console.warn('CRDT insert failed, falling back to sync:', err);
+          }
+          // Let the browser handle the DOM insert normally
+          return;
+        }
+        if ((e.inputType === 'deleteContentBackward' || e.inputType === 'deleteContentForward') && info.collapsed) {
+          // Single character delete — apply via CRDT
+          try {
+            const offset = e.inputType === 'deleteContentBackward'
+              ? Math.max(0, info.startOffset - 1) : info.startOffset;
+            if (offset >= 0) {
+              const crdtOps = state.collabDoc.apply_local_delete_text(
+                info.startNodeId, offset, 1
+              );
+              if (crdtOps && crdtOps !== '[]') {
+                broadcastCrdtOp(crdtOps);
+              }
+              if (state.doc) {
+                try { state.doc.set_paragraph_text(info.startNodeId,
+                  getEditableText(info.startEl)); } catch (_) {}
+              }
+            }
+          } catch (err) {
+            console.warn('CRDT delete failed, falling back to sync:', err);
+          }
+          // Let the browser handle the DOM delete normally
+          return;
+        }
+      }
+    }
     // Prevent deletion into non-editable elements (page headers/footers)
     // UXP-02: Allow deletion when header/footer is in editing mode
     if (e.inputType && e.inputType.startsWith('delete') && e.getTargetRanges) {
@@ -293,6 +342,7 @@ export function initInput() {
   page.addEventListener('input', (e) => {
     if (state.ignoreInput) return;
     const el = getActiveElement();
+    // In CRDT mode, text changes are sent in beforeinput — just sync to keep WASM model in sync
     if (el) debouncedSync(el);
 
     // ── E-01 fix: Apply pending formats to newly inserted character(s) ──

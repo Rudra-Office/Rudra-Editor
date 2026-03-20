@@ -55,6 +55,18 @@ export function startCollab(room, name, relayUrl) {
   peerId = peerId || ('u-' + Math.random().toString(36).slice(2, 10));
   userColor = PEER_COLORS[Math.floor(Math.random() * PEER_COLORS.length)];
 
+  // Create CRDT collab document if not already set (sharer path)
+  if (!state.collabDoc && state.engine && typeof state.engine.open_collab === 'function') {
+    try {
+      const bytes = state.doc.export('docx');
+      const replicaId = Math.floor(Math.random() * 2147483647) + 1;
+      state.collabDoc = state.engine.open_collab(bytes, replicaId);
+      tracing('Created CRDT collab doc for sharer, replicaId:', replicaId);
+    } catch (e) {
+      console.warn('CRDT collab not available:', e);
+    }
+  }
+
   connect(relayUrl || DEFAULT_RELAY_URL);
   startCursorBroadcast();
   updateCollabUI();
@@ -77,23 +89,40 @@ export function stopCollab() {
   offlineBuffer = [];
   clearInterval(cursorTimer);
   clearTimeout(reconnectTimer);
+  clearTimeout(_fullSyncTimer);
   clearPeerCursors();
+  // Free CRDT collab document
+  if (state.collabDoc) {
+    try { state.collabDoc.free_doc(); } catch (_) {}
+    state.collabDoc = null;
+  }
   updateCollabUI();
 }
 
 /**
  * Broadcast a paragraph text change to peers.
  * Called from syncParagraphText in render.js.
+ *
+ * If CRDT is active (state.collabDoc), this is a no-op because CRDT
+ * text ops are broadcast natively via apply_local_insert_text/delete_text.
+ * If non-CRDT mode, sends setText + debounced fullSync.
  */
 export function broadcastTextSync(nodeId, text) {
   if (!roomId || applyingRemote) return;
-  sendOp({ action: 'setText', nodeId, text });
-  scheduleDebouncedFullSync();
+  // In CRDT mode, text changes are already broadcast at the character level.
+  // Only send setText as fallback for non-CRDT mode.
+  if (!state.collabDoc) {
+    sendOp({ action: 'setText', nodeId, text });
+    scheduleDebouncedFullSync();
+  }
 }
 
 /**
  * Broadcast a structural operation (split, merge, format, delete).
  * Called from input.js / toolbar.js after applying the operation locally.
+ *
+ * In CRDT mode, structural ops still use fullSync for convergence
+ * since the CRDT layer handles text-level ops natively.
  */
 export function broadcastOp(opData) {
   if (!roomId || applyingRemote) return;
@@ -101,12 +130,22 @@ export function broadcastOp(opData) {
   scheduleDebouncedFullSync();
 }
 
+/**
+ * Send a CRDT operation to peers (produced by WasmCollabDocument).
+ * @param {string} crdtOpJson — JSON string from apply_local_insert_text etc.
+ */
+export function broadcastCrdtOp(crdtOpJson) {
+  if (!roomId || applyingRemote || !crdtOpJson || crdtOpJson === '[]' || crdtOpJson === 'null') return;
+  sendOp({ action: 'crdtOp', ops: crdtOpJson });
+}
+
 // ─── Debounced Full Sync ─────────────────────────────
 // After any local edit, schedule a full document sync.
 // This ensures the receiver always converges to the correct state
 // even if individual ops fail due to node ID mismatch.
+// In CRDT mode, fullSync is less frequent (5s) as CRDT handles convergence.
 let _fullSyncTimer = null;
-const FULL_SYNC_DEBOUNCE_MS = 1500;
+const FULL_SYNC_DEBOUNCE_MS = state.collabDoc ? 5000 : 1500;
 
 function scheduleDebouncedFullSync() {
   if (_fullSyncTimer) clearTimeout(_fullSyncTimer);
@@ -324,15 +363,46 @@ function handleMessage(msg) {
       updatePeerList(msg.peers || []);
       updateCollabUI();
       tracing('Joined room, peerId:', peerId, 'peers:', (msg.peers || []).length);
+      // If CRDT available, send state vector for delta sync
+      if (state.collabDoc && (msg.peers || []).length > 0) {
+        try {
+          const sv = state.collabDoc.get_state_vector();
+          sendOp({ action: 'stateVector', sv });
+        } catch (_) {}
+      }
       break;
 
     case 'peer-join':
       // Only handle if it's a different peer (not self)
       if (msg.peerId === peerId) break;
       addPeer(msg.peerId, msg.userName, msg.userColor);
-      // Existing peer sends full document state so the new joiner gets latest version
+      // Send CRDT delta if available, otherwise fullSync
+      if (state.collabDoc) {
+        try {
+          const sv = state.collabDoc.get_state_vector();
+          sendOp({ action: 'stateVector', sv });
+        } catch (_) {}
+      }
       sendFullSync();
       break;
+
+    case 'stateVector': {
+      // Peer sent their state vector — respond with CRDT ops they're missing
+      if (state.collabDoc && msg.sv) {
+        try {
+          const changes = state.collabDoc.get_changes_since(typeof msg.sv === 'string' ? msg.sv : JSON.stringify(msg.sv));
+          if (changes && changes !== '[]') {
+            // Send each change as a CRDT op
+            const ops = JSON.parse(changes);
+            for (const op of ops) {
+              sendOp({ action: 'crdtOp', ops: JSON.stringify(op) });
+            }
+            tracing('Sent', ops.length, 'CRDT delta ops to new peer');
+          }
+        } catch (e) { console.warn('State vector delta sync error:', e); }
+      }
+      break;
+    }
 
     case 'peer-leave':
       removePeer(msg.peerId);
@@ -405,6 +475,46 @@ function applyRemoteOp(dataStr, fromPeerId) {
     }
 
     switch (op.action) {
+      case 'crdtOp': {
+        // CRDT operation from a peer — apply via WasmCollabDocument
+        if (state.collabDoc && op.ops) {
+          try {
+            const opsStr = typeof op.ops === 'string' ? op.ops : JSON.stringify(op.ops);
+            const parsed = JSON.parse(opsStr);
+            const opsList = Array.isArray(parsed) ? parsed : [parsed];
+
+            // Track affected node IDs for targeted re-render
+            const affectedNodes = new Set();
+            for (const singleOp of opsList) {
+              state.collabDoc.apply_remote_ops(JSON.stringify(singleOp));
+              // Extract nodeId from the CRDT operation for targeted render
+              const innerOp = singleOp.operation || singleOp;
+              const nid = innerOp.nodeId || innerOp.target_id || innerOp.targetId;
+              if (nid) affectedNodes.add(typeof nid === 'string' ? nid : `${nid.replica || 0}:${nid.counter || 0}`);
+            }
+
+            // Also sync the non-collab doc model for rendering
+            if (state.doc && state.collabDoc) {
+              try {
+                const bytes = state.collabDoc.export('docx');
+                state.doc = state.engine.open(new Uint8Array(bytes));
+              } catch (_) {
+                // If export fails, do a full render from collab HTML
+              }
+            }
+
+            // Try incremental render if only one node affected
+            if (affectedNodes.size === 1) {
+              const nodeId = affectedNodes.values().next().value;
+              if (!renderNodeById(nodeId)) renderDocument();
+            } else {
+              renderDocument();
+            }
+          } catch (e) { console.error('CRDT remote op:', e); }
+        }
+        break;
+      }
+
       case 'setText': {
         // Set paragraph text from remote
         try {
@@ -818,6 +928,13 @@ function broadcastCursor() {
       payload.selEndNodeId = endPara.dataset.nodeId;
       payload.selEndOffset = getParaOffset(endPara, range.endContainer, range.endOffset);
     }
+  }
+
+  // Update CRDT awareness state if available
+  if (state.collabDoc) {
+    try {
+      state.collabDoc.set_cursor(paraEl.dataset.nodeId, offset, userName, userColor);
+    } catch (_) {}
   }
 
   try {
@@ -1417,6 +1534,18 @@ export async function checkAutoJoin() {
       // Open the document in the editor (dynamic import to avoid circular dep)
       const { openFile } = await import('./file.js');
       await openFile(bytes, filename);
+
+      // Try to open as CRDT collaborative document for real-time sync
+      try {
+        if (state.engine && typeof state.engine.open_collab === 'function') {
+          const replicaId = Math.floor(Math.random() * 2147483647) + 1;
+          state.collabDoc = state.engine.open_collab(bytes, replicaId);
+          tracing('Opened CRDT collab doc with replicaId:', replicaId);
+        }
+      } catch (e) {
+        console.warn('CRDT collab not available, using fullSync mode:', e);
+        state.collabDoc = null;
+      }
 
       // Connect to WebSocket for co-editing using fileId as room
       const name = 'User ' + Math.floor(Math.random() * 100);

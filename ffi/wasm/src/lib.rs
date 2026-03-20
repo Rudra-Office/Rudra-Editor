@@ -9880,6 +9880,300 @@ impl WasmCollabDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    // ─── Rendering (delegates to same render functions as WasmDocument) ───
+
+    /// Render a single node as HTML (for incremental rendering).
+    pub fn render_node_html(&self, node_id_str: &str) -> Result<String, JsError> {
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
+        let node_id = parse_node_id(node_id_str)?;
+        let model = doc.model();
+        let mut html = String::new();
+        render_node(model, node_id, &mut html);
+        Ok(html)
+    }
+
+    /// Get paragraph IDs as JSON array.
+    pub fn paragraph_ids_json(&self) -> Result<String, JsError> {
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
+        let model = doc.model();
+        let body_id = model.body_id().ok_or_else(|| JsError::new("No body"))?;
+        let body = model
+            .node(body_id)
+            .ok_or_else(|| JsError::new("Body not found"))?;
+        let mut ids = Vec::new();
+        for &child_id in &body.children {
+            if let Some(child) = model.node(child_id) {
+                if child.node_type == NodeType::Paragraph {
+                    ids.push(format!("\"{}:{}\"", child_id.replica, child_id.counter));
+                }
+            }
+        }
+        Ok(format!("[{}]", ids.join(",")))
+    }
+
+    /// Get formatting info for a node as JSON (delegates to WasmDocument).
+    pub fn get_formatting_json(&self, node_id_str: &str) -> Result<String, JsError> {
+        let doc = self
+            .inner
+            .as_ref()
+            .ok_or_else(|| JsError::new("Document freed"))?;
+        let temp = s1engine::Document::from_model(doc.model().clone());
+        let wasm_doc = WasmDocument {
+            batch_label: None,
+            batch_count: 0,
+            inner: Some(temp),
+        };
+        wasm_doc.get_formatting_json(node_id_str)
+    }
+
+    // ─── Structural Editing (apply on model, produce CRDT ops) ───
+
+    /// Set paragraph text (replaces all text in the paragraph).
+    pub fn set_paragraph_text(&mut self, node_id_str: &str, text: &str) -> Result<String, JsError> {
+        let doc = self
+            .inner
+            .as_mut()
+            .ok_or_else(|| JsError::new("Document freed"))?;
+        let node_id = parse_node_id(node_id_str)?;
+
+        // Get current text length, delete all, then insert new text
+        let (text_node_id, current_len) = find_first_text_node(doc.model(), node_id)?;
+        let mut ops_json = Vec::new();
+
+        if current_len > 0 {
+            let del_op = Operation::delete_text(text_node_id, 0, current_len);
+            let crdt_op = doc
+                .apply_local(del_op)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            ops_json.push(serialize_crdt_op_to_json(&crdt_op));
+        }
+
+        if !text.is_empty() {
+            let ins_op = Operation::insert_text(text_node_id, 0, text.to_string());
+            let crdt_op = doc
+                .apply_local(ins_op)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            ops_json.push(serialize_crdt_op_to_json(&crdt_op));
+        }
+
+        Ok(format!("[{}]", ops_json.join(",")))
+    }
+
+    // ─── Structural Editing (delegates to WasmDocument, reconstructs collab) ───
+    // These operations modify the underlying model via WasmDocument's existing
+    // implementations, then reconstruct the CollabDocument. This preserves full
+    // editor compatibility while the CRDT layer handles text-level ops natively.
+
+    /// Helper: apply a closure that mutates a WasmDocument, then reconstruct CollabDocument.
+    fn with_wasm_doc<F>(&mut self, f: F) -> Result<(), JsError>
+    where
+        F: FnOnce(&mut WasmDocument) -> Result<(), JsError>,
+    {
+        let collab = self
+            .inner
+            .take()
+            .ok_or_else(|| JsError::new("Document freed"))?;
+        let replica = collab.replica_id();
+        let model = collab.model().clone();
+        let mut wasm_doc = WasmDocument {
+            batch_label: None,
+            batch_count: 0,
+            inner: Some(s1engine::Document::from_model(model)),
+        };
+        f(&mut wasm_doc)?;
+        let doc = wasm_doc
+            .inner
+            .take()
+            .ok_or_else(|| JsError::new("Internal error"))?;
+        self.inner = Some(s1_crdt::CollabDocument::from_model(
+            doc.into_model(),
+            replica,
+        ));
+        Ok(())
+    }
+
+    /// Delete a text selection (single or cross-paragraph).
+    pub fn delete_selection(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+    ) -> Result<(), JsError> {
+        let s = start_node_str.to_string();
+        let e = end_node_str.to_string();
+        self.with_wasm_doc(|doc| doc.delete_selection(&s, start_offset, &e, end_offset))
+    }
+
+    /// Insert text in a paragraph at a specific offset (CRDT-native).
+    pub fn insert_text_in_paragraph(
+        &mut self,
+        node_id_str: &str,
+        offset: usize,
+        text: &str,
+    ) -> Result<String, JsError> {
+        self.apply_local_insert_text(node_id_str, offset, text)
+    }
+
+    /// Format a selection.
+    pub fn format_selection(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        key: &str,
+        value: &str,
+    ) -> Result<(), JsError> {
+        let s = start_node_str.to_string();
+        let e = end_node_str.to_string();
+        let k = key.to_string();
+        let v = value.to_string();
+        self.with_wasm_doc(|doc| doc.format_selection(&s, start_offset, &e, end_offset, &k, &v))
+    }
+
+    /// Split a paragraph at the given offset.
+    pub fn split_paragraph(&mut self, node_id_str: &str, offset: usize) -> Result<String, JsError> {
+        let n = node_id_str.to_string();
+        let mut new_id = String::new();
+        self.with_wasm_doc(|doc| {
+            new_id = doc.split_paragraph(&n, offset)?;
+            Ok(())
+        })?;
+        Ok(new_id)
+    }
+
+    /// Merge two paragraphs.
+    pub fn merge_paragraphs(&mut self, node1_str: &str, node2_str: &str) -> Result<(), JsError> {
+        let n1 = node1_str.to_string();
+        let n2 = node2_str.to_string();
+        self.with_wasm_doc(|doc| doc.merge_paragraphs(&n1, &n2))
+    }
+
+    /// Set heading level for a paragraph.
+    pub fn set_heading_level(&mut self, node_id_str: &str, level: u8) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        self.with_wasm_doc(|doc| doc.set_heading_level(&n, level))
+    }
+
+    /// Set alignment for a paragraph.
+    pub fn set_alignment(&mut self, node_id_str: &str, alignment: &str) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        let a = alignment.to_string();
+        self.with_wasm_doc(|doc| doc.set_alignment(&n, &a))
+    }
+
+    /// Set list format for a paragraph.
+    pub fn set_list_format(
+        &mut self,
+        node_id_str: &str,
+        format: &str,
+        level: u32,
+    ) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        let f = format.to_string();
+        self.with_wasm_doc(|doc| doc.set_list_format(&n, &f, level))
+    }
+
+    /// Paste plain text (may create multiple paragraphs).
+    pub fn paste_plain_text(
+        &mut self,
+        node_id_str: &str,
+        offset: usize,
+        text: &str,
+    ) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        let t = text.to_string();
+        self.with_wasm_doc(|doc| doc.paste_plain_text(&n, offset, &t))
+    }
+
+    /// Insert a paragraph after a given node.
+    pub fn insert_paragraph_after(
+        &mut self,
+        after_node_str: &str,
+        text: &str,
+    ) -> Result<String, JsError> {
+        let n = after_node_str.to_string();
+        let t = text.to_string();
+        let mut new_id = String::new();
+        self.with_wasm_doc(|doc| {
+            new_id = doc.insert_paragraph_after(&n, &t)?;
+            Ok(())
+        })?;
+        Ok(new_id)
+    }
+
+    /// Set line spacing for a paragraph.
+    pub fn set_line_spacing(&mut self, node_id_str: &str, value: &str) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        let v = value.to_string();
+        self.with_wasm_doc(|doc| doc.set_line_spacing(&n, &v))
+    }
+
+    /// Set indent for a paragraph.
+    pub fn set_indent(&mut self, node_id_str: &str, side: &str, value: f64) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        let s = side.to_string();
+        self.with_wasm_doc(|doc| doc.set_indent(&n, &s, value))
+    }
+
+    /// Delete a node.
+    pub fn delete_node(&mut self, node_id_str: &str) -> Result<(), JsError> {
+        let n = node_id_str.to_string();
+        self.with_wasm_doc(|doc| doc.delete_node(&n))
+    }
+
+    /// Append an empty paragraph.
+    pub fn append_paragraph(&mut self, text: &str) -> Result<String, JsError> {
+        let t = text.to_string();
+        let mut new_id = String::new();
+        self.with_wasm_doc(|doc| {
+            new_id = doc.append_paragraph(&t)?;
+            Ok(())
+        })?;
+        Ok(new_id)
+    }
+
+    /// Insert a table.
+    pub fn insert_table(
+        &mut self,
+        after_node_str: &str,
+        rows: u32,
+        cols: u32,
+    ) -> Result<String, JsError> {
+        let n = after_node_str.to_string();
+        let mut table_id = String::new();
+        self.with_wasm_doc(|doc| {
+            table_id = doc.insert_table(&n, rows, cols)?;
+            Ok(())
+        })?;
+        Ok(table_id)
+    }
+
+    /// Insert horizontal rule.
+    pub fn insert_horizontal_rule(&mut self, after_node_str: &str) -> Result<(), JsError> {
+        let n = after_node_str.to_string();
+        self.with_wasm_doc(|doc| {
+            doc.insert_horizontal_rule(&n)?;
+            Ok(())
+        })
+    }
+
+    /// Insert page break.
+    pub fn insert_page_break(&mut self, after_node_str: &str) -> Result<(), JsError> {
+        let n = after_node_str.to_string();
+        self.with_wasm_doc(|doc| {
+            doc.insert_page_break(&n)?;
+            Ok(())
+        })
+    }
+
     /// Free the document (for manual memory management from JS).
     pub fn free_doc(&mut self) {
         self.inner = None;
