@@ -139,6 +139,11 @@ async fn main() {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
         loop {
             interval.tick().await;
+            // Remove editors whose last_activity is older than 5 minutes
+            let stale = cleanup_sessions.cleanup_stale_editors().await;
+            for (fid, _) in &stale {
+                tracing::info!("Removed stale editor from session {}", fid);
+            }
             let expired = cleanup_sessions.cleanup_expired().await;
             for (file_id, callback_url, data) in expired {
                 tracing::info!("Session expired: {} ({} bytes)", file_id, data.len());
@@ -199,6 +204,8 @@ fn api_routes() -> Router<Arc<AppState>> {
         .route("/webhooks", post(routes::register_webhook))
         .route("/webhooks", get(routes::list_webhooks))
         .route("/webhooks/{id}", delete(routes::delete_webhook))
+        // Error reporting
+        .route("/errors", post(routes::report_error))
         // Info
         .route("/info", get(routes::server_info))
 }

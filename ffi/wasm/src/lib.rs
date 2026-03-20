@@ -7704,6 +7704,78 @@ fn render_paragraph(
         None => return,
     };
 
+    // Form control rendering: if this paragraph carries a FormType attribute,
+    // render as an interactive form element instead of a normal paragraph.
+    if let Some(form_type) = para.attributes.get_string(&AttributeKey::FormType) {
+        let nid = format!("{}:{}", para_id.replica, para_id.counter);
+        match form_type {
+            "checkbox" => {
+                let checked = para
+                    .attributes
+                    .get_bool(&AttributeKey::FormChecked)
+                    .unwrap_or(false);
+                let checked_attr = if checked { " checked" } else { "" };
+                html.push_str(&format!(
+                    "<label class=\"form-checkbox\" contenteditable=\"false\" \
+                     data-node-id=\"{nid}\">\
+                     <input type=\"checkbox\" data-node-id=\"{nid}\"{checked_attr}> Checkbox\
+                     </label>"
+                ));
+            }
+            "dropdown" => {
+                let options_str = para
+                    .attributes
+                    .get_string(&AttributeKey::FormOptions)
+                    .unwrap_or("");
+                html.push_str(&format!(
+                    "<select class=\"form-dropdown\" contenteditable=\"false\" \
+                     data-node-id=\"{nid}\">"
+                ));
+                if options_str.is_empty() {
+                    html.push_str("<option></option>");
+                } else {
+                    for opt in options_str.split(',') {
+                        let escaped = escape_html(opt);
+                        html.push_str(&format!("<option value=\"{escaped}\">{escaped}</option>"));
+                    }
+                }
+                html.push_str("</select>");
+            }
+            "text" => {
+                // Collect text content from child runs for the default value
+                let mut value = String::new();
+                if let Some(node) = model.node(para_id) {
+                    for &child_id in &node.children {
+                        if let Some(child) = model.node(child_id) {
+                            if child.node_type == NodeType::Run {
+                                for &text_id in &child.children {
+                                    if let Some(text_node) = model.node(text_id) {
+                                        if text_node.node_type == NodeType::Text {
+                                            if let Some(ref tc) = text_node.text_content {
+                                                value.push_str(tc);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                let escaped_value = escape_html(&value);
+                html.push_str(&format!(
+                    "<input type=\"text\" class=\"form-text\" contenteditable=\"false\" \
+                     data-node-id=\"{nid}\" value=\"{escaped_value}\">"
+                ));
+            }
+            _ => {
+                // Unknown form type — fall through to normal paragraph rendering
+            }
+        }
+        if form_type == "checkbox" || form_type == "dropdown" || form_type == "text" {
+            return;
+        }
+    }
+
     // UXP-08: Render section break indicator before paragraphs that start a new section.
     if let Some(AttributeValue::Int(sec_idx)) = para.attributes.get(&AttributeKey::SectionIndex) {
         let sections = model.sections();

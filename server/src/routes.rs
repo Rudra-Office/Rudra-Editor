@@ -286,6 +286,16 @@ pub async fn convert_document(
     ))
 }
 
+/// Extract access level from session mode. Returns true if the required access is met.
+fn check_session_access(session_mode: &str, required: &str) -> bool {
+    match required {
+        "view" => true, // everyone can view
+        "comment" => session_mode == "comment" || session_mode == "edit",
+        "edit" => session_mode == "edit",
+        _ => false,
+    }
+}
+
 /// Map format string to MIME content type.
 fn format_to_content_type(format: &str) -> &'static str {
     match format {
@@ -463,11 +473,8 @@ pub async fn get_file_info(
         format!("File session not found: {id}"),
     ))?;
 
-    // TODO: When auth is enabled, check permission:
-    // let user = request.extensions().get::<AuthUser>();
-    // if let Some(user) = user {
-    //     auth::check_permission_with_session(user, info.owner_id.as_deref(), &info.mode, Permission::Viewer)?;
-    // }
+    // Read endpoints: no restriction needed (Viewer permission is implicit).
+    // All session modes (edit, comment, view) may read file info.
 
     Ok(Json(serde_json::to_value(info).unwrap_or_default()))
 }
@@ -482,11 +489,8 @@ pub async fn download_file(
         format!("File session not found: {id}"),
     ))?;
 
-    // TODO: When auth is enabled, check permission:
-    // let user = request.extensions().get::<AuthUser>();
-    // if let Some(user) = user {
-    //     auth::check_permission_with_session(user, info.owner_id.as_deref(), &info.mode, Permission::Viewer)?;
-    // }
+    // Read endpoints: no restriction needed (Viewer permission is implicit).
+    // All session modes (edit, comment, view) may download the file.
 
     let data = state.sessions.get_data(&id).await.ok_or((
         StatusCode::NOT_FOUND,
@@ -517,17 +521,32 @@ pub async fn close_file(
     State(state): State<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Vec<u8>, (StatusCode, String)> {
-    // TODO: When auth is enabled, check permission:
-    // let user = request.extensions().get::<AuthUser>();
-    // if let Some(user) = user {
-    //     let info = state.sessions.get_info(&id).await;
-    //     if let Some(ref info) = info {
-    //         auth::check_permission_with_session(user, info.owner_id.as_deref(), &info.mode, Permission::Editor)?;
-    //     }
-    // }
+    // Check if session allows editing (close is an edit action)
+    let info = state.sessions.get_info(&id).await.ok_or((
+        StatusCode::NOT_FOUND,
+        format!("File session not found: {id}"),
+    ))?;
+    if !check_session_access(&info.mode, "edit") {
+        return Err((
+            StatusCode::FORBIDDEN,
+            "Cannot close a view-only session".into(),
+        ));
+    }
 
     state.sessions.force_close(&id).await.ok_or((
         StatusCode::NOT_FOUND,
         format!("File session not found: {id}"),
     ))
+}
+
+/// Report a client-side error (POST /api/v1/errors).
+///
+/// Accepts a JSON body with a `message` field. Logs at WARN level,
+/// truncated to 500 chars for safety.
+pub async fn report_error(Json(body): Json<Value>) -> StatusCode {
+    if let Some(msg) = body.get("message").and_then(|m| m.as_str()) {
+        let truncated = &msg[..msg.len().min(500)];
+        tracing::warn!("Client error: {}", truncated);
+    }
+    StatusCode::NO_CONTENT
 }

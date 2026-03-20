@@ -118,7 +118,18 @@ pub fn parse_content_body(
                         let raw = capture_raw_xml(reader, "tracked-changes")?;
                         if let Some(body) = doc.node_mut(body_id) {
                             body.attributes
-                                .set(AttributeKey::RawXml, AttributeValue::String(raw));
+                                .set(AttributeKey::RawXml, AttributeValue::String(raw.clone()));
+
+                            // Best-effort extraction of change region metadata.
+                            // Parse the raw XML to extract structured info from
+                            // <text:changed-region> elements.
+                            let info = extract_change_tracking_info(&raw);
+                            if !info.is_empty() {
+                                body.attributes.set(
+                                    AttributeKey::ChangeTrackingInfo,
+                                    AttributeValue::String(info),
+                                );
+                            }
                         }
                     }
 
@@ -1522,6 +1533,121 @@ fn parse_table_cell_into(
     Ok(cell_id)
 }
 
+/// Best-effort extraction of change tracking metadata from raw tracked-changes XML.
+///
+/// Parses `<text:changed-region>` elements from the captured raw XML and returns
+/// a JSON string with an array of region objects, each containing:
+/// - `id`: the `text:id` attribute
+/// - `type`: "insertion", "deletion", or "format-change"
+/// - `author`: the dc:creator value (if present)
+/// - `date`: the dc:date value (if present)
+///
+/// Returns an empty string if no regions could be parsed.
+fn extract_change_tracking_info(raw_xml: &str) -> String {
+    // Wrap in a root element so the XML is well-formed for parsing
+    let wrapped = format!(
+        "<root xmlns:text='urn:oasis:names:tc:opendocument:xmlns:text:1.0' \
+         xmlns:dc='http://purl.org/dc/elements/1.1/' \
+         xmlns:office='urn:oasis:names:tc:opendocument:xmlns:office:1.0'>{raw_xml}</root>"
+    );
+    let mut reader = Reader::from_str(&wrapped);
+    reader.config_mut().trim_text(true);
+
+    let mut regions: Vec<String> = Vec::new();
+    let mut current_id = String::new();
+    let mut current_type = String::new();
+    let mut current_author = String::new();
+    let mut current_date = String::new();
+    let mut in_region = false;
+    let mut in_creator = false;
+    let mut in_date = false;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"changed-region" => {
+                        in_region = true;
+                        current_id.clear();
+                        current_type.clear();
+                        current_author.clear();
+                        current_date.clear();
+                        for attr in e.attributes().flatten() {
+                            if attr.key.local_name().as_ref() == b"id" {
+                                current_id = String::from_utf8_lossy(&attr.value).to_string();
+                            }
+                        }
+                    }
+                    b"insertion" if in_region => {
+                        current_type = "insertion".to_string();
+                    }
+                    b"deletion" if in_region => {
+                        current_type = "deletion".to_string();
+                    }
+                    b"format-change" if in_region => {
+                        current_type = "format-change".to_string();
+                    }
+                    b"creator" if in_region => {
+                        in_creator = true;
+                    }
+                    b"date" if in_region => {
+                        in_date = true;
+                    }
+                    _ => {}
+                }
+            }
+            Ok(Event::Text(ref e)) => {
+                if in_creator {
+                    current_author = e.unescape().unwrap_or_default().to_string();
+                } else if in_date {
+                    current_date = e.unescape().unwrap_or_default().to_string();
+                }
+            }
+            Ok(Event::End(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"changed-region" => {
+                        if in_region && !current_id.is_empty() {
+                            let json_obj = format!(
+                                r#"{{"id":"{}","type":"{}","author":"{}","date":"{}"}}"#,
+                                json_escape(&current_id),
+                                json_escape(&current_type),
+                                json_escape(&current_author),
+                                json_escape(&current_date),
+                            );
+                            regions.push(json_obj);
+                        }
+                        in_region = false;
+                    }
+                    b"creator" => in_creator = false,
+                    b"date" => in_date = false,
+                    b"root" => break,
+                    _ => {}
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => break, // Best-effort: stop on parse errors
+            _ => {}
+        }
+    }
+
+    if regions.is_empty() {
+        String::new()
+    } else {
+        format!("[{}]", regions.join(","))
+    }
+}
+
+/// Minimal JSON string escaping for change tracking info values.
+fn json_escape(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace('\n', "\\n")
+        .replace('\r', "\\r")
+        .replace('\t', "\\t")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2156,5 +2282,94 @@ mod tests {
             }
         }
         assert!(found, "annotation-end should create CommentEnd");
+    }
+
+    #[test]
+    fn extract_change_tracking_from_tracked_changes() {
+        let xml = r#"<text:tracked-changes xmlns:text="urn:oasis:names:tc:opendocument:xmlns:text:1.0" xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:office="urn:oasis:names:tc:opendocument:xmlns:office:1.0">
+            <text:changed-region text:id="ct1">
+                <text:insertion>
+                    <office:change-info>
+                        <dc:creator>Alice</dc:creator>
+                        <dc:date>2026-03-15T10:30:00</dc:date>
+                    </office:change-info>
+                </text:insertion>
+            </text:changed-region>
+            <text:changed-region text:id="ct2">
+                <text:deletion>
+                    <office:change-info>
+                        <dc:creator>Bob</dc:creator>
+                        <dc:date>2026-03-15T11:00:00</dc:date>
+                    </office:change-info>
+                </text:deletion>
+            </text:changed-region>
+        </text:tracked-changes>
+        <text:p>Some text</text:p>"#;
+
+        let doc = parse_body_xml(xml);
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+
+        // Raw XML should be preserved
+        let raw = body.attributes.get_string(&AttributeKey::RawXml);
+        assert!(raw.is_some(), "RawXml should be set");
+
+        // Structured change tracking info should be extracted
+        let info = body
+            .attributes
+            .get_string(&AttributeKey::ChangeTrackingInfo);
+        assert!(info.is_some(), "ChangeTrackingInfo should be set");
+        let info_str = info.unwrap();
+        assert!(
+            info_str.contains(r#""id":"ct1""#),
+            "should contain ct1: {info_str}"
+        );
+        assert!(
+            info_str.contains(r#""type":"insertion""#),
+            "should contain insertion type: {info_str}"
+        );
+        assert!(
+            info_str.contains(r#""author":"Alice""#),
+            "should contain author Alice: {info_str}"
+        );
+        assert!(
+            info_str.contains(r#""id":"ct2""#),
+            "should contain ct2: {info_str}"
+        );
+        assert!(
+            info_str.contains(r#""type":"deletion""#),
+            "should contain deletion type: {info_str}"
+        );
+        assert!(
+            info_str.contains(r#""author":"Bob""#),
+            "should contain author Bob: {info_str}"
+        );
+    }
+
+    #[test]
+    fn extract_change_tracking_unit() {
+        // Test the extraction function directly
+        let raw = r#"<text:changed-region text:id="r1"><text:format-change><office:change-info><dc:creator>Carol</dc:creator><dc:date>2026-01-01</dc:date></office:change-info></text:format-change></text:changed-region>"#;
+        let info = super::extract_change_tracking_info(raw);
+        assert!(
+            info.contains(r#""id":"r1""#),
+            "should have region id: {info}"
+        );
+        assert!(
+            info.contains(r#""type":"format-change""#),
+            "should have format-change type: {info}"
+        );
+        assert!(
+            info.contains(r#""author":"Carol""#),
+            "should have author Carol: {info}"
+        );
+    }
+
+    #[test]
+    fn extract_change_tracking_empty_returns_empty() {
+        // No changed-region elements
+        let raw = "<text:some-other-element/>";
+        let info = super::extract_change_tracking_info(raw);
+        assert!(info.is_empty(), "should be empty for no regions: {info}");
     }
 }

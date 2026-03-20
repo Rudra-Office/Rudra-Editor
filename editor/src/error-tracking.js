@@ -5,6 +5,19 @@
 let _lastError = null;
 let _errorCount = 0;
 
+// Send errors to server (debounced, max 10 per minute)
+let _serverErrorCount = 0;
+setInterval(() => { _serverErrorCount = 0; }, 60000);
+function sendErrorToServer(msg) {
+    if (_serverErrorCount >= 10) return;
+    _serverErrorCount++;
+    fetch('/api/v1/errors', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg })
+    }).catch(() => {});
+}
+
 // Automatically capture console.error calls for error tracking.
 const _origConsoleError = console.error;
 console.error = function(...args) {
@@ -19,6 +32,8 @@ console.error = function(...args) {
 export function recordError(error) {
   _lastError = error;
   _errorCount++;
+  const msg = typeof error === 'string' ? error : (error && error.message) ? error.message : String(error);
+  sendErrorToServer(msg);
   const indicator = document.getElementById('errorIndicator');
   if (indicator) {
     indicator.style.display = 'inline-flex';

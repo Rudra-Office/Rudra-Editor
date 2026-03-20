@@ -177,7 +177,7 @@
 | Q2 | — | DOCX | ~~Complex table vMerge~~ — ALREADY IMPLEMENTED: Parser + writer handle vMerge restart/continue via RowSpan attribute. | NOT AN ISSUE |
 | Q3 | P2 | DOCX | **Text effects**: TextGlow + TextReflection now rendered as CSS filter/reflect. | FIXED |
 | Q4 | — | DOCX | ~~Equations (OMML)~~ — ALREADY IMPLEMENTED: Parsed to EquationSource, rendered via KaTeX, written back to DOCX. Insert from editor works. | NOT AN ISSUE |
-| Q5 | P3 | DOCX | **Form controls (w:sdt)**: SDT elements parsed; TOC SDTs rendered. Interactive form rendering deferred — requires checkbox/dropdown UI components. | DEFERRED |
+| Q5 | P2 | DOCX | **Form controls (SDT)**: Checkbox, dropdown, text parsed from w:sdt. Rendered as interactive HTML. New FormType/FormOptions/FormChecked AttributeKeys. | FIXED |
 
 ### DOCX Not Supported
 | # | Sev | Area | Description | Status |

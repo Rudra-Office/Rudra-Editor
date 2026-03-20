@@ -1,7 +1,8 @@
 # Phase 5 — Advanced Format Support Tracker
 
 > Complex OOXML/ODF features found in enterprise documents.
-> Most are read-only preservation; full editing is out of scope for this phase.
+> **ZIP preservation infrastructure now handles round-trip for most items.**
+> See `ZIP_PRESERVATION_TRACKER.md` for the `preserved_parts` mechanism.
 
 ## Q6: SmartArt Diagrams
 
@@ -9,11 +10,11 @@
 
 | Step | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1 | Preserve `word/diagrams/` ZIP entries for round-trip | M | NOT STARTED |
+| 1 | Preserve `word/diagrams/` ZIP entries via preserved_parts | M | DONE |
 | 2 | Parse `dgm:relIds` from drawing element to find diagram parts | M | NOT STARTED |
 | 3 | Generate fallback SVG/image from diagram data | XL | NOT STARTED |
 | 4 | Render diagram as styled HTML placeholder with description | S | NOT STARTED |
-| 5 | Write diagram ZIP entries back on export | M | NOT STARTED |
+| 5 | Write diagram ZIP entries back via preserved_parts loop | M | DONE |
 
 ## Q7: Charts
 
@@ -21,11 +22,11 @@
 
 | Step | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1 | Preserve `word/charts/` ZIP entries for round-trip | M | NOT STARTED |
+| 1 | Preserve `word/charts/` ZIP entries via preserved_parts | M | DONE |
 | 2 | Parse `c:chart` reference to extract chart type and data | L | NOT STARTED |
 | 3 | Render chart via Chart.js or lightweight SVG | XL | NOT STARTED |
 | 4 | Show chart as image placeholder with "Chart" label | S | CAN DO NOW |
-| 5 | Write chart ZIP entries back on export | M | NOT STARTED |
+| 5 | Write chart ZIP entries back via preserved_parts loop | M | DONE |
 
 ## Q8: Embedded OLE Objects
 
@@ -33,10 +34,10 @@
 
 | Step | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1 | Preserve `word/embeddings/` ZIP entries for round-trip | M | NOT STARTED |
+| 1 | Preserve `word/embeddings/` ZIP entries via preserved_parts | M | DONE |
 | 2 | Extract preview image from OLE container | L | NOT STARTED |
 | 3 | Show preview image with "Embedded object" overlay | S | NOT STARTED |
-| 4 | Write OLE entries back on export | M | NOT STARTED |
+| 4 | Write OLE entries back via preserved_parts loop | M | DONE |
 
 ## P4: VBA Macros
 
@@ -44,9 +45,9 @@
 
 | Step | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1 | Detect `vbaProject.bin` in ZIP and flag document as macro-enabled | S | NOT STARTED |
+| 1 | Detect `vbaProject.bin` → hasMacros metadata flag | S | DONE |
 | 2 | Show security warning banner in editor ("This document contains macros") | S | NOT STARTED |
-| 3 | Preserve `vbaProject.bin` on round-trip export | S | NOT STARTED |
+| 3 | Preserve via preserved_parts | S | DONE |
 | 4 | Parse VBA project structure to list macro names | L | NOT STARTED |
 | 5 | Display macro list in properties panel | M | NOT STARTED |
 | 6 | Execution is OUT OF SCOPE (security risk) | — | N/A |
@@ -68,8 +69,8 @@
 
 | Step | Description | Effort | Status |
 |------|-------------|--------|--------|
-| 1 | Preserve `customXml/` ZIP entries in document model | M | NOT STARTED |
-| 2 | Write them back to ZIP on export | M | NOT STARTED |
+| 1 | Preserve `customXml/` via preserved_parts | M | DONE |
+| 2 | Written back via preserved_parts loop | M | DONE |
 | 3 | Round-trip test | S | NOT STARTED |
 
 ## Q13: ODT Database Fields

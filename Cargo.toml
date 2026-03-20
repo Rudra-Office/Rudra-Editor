@@ -54,6 +54,10 @@ base64 = "0.22"
 encoding_rs = "0.8"
 pulldown-cmark = "0.12"
 
+# Crypto (for digital signature validation)
+ring = "0.17"
+x509-cert = { version = "0.2", default-features = false, features = ["std"] }
+
 # Dev dependencies
 proptest = "1"
 pretty_assertions = "1"

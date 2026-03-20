@@ -429,6 +429,19 @@ pub enum AttributeKey {
     /// Text reflection effect definition (CSS-like or raw XML string).
     TextReflection,
 
+    // Form control attributes (DOCX SDT)
+    /// Form control type: "checkbox", "dropdown", or "text".
+    FormType,
+    /// Comma-separated list of options for dropdown form controls.
+    FormOptions,
+    /// Whether a checkbox form control is checked.
+    FormChecked,
+
+    // Change tracking metadata
+    /// JSON string containing parsed change tracking info (regions with id,
+    /// type, author, date). Used for ODT tracked-changes preservation.
+    ChangeTrackingInfo,
+
     // Raw XML preservation
     /// Raw XML content from elements not fully modeled (e.g., SmartArt, charts,
     /// form controls, content controls). Stored for round-trip fidelity.

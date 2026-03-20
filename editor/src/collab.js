@@ -41,6 +41,7 @@ let offlineBuffer = [];
 let connected = false;
 let applyingRemote = false; // flag to prevent echo
 let lastRelayUrl = null; // stored for reconnection
+let accessLevel = 'edit'; // 'edit', 'comment', or 'view'
 
 // ─── Public API ───────────────────────────────────────
 
@@ -187,7 +188,7 @@ function connect(url) {
     }
     // Add user info as query params for the server
     const sep = wsUrl.includes('?') ? '&' : '?';
-    wsUrl += `${sep}user=${encodeURIComponent(userName)}&uid=${encodeURIComponent(peerId || 'u-' + Math.random().toString(36).slice(2,8))}`;
+    wsUrl += `${sep}user=${encodeURIComponent(userName)}&uid=${encodeURIComponent(peerId || 'u-' + Math.random().toString(36).slice(2,8))}&access=${encodeURIComponent(accessLevel)}`;
   }
 
   try {
@@ -363,6 +364,16 @@ function handleMessage(msg) {
       updatePeerList(msg.peers || []);
       updateCollabUI();
       tracing('Joined room, peerId:', peerId, 'peers:', (msg.peers || []).length);
+      // Enforce access level from server (view/comment/edit)
+      if (msg.access === 'view' || msg.access === 'comment') {
+        state.readOnlyMode = true;
+        // Disable contenteditable on all pages
+        document.querySelectorAll('.page-content').forEach(p => { p.contentEditable = 'false'; });
+        // Disable toolbar
+        const toolbar = $('toolbar');
+        if (toolbar) toolbar.style.pointerEvents = 'none';
+        tracing('Access level:', msg.access, '— editor in read-only mode');
+      }
       // If CRDT available, send state vector for delta sync
       if (state.collabDoc && (msg.peers || []).length > 0) {
         try {
@@ -894,14 +905,30 @@ function broadcastCursor() {
   }
 
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return;
+
+  // For view-only users or when no selection exists, send a heartbeat
+  // so the server knows we're still connected
+  if (!sel || sel.rangeCount === 0) {
+    try {
+      ws.send(JSON.stringify({ type: 'awareness', room: roomId,
+        data: JSON.stringify({ peerId, userName, userColor, heartbeat: true }) }));
+    } catch (_) {}
+    return;
+  }
 
   // Find the paragraph element containing the cursor
   let paraEl = sel.anchorNode;
   while (paraEl && paraEl !== document && !paraEl.dataset?.nodeId) {
     paraEl = paraEl.parentElement;
   }
-  if (!paraEl || !paraEl.dataset?.nodeId) return;
+  if (!paraEl || !paraEl.dataset?.nodeId) {
+    // No valid paragraph — still send heartbeat
+    try {
+      ws.send(JSON.stringify({ type: 'awareness', room: roomId,
+        data: JSON.stringify({ peerId, userName, userColor, heartbeat: true }) }));
+    } catch (_) {}
+    return;
+  }
 
   // Calculate paragraph-relative offset by walking text nodes
   // (sel.anchorOffset is relative to sel.anchorNode which may be a span's text node)
@@ -1550,6 +1577,7 @@ export async function checkAutoJoin() {
       // Connect to WebSocket for co-editing using fileId as room
       const name = 'User ' + Math.floor(Math.random() * 100);
       const relay = params.get('relay') || DEFAULT_RELAY_URL;
+      accessLevel = params.get('access') || 'edit';
       startCollab(fileId, name, relay);
 
       return true;

@@ -4461,6 +4461,24 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 }
 
 /* ═══════════════════════════════════════════════════
+   Form Controls (DOCX SDT)
+   ═══════════════════════════════════════════════════ */
+.page-content .form-checkbox,
+.page-content .form-dropdown,
+.page-content .form-text {
+  display: inline-block;
+  margin: 2px 4px;
+  font-family: inherit;
+  font-size: inherit;
+  vertical-align: baseline;
+}
+.page-content .form-checkbox input { margin-right: 4px; }
+.page-content .form-dropdown { padding: 2px 4px; border: 1px solid #dadce0; border-radius: 3px; }
+.page-content .form-text { padding: 2px 6px; border: 1px solid #dadce0; border-radius: 3px; min-width: 100px; }
+[data-theme="dark"] .page-content .form-dropdown { border-color: #5f6368; background: #303134; color: #e8eaed; }
+[data-theme="dark"] .page-content .form-text { border-color: #5f6368; background: #303134; color: #e8eaed; }
+
+/* ═══════════════════════════════════════════════════
    Shapes / Drawings (VML/DrawingML)
    ═══════════════════════════════════════════════════ */
 .page-content .vml-shape {
