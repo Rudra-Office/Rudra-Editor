@@ -191,6 +191,8 @@
         <button class="app-menu-entry" id="btnComments" role="menuitem" tabindex="-1"><span class="msi">comment</span> Comments</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuDarkMode" role="menuitem" tabindex="-1"><span class="msi">dark_mode</span> Dark mode</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuSignDocument" role="menuitem" tabindex="-1"><span class="msi">verified_user</span> Sign Document...</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="helpMenu">
@@ -1641,6 +1643,31 @@
     <div class="modal-actions">
       <button id="digSignCancelBtn">Cancel</button>
       <button class="primary" id="digSignApplyBtn">Sign & Save</button>
+    </div>
+  </div>
+</div>
+
+<!-- P5-7: Sign Document Modal (DOCX/ODT digital signatures) -->
+<div class="modal-overlay" id="signDocModal" role="dialog" aria-modal="true" aria-label="Sign Document">
+  <div class="modal" style="max-width:480px">
+    <h3><span class="msi modal-icon">verified_user</span> Sign Document</h3>
+    <div id="signDocStatus" style="margin-bottom:12px;padding:8px 10px;border-radius:var(--radius-sm,4px);font-size:13px;display:none"></div>
+    <div class="modal-field">
+      <label for="signCertInput">Certificate file (.pem / .der / .crt)</label>
+      <input type="file" id="signCertInput" accept=".pem,.der,.crt,.cer" title="Upload an X.509 certificate file" style="width:100%;padding:4px 0;font-family:var(--font-ui);font-size:13px">
+    </div>
+    <div class="modal-field" style="margin-top:8px">
+      <label for="signReason">Reason for signing</label>
+      <select id="signReason" title="Select the reason for signing this document" style="width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:var(--radius-sm);font-family:var(--font-ui);font-size:13px;outline:none">
+        <option value="Approval">Approval</option>
+        <option value="Review">Review</option>
+        <option value="Completion">Completion</option>
+        <option value="Authorship">Authorship</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button id="signDocCancelBtn">Cancel</button>
+      <button class="primary" id="signDocApplyBtn">Sign</button>
     </div>
   </div>
 </div>

@@ -520,6 +520,19 @@ export async function openFile(bytes, name) {
     renderRuler(); // Update ruler with actual document page dimensions
     if (name) $('docName').value = name.replace(/\.[^.]+$/, '');
     updateTrackChanges();
+
+    // P4: Show macro warning if document has VBA macros or digital signatures
+    try {
+      const meta = state.doc.metadata_json ? JSON.parse(state.doc.metadata_json()) : {};
+      if (meta.custom_properties?.hasMacros === 'true') {
+        showToast('This document contains macros (VBA). Macro execution is not supported.', 'warning', 8000);
+      }
+      if (meta.custom_properties?.hasDigitalSignature === 'true') {
+        const subject = meta.custom_properties?.signatureSubject || 'Unknown signer';
+        showToast(`Signed document: ${subject}`, 'info', 6000);
+      }
+    } catch (_) {}
+
     state.dirty = false;
     updateDirtyIndicator();
     startAutosave();

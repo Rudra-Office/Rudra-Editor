@@ -280,6 +280,35 @@ impl WasmDocument {
         Ok(doc.metadata().creator.clone())
     }
 
+    /// Get full document metadata as JSON (title, author, custom_properties, etc.).
+    pub fn metadata_json(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let meta = doc.metadata();
+        let mut json = String::from("{");
+        if let Some(ref t) = meta.title {
+            json.push_str(&format!("\"title\":\"{}\",", escape_json(t)));
+        }
+        if let Some(ref c) = meta.creator {
+            json.push_str(&format!("\"author\":\"{}\",", escape_json(c)));
+        }
+        if !meta.custom_properties.is_empty() {
+            json.push_str("\"custom_properties\":{");
+            let props: Vec<String> = meta
+                .custom_properties
+                .iter()
+                .map(|(k, v)| format!("\"{}\":\"{}\"", escape_json(k), escape_json(v)))
+                .collect();
+            json.push_str(&props.join(","));
+            json.push_str("},");
+        }
+        // Remove trailing comma
+        if json.ends_with(',') {
+            json.pop();
+        }
+        json.push('}');
+        Ok(json)
+    }
+
     /// Get the number of paragraphs in the document.
     pub fn paragraph_count(&self) -> Result<usize, JsError> {
         let doc = self.doc()?;
@@ -9029,6 +9058,73 @@ fn render_drawing(model: &DocumentModel, drawing_id: NodeId, html: &mut String) 
         .attributes
         .get_string(&AttributeKey::ShapeType)
         .unwrap_or("shape");
+
+    // Check raw XML for special drawing types (diagrams, charts, OLE objects)
+    let raw_xml = node
+        .attributes
+        .get_string(&AttributeKey::ShapeRawXml)
+        .unwrap_or("");
+
+    let is_diagram = raw_xml.contains("dgm:")
+        || raw_xml.contains("/diagram")
+        || raw_xml.contains("diagramLayout")
+        || raw_xml.contains("diagrams/");
+    let is_chart = raw_xml.contains("c:chart") || raw_xml.contains("/chart");
+    let is_ole = raw_xml.contains("OLEObject")
+        || raw_xml.contains("oleObject")
+        || raw_xml.contains("/embeddings/");
+
+    // Render specialized placeholders for non-image drawing types
+    if is_diagram {
+        html.push_str(&format!(
+            "<div class=\"vml-shape diagram-placeholder\" data-node-id=\"{r}:{c}\" \
+             style=\"display:inline-block;width:{w}pt;min-height:{h}pt;\
+             border:1px solid #c4c7cc;border-radius:4px;background:#fafbfc;\
+             padding:8px;margin:4px 0;box-sizing:border-box;overflow:hidden;\
+             text-align:center;line-height:{h}pt\" \
+             title=\"SmartArt Diagram\">\
+             <span style=\"color:#666;font-size:11px\">SmartArt Diagram</span></div>",
+            r = drawing_id.replica,
+            c = drawing_id.counter,
+            w = width,
+            h = height,
+        ));
+        return;
+    }
+
+    if is_chart {
+        html.push_str(&format!(
+            "<div class=\"vml-shape chart-placeholder\" data-node-id=\"{r}:{c}\" \
+             style=\"display:inline-block;width:{w}pt;min-height:{h}pt;\
+             border:1px solid #c4c7cc;border-radius:4px;background:#fafbfc;\
+             padding:8px;margin:4px 0;box-sizing:border-box;overflow:hidden;\
+             text-align:center;line-height:{h}pt\" \
+             title=\"Chart\">\
+             <span style=\"color:#666;font-size:11px\">Chart</span></div>",
+            r = drawing_id.replica,
+            c = drawing_id.counter,
+            w = width,
+            h = height,
+        ));
+        return;
+    }
+
+    if is_ole {
+        html.push_str(&format!(
+            "<div class=\"vml-shape ole-placeholder\" data-node-id=\"{r}:{c}\" \
+             style=\"display:inline-block;width:{w}pt;min-height:{h}pt;\
+             border:1px solid #c4c7cc;border-radius:4px;background:#fafbfc;\
+             padding:8px;margin:4px 0;box-sizing:border-box;overflow:hidden;\
+             text-align:center;line-height:{h}pt\" \
+             title=\"Embedded Object\">\
+             <span style=\"color:#666;font-size:11px\">Embedded Object</span></div>",
+            r = drawing_id.replica,
+            c = drawing_id.counter,
+            w = width,
+            h = height,
+        ));
+        return;
+    }
 
     // Try to extract text content from child nodes (text boxes have paragraph children)
     let mut inner_html = String::new();
