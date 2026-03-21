@@ -5954,10 +5954,13 @@ function enhanceTemplateGrid() {
 
     const preview = document.createElement('div');
     preview.className = 'template-preview template-preview-custom';
-    // Render a tiny preview from saved HTML
+    // Render a tiny preview from saved HTML (sanitized — strip scripts/event handlers)
     const previewInner = document.createElement('div');
     previewInner.className = 'template-preview-content';
-    previewInner.innerHTML = tpl.html || '';
+    const safeHtml = (tpl.html || '').replace(/<script[\s\S]*?<\/script>/gi, '')
+      .replace(/\bon\w+\s*=\s*["'][^"']*["']/gi, '')
+      .replace(/\bon\w+\s*=\s*[^\s>]*/gi, '');
+    previewInner.innerHTML = safeHtml;
     preview.appendChild(previewInner);
 
     const icon = document.createElement('span');
