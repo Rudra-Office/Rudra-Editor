@@ -1,7 +1,19 @@
 // Toolbar event handler wiring
 import { state, $ } from './state.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction } from './toolbar.js';
-import { doUndo, doRedo, closeSlashMenu, insertFootnoteAtCursor, insertEndnoteAtCursor } from './input.js';
+
+// Circular dep breakers: import from extracted feature modules instead of input.js
+import { doUndo, doRedo } from './features/document/input/undo-redo.js';
+import { closeSlashMenu } from './features/document/input/slash-menu.js';
+import { insertFootnoteAtCursor, insertEndnoteAtCursor } from './features/document/input/footnotes.js';
+
+// Re-export extracted modules for backward compatibility.
+// Other files that import from toolbar-handlers.js continue to work unchanged.
+export { showToast, announce } from './features/document/toolbar/toast-announce.js';
+export { exitFormatPainter, applyFormatPainter } from './features/document/toolbar/format-painter.js';
+export { enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './features/document/toolbar/header-footer.js';
+export { getAutoCorrectMap, isAutoCorrectEnabled } from './features/document/toolbar/autocorrect.js';
+export { setZoomLevel } from './features/document/toolbar/zoom.js';
 import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty } from './render.js';
 import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
 import { insertImage } from './images.js';

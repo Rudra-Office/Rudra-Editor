@@ -13,7 +13,12 @@ import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
 import { broadcastOp, broadcastCrdtOp, isApplyingRemote, flushDeferredRemoteOps as _flushDeferredRemoteOps } from './collab.js';
-import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter, enterHeaderFooterEditMode, exitHeaderFooterEditMode, showToast } from './toolbar-handlers.js';
+// Circular dep breakers: import from extracted feature modules instead of toolbar-handlers.js
+import { showToast, announce } from './features/document/toolbar/toast-announce.js';
+import { setZoomLevel } from './features/document/toolbar/zoom.js';
+import { getAutoCorrectMap, isAutoCorrectEnabled } from './features/document/toolbar/autocorrect.js';
+import { exitFormatPainter, applyFormatPainter } from './features/document/toolbar/format-painter.js';
+import { enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './features/document/toolbar/header-footer.js';
 import { closeFindBar } from './find.js';
 
 /**

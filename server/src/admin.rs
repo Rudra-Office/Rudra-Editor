@@ -294,7 +294,19 @@ pub struct LoginForm {
 }
 
 /// Admin dashboard.
+/// Serve the admin dashboard.
+///
+/// Prefers the Vite-built `admin.html` from the static directory when available
+/// (set via `S1_STATIC_DIR`). Falls back to the embedded inline HTML for deployments
+/// where the static build is not present.
 pub async fn admin_dashboard() -> Html<String> {
+    // Try serving the Vite-built admin page first
+    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| "./public".to_string());
+    let admin_path = std::path::Path::new(&static_dir).join("admin.html");
+    if let Ok(contents) = std::fs::read_to_string(&admin_path) {
+        return Html(contents);
+    }
+    // Fallback: embedded inline HTML
     Html(ADMIN_HTML.to_string())
 }
 
