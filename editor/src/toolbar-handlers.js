@@ -662,6 +662,11 @@ export function initToolbar() {
   });
 
   // UXP-10: Footnote — menu bar entry
+  // Disable if WASM binding doesn't support footnotes in current build
+  if (state.doc && typeof state.doc.insert_footnote !== 'function') {
+    const miFn = $('miFootnote');
+    if (miFn) { miFn.classList.add('disabled'); miFn.title = 'Footnotes: not available in this build'; }
+  }
   $('miFootnote')?.addEventListener('click', () => {
     closeAllMenus();
     trackEvent('insert', 'footnote');
@@ -669,6 +674,10 @@ export function initToolbar() {
   });
 
   // UXP-10: Endnote — menu bar entry
+  if (state.doc && typeof state.doc.insert_endnote !== 'function') {
+    const miEn = $('miEndnote');
+    if (miEn) { miEn.classList.add('disabled'); miEn.title = 'Endnotes: not available in this build'; }
+  }
   $('miEndnote')?.addEventListener('click', () => {
     closeAllMenus();
     trackEvent('insert', 'endnote');

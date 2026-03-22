@@ -316,6 +316,27 @@ impl WasmDocument {
         Ok(doc.paragraph_count())
     }
 
+    /// Get an import fidelity report as a JSON string.
+    ///
+    /// Counts objects that could not be rendered faithfully and are shown
+    /// as placeholders. Returns JSON like:
+    /// `{"charts":2,"smartart":1,"ole":0,"missingImages":0,"total":3}`
+    ///
+    /// Consumers can use this to display "3 objects shown as placeholders"
+    /// after opening a document, rather than silently degrading.
+    pub fn fidelity_report_json(&self) -> Result<String, JsError> {
+        let html = self.to_html()?;
+        let charts = html.matches("chart-placeholder").count();
+        let smartart = html.matches("diagram-placeholder").count();
+        let ole = html.matches("ole-placeholder").count();
+        let missing_images = html.matches("s1-image-placeholder").count();
+        let total = charts + smartart + ole + missing_images;
+        Ok(format!(
+            "{{\"charts\":{},\"smartart\":{},\"ole\":{},\"missingImages\":{},\"total\":{}}}",
+            charts, smartart, ole, missing_images, total
+        ))
+    }
+
     /// Render the document as paginated HTML using the layout engine.
     ///
     /// Produces CSS-positioned HTML with real page boundaries. Each page

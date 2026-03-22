@@ -111,9 +111,14 @@ async function boot() {
     initFind();
     initImageContextMenu();
     initCollabUI();
-    // Hide Share button when no collaboration relay is configured
+    // Hide Share button when collaboration is not actually available.
+    // In standalone mode, require an explicit relayUrl to expose sharing.
+    // This prevents dead-end flows where users click Share but no relay exists.
     const btnShare = $('btnShare');
-    if (btnShare && (!window.S1_CONFIG?.relayUrl && !window.S1_CONFIG?.enableCollab)) {
+    const _cfg = window.S1_CONFIG || {};
+    const _hasRelay = !!(_cfg.relayUrl);
+    const _isIntegrated = _cfg.mode === 'integrated';
+    if (btnShare && !_hasRelay && !_isIntegrated) {
       btnShare.style.display = 'none';
     }
     initTouch();

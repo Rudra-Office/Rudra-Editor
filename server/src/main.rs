@@ -86,13 +86,27 @@ async fn main() {
         login_limiter,
     });
 
-    // Static editor files directory
-    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| "./public".to_string());
+    // Static editor files directory — check common locations for local dev
+    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| {
+        // Try repo-aware paths first for local dev convenience
+        for candidate in &["./public", "./editor", "./editor/dist"] {
+            if std::path::Path::new(candidate).join("index.html").exists() {
+                return candidate.to_string();
+            }
+        }
+        "./public".to_string()
+    });
+    if !std::path::Path::new(&static_dir).exists() {
+        tracing::warn!(
+            "Static directory '{}' not found. Set S1_STATIC_DIR or run the editor build first.",
+            static_dir
+        );
+    }
 
     // Initialize admin start time
     admin::init_start_time();
 
-    // Startup warnings
+    // ─── Startup security checks ──────────────────────────
     if std::env::var("S1_JWT_SECRET")
         .unwrap_or_default()
         .is_empty()
@@ -105,8 +119,25 @@ async fn main() {
         .unwrap_or_default()
         .eq_ignore_ascii_case("true");
     if !auth_enabled {
-        tracing::warn!(
-            "Authentication disabled (S1_AUTH_ENABLED=false) — all endpoints are public"
+        tracing::warn!("╔══════════════════════════════════════════════════════════╗");
+        tracing::warn!("║  INSECURE MODE: Authentication is DISABLED              ║");
+        tracing::warn!("║  All API endpoints are publicly accessible.             ║");
+        tracing::warn!("║  Set S1_AUTH_ENABLED=true for production deployments.   ║");
+        tracing::warn!("╚══════════════════════════════════════════════════════════╝");
+    }
+    // Reject weak admin credentials in production
+    let admin_user = std::env::var("S1_ADMIN_USER").unwrap_or_default();
+    let admin_pass = std::env::var("S1_ADMIN_PASS").unwrap_or_default();
+    let is_dev_mode = std::env::var("S1_DEV_MODE")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true");
+    if !is_dev_mode
+        && (admin_user == "admin" && admin_pass == "admin"
+            || admin_pass.len() < 8 && !admin_pass.is_empty())
+    {
+        tracing::error!(
+            "Weak admin credentials detected (S1_ADMIN_USER/S1_ADMIN_PASS). \
+             Set strong credentials or S1_DEV_MODE=true to bypass this check."
         );
     }
 

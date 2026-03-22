@@ -439,6 +439,11 @@ function resetEditorState() {
   state.pdfTextEdits = [];
   state.pdfModified = false;
   state.pdfFormFields = [];
+  // Free WASM PDF editor
+  if (state._wasmPdfEditor) {
+    try { state._wasmPdfEditor.free(); } catch (_) {}
+    state._wasmPdfEditor = null;
+  }
 }
 
 export function newDocument() {
@@ -540,6 +545,18 @@ async function _openFileImpl(bytes, name) {
       if (name) $('docName').value = name.replace(/\.[^.]+$/, '');
       updatePdfStatusBar();
       $('statusFormat').textContent = 'PDF';
+      // Initialize shared WASM PDF editor for page ops, forms, and signing.
+      // This is the object that page operations (rotate, delete, extract, merge),
+      // form filling, and digital signatures all gate on.
+      try {
+        const wasm = await import(/* @vite-ignore */ '/wasm-pkg/s1engine_wasm.js');
+        if (wasm.WasmPdfEditor) {
+          state._wasmPdfEditor = wasm.WasmPdfEditor.open(state.pdfBytes);
+        }
+      } catch (e) {
+        console.warn('WASM PDF editor unavailable — page ops will be disabled:', e.message);
+        state._wasmPdfEditor = null;
+      }
       // Initialize annotation tools, text editing, and thumbnails
       try {
         const [annot, textEdit, pages] = await Promise.all([
