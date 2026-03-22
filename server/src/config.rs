@@ -1,4 +1,6 @@
 //! Server configuration — loaded from TOML file and/or environment variables.
+//!
+//! Precedence (highest wins): environment variables > s1.toml > defaults.
 
 use serde::Deserialize;
 
@@ -27,17 +29,22 @@ impl Default for Config {
 }
 
 impl Config {
-    /// Load configuration from file and environment variables.
+    /// Load configuration: defaults → s1.toml → env vars (highest precedence).
+    ///
+    /// Environment variables always take precedence over file config so that
+    /// container/staging/production deployments can override without editing files.
     pub fn load() -> Self {
-        // Try loading from s1.toml
+        // Start with defaults
+        let mut config = Self::default();
+
+        // Layer 2: merge TOML file on top of defaults
         if let Ok(contents) = std::fs::read_to_string("s1.toml") {
-            if let Ok(config) = toml::from_str(&contents) {
-                return config;
+            if let Ok(file_config) = toml::from_str::<Config>(&contents) {
+                config = file_config;
             }
         }
 
-        // Fall back to environment variables
-        let mut config = Self::default();
+        // Layer 3: env vars override everything (highest precedence)
         if let Ok(port) = std::env::var("S1_PORT") {
             if let Ok(p) = port.parse() {
                 config.port = p;
@@ -48,6 +55,11 @@ impl Config {
         }
         if let Ok(dir) = std::env::var("S1_DATA_DIR") {
             config.data_dir = dir;
+        }
+        if let Ok(size) = std::env::var("S1_MAX_UPLOAD_SIZE") {
+            if let Ok(s) = size.parse() {
+                config.max_upload_size = s;
+            }
         }
         config
     }

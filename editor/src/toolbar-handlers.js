@@ -1,7 +1,19 @@
 // Toolbar event handler wiring
 import { state, $ } from './state.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction } from './toolbar.js';
-import { doUndo, doRedo, closeSlashMenu, insertFootnoteAtCursor, insertEndnoteAtCursor } from './input.js';
+
+// Circular dep breakers: import from extracted feature modules instead of input.js
+import { doUndo, doRedo } from './features/document/input/undo-redo.js';
+import { closeSlashMenu } from './features/document/input/slash-menu.js';
+import { insertFootnoteAtCursor, insertEndnoteAtCursor } from './features/document/input/footnotes.js';
+
+// Re-export extracted modules for backward compatibility.
+// Other files that import from toolbar-handlers.js continue to work unchanged.
+export { showToast, announce } from './features/document/toolbar/toast-announce.js';
+export { exitFormatPainter, applyFormatPainter } from './features/document/toolbar/format-painter.js';
+export { enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './features/document/toolbar/header-footer.js';
+export { getAutoCorrectMap, isAutoCorrectEnabled } from './features/document/toolbar/autocorrect.js';
+export { setZoomLevel } from './features/document/toolbar/zoom.js';
 import { renderDocument, renderNodeById, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty } from './render.js';
 import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
 import { insertImage } from './images.js';
@@ -175,15 +187,10 @@ function restoreModalSelection() {
   _savedModalSelInfo = null;
 }
 
-// E7.2: Screen reader announcement — briefly sets the aria-live region text
-let _announceTimer = 0;
-export function announce(msg) {
-  const el = $('a11yLive');
-  if (!el) return;
-  clearTimeout(_announceTimer);
-  el.textContent = msg;
-  _announceTimer = setTimeout(() => { el.textContent = ''; }, 1000);
-}
+// announce() and showToast() extracted to features/document/toolbar/toast-announce.js
+// Re-exported at top of this file for backward compatibility.
+import { announce as _announce } from './features/document/toolbar/toast-announce.js';
+const announce = _announce; // local alias for internal use
 
 function restoreSelectionForPickers() {
   const info = state.lastSelInfo;
@@ -208,29 +215,9 @@ function restoreSelectionForPickers() {
   return true;
 }
 
-// ── Toast notification system ──────────────────────
-// Replaces alert() calls with non-blocking toast messages.
-// Types: 'info' (default, dark), 'error' (red), 'success' (green)
-export function showToast(message, type = 'info', duration = 4000) {
-  const container = $('toastContainer');
-  if (!container) { console.warn('toast:', message); return; }
-  const toast = document.createElement('div');
-  toast.className = 'toast' + (type === 'error' ? ' toast-error' : type === 'success' ? ' toast-success' : '');
-  // FS-12: Ensure individual toasts are accessible to screen readers
-  if (type === 'error') {
-    toast.setAttribute('role', 'alert');
-  }
-  toast.textContent = message;
-  container.appendChild(toast);
-  const remove = () => {
-    toast.style.transition = 'opacity 0.2s ease, transform 0.2s ease';
-    toast.style.opacity = '0';
-    toast.style.transform = 'translateY(-8px)';
-    setTimeout(() => { toast.remove(); }, 220);
-  };
-  toast.addEventListener('click', remove);
-  if (duration > 0) setTimeout(remove, duration);
-}
+// showToast() extracted to features/document/toolbar/toast-announce.js
+import { showToast as _showToast } from './features/document/toolbar/toast-announce.js';
+const showToast = _showToast; // local alias for internal use
 
 export function initToolbar() {
   // U9: Prevent toolbar buttons from stealing focus (causes selection flash).
@@ -662,6 +649,11 @@ export function initToolbar() {
   });
 
   // UXP-10: Footnote — menu bar entry
+  // Disable if WASM binding doesn't support footnotes in current build
+  if (state.doc && typeof state.doc.insert_footnote !== 'function') {
+    const miFn = $('miFootnote');
+    if (miFn) { miFn.classList.add('disabled'); miFn.title = 'Footnotes: not available in this build'; }
+  }
   $('miFootnote')?.addEventListener('click', () => {
     closeAllMenus();
     trackEvent('insert', 'footnote');
@@ -669,6 +661,10 @@ export function initToolbar() {
   });
 
   // UXP-10: Endnote — menu bar entry
+  if (state.doc && typeof state.doc.insert_endnote !== 'function') {
+    const miEn = $('miEndnote');
+    if (miEn) { miEn.classList.add('disabled'); miEn.title = 'Endnotes: not available in this build'; }
+  }
   $('miEndnote')?.addEventListener('click', () => {
     closeAllMenus();
     trackEvent('insert', 'endnote');
@@ -699,7 +695,7 @@ export function initToolbar() {
       footerParts.push(escapeHtml(footerText));
     }
     if (showPageNum) {
-      footerParts.push('<span data-field="PageNumber"></span>');
+      footerParts.push('<span data-field="PageNumber" contenteditable="false"></span>');
     }
     if (footerParts.length > 0) {
       state.docFooterHtml = '<span style="display:block;text-align:center;color:var(--text-secondary,#5f6368);font-size:9pt">' + footerParts.join(' \u2014 ') + '</span>';
@@ -1014,6 +1010,9 @@ export function initToolbar() {
   // UXP-22: Columns dialog
   initColumnsModal();
 
+  // Auto Format Document
+  initAutoFormat();
+
   // Touch selection support (double-tap word select, long-press context menu)
   initTouchSelection();
 
@@ -1209,7 +1208,8 @@ function enterFormatPainter(mode) {
 /**
  * Exit format painter mode. Restores cursor and clears state.
  */
-export function exitFormatPainter() {
+// Canonical version in features/document/toolbar/format-painter.js; re-exported at top.
+function exitFormatPainter() {
   state.formatPainterMode = null;
   state.copiedFormat = null;
   const btn = $('btnFormatPainter');
@@ -1229,7 +1229,7 @@ export function exitFormatPainter() {
  * Called on mouseup in the document while format painter is active.
  * Returns true if format was applied, false otherwise.
  */
-export function applyFormatPainter() {
+function applyFormatPainter() {
   if (!state.formatPainterMode) return false;
   // D10: If copiedFormat or doc is missing, the painter is in a stale state — force clear
   if (!state.copiedFormat || !state.doc) {
@@ -1387,7 +1387,8 @@ function adjustZoom(delta) {
 }
 
 // ── E10.2: Unified zoom — set, persist, update UI ──
-export function setZoomLevel(level) {
+// Canonical version in features/document/toolbar/zoom.js; re-exported at top.
+function setZoomLevel(level) {
   level = Math.max(50, Math.min(200, Math.round(level)));
   const changed = state.zoomLevel !== level;
   state.zoomLevel = level;
@@ -2094,7 +2095,8 @@ function openHeaderFooterModal() {
  * @param {'header'|'footer'} kind — which region to edit
  * @param {HTMLElement} pageEl — the .doc-page element
  */
-export function enterHeaderFooterEditMode(kind, pageEl) {
+// Canonical version in features/document/toolbar/header-footer.js; re-exported at top.
+function enterHeaderFooterEditMode(kind, pageEl) {
   // Exit any existing edit mode first
   if (state.hfEditingMode) {
     exitHeaderFooterEditMode();
@@ -2190,7 +2192,7 @@ export function enterHeaderFooterEditMode(kind, pageEl) {
 /**
  * Exit header/footer editing mode and sync content back.
  */
-export function exitHeaderFooterEditMode() {
+function exitHeaderFooterEditMode() {
   if (!state.hfEditingMode) return;
 
   const kind = state.hfEditingMode;
@@ -2209,9 +2211,15 @@ export function exitHeaderFooterEditMode() {
     if (label) label.remove();
     if (toolbar) toolbar.remove();
 
-    // Get the text content the user entered
+    // Get the text content the user entered, EXCLUDING field element text.
+    // Field elements (page number, page count) have substituted text that
+    // must not be synced back to the WASM model as plain text — doing so
+    // would duplicate it alongside the Field nodes, causing garbled output
+    // like "Page 1Page 1" or "12" instead of just "1".
     const userHtml = hfEl.innerHTML.trim();
-    const userText = hfEl.textContent.trim();
+    const cloneForText = hfEl.cloneNode(true);
+    cloneForText.querySelectorAll('[data-field]').forEach(f => f.remove());
+    const userText = cloneForText.textContent.trim();
 
     // Restore non-editable state
     hfEl.contentEditable = 'false';
@@ -2317,6 +2325,7 @@ function _insertPageNumberField(hfEl) {
 
   const field = document.createElement('span');
   field.setAttribute('data-field', 'PageNumber');
+  field.contentEditable = 'false';
   field.style.fontWeight = 'normal';
 
   // Show placeholder number
@@ -4431,6 +4440,128 @@ export function applyColumnLayout() {
 }
 
 // ═══════════════════════════════════════════════════
+// Auto Format Document
+// ═══════════════════════════════════════════════════
+
+function initAutoFormat() {
+  const menuBtn = $('menuAutoFormat');
+  if (!menuBtn) return;
+
+  menuBtn.addEventListener('click', () => {
+    closeAllMenus();
+    autoFormatDocument();
+  });
+}
+
+/**
+ * Auto-detect paragraph types (headings, body) and apply appropriate styles.
+ * Uses heuristics based on text length, casing, and punctuation patterns.
+ * Does NOT use AI — purely rule-based for speed and reliability.
+ */
+function autoFormatDocument() {
+  const doc = state.doc;
+  if (!doc) return;
+
+  // Sync DOM to WASM model first
+  syncAllText();
+
+  // Get all paragraph elements from the rendered DOM
+  const container = $('pageContainer') || $('editorCanvas');
+  if (!container) return;
+
+  const paragraphs = container.querySelectorAll('[data-node-id]');
+  if (!paragraphs.length) return;
+
+  let changesApplied = 0;
+
+  // Begin batch for single undo step
+  if (typeof doc.begin_batch === 'function') {
+    try { doc.begin_batch('Auto Format Document'); } catch (_) {}
+  }
+
+  try {
+    for (const pEl of paragraphs) {
+      const nodeId = pEl.dataset.nodeId;
+      if (!nodeId) continue;
+      const text = (pEl.textContent || '').trim();
+      if (!text) continue;
+
+      const isShort = text.length < 80;
+      const isMedium = text.length < 120;
+      const isAllCaps = text === text.toUpperCase() && text.length > 3 && /[A-Z]/.test(text);
+      const endsWithColon = text.endsWith(':');
+      const startsWithNumber = /^\d+[\.\)]\s/.test(text);
+      const hasNoPunctuation = !/[.!?;]/.test(text.slice(0, -1)); // ignore last char
+      const isTitleCase = text === text.replace(/\w\S*/g, t => t.charAt(0).toUpperCase() + t.substr(1));
+      const wordCount = text.split(/\s+/).length;
+
+      let targetStyleName = null;
+
+      // Rule 1: Short ALL CAPS text -> Heading 1
+      if (isShort && isAllCaps && wordCount >= 1 && wordCount <= 15) {
+        targetStyleName = 'heading1';
+      }
+      // Rule 2: Short title-case text with no sentence-ending punctuation -> Heading 2
+      else if (isShort && isTitleCase && hasNoPunctuation && wordCount >= 2 && wordCount <= 15) {
+        targetStyleName = 'heading2';
+      }
+      // Rule 3: Short text that starts with a number pattern (like "1. Section") -> Heading 2
+      else if (isMedium && startsWithNumber && hasNoPunctuation && wordCount <= 12) {
+        targetStyleName = 'heading2';
+      }
+      // Rule 4: Short text ending with colon -> Heading 3
+      else if (isShort && endsWithColon && wordCount <= 10) {
+        targetStyleName = 'heading3';
+      }
+
+      // Apply the detected style via the same API used by the style gallery
+      if (targetStyleName) {
+        const def = STYLE_DEFS[targetStyleName];
+        if (!def) continue;
+
+        try {
+          if (typeof doc.set_paragraph_style_id === 'function') {
+            doc.set_paragraph_style_id(nodeId, def.styleId);
+          }
+          doc.set_heading_level(nodeId, def.heading);
+
+          // Apply run-level font overrides for the whole paragraph
+          const textLen = Array.from(text).length;
+          if (textLen > 0) {
+            if (def.fontSize) {
+              try { doc.format_selection(nodeId, 0, nodeId, textLen, 'fontSize', def.fontSize); } catch (_) {}
+            }
+            if (def.fontFamily) {
+              try { doc.format_selection(nodeId, 0, nodeId, textLen, 'fontFamily', def.fontFamily); } catch (_) {}
+            }
+          }
+
+          changesApplied++;
+        } catch (e) {
+          console.warn('[auto-format] Style apply error for node', nodeId, e);
+        }
+      }
+    }
+  } finally {
+    // End batch
+    try {
+      if (typeof doc.end_batch === 'function' && doc.is_batching()) {
+        doc.end_batch();
+      }
+    } catch (_) {}
+  }
+
+  if (changesApplied > 0) {
+    markDirty();
+    renderDocument();
+    updateToolbarState();
+    showToast(`Auto-formatted ${changesApplied} paragraph${changesApplied !== 1 ? 's' : ''}`, 'success', 3000);
+  } else {
+    showToast('No paragraphs detected for auto-formatting', 'info', 3000);
+  }
+}
+
+// ═══════════════════════════════════════════════════
 // E9.3: Equation Editor
 // ═══════════════════════════════════════════════════
 
@@ -4952,7 +5083,8 @@ const DEFAULT_AUTOCORRECT = {
   'commitee': 'committee', 'concensus': 'consensus',
 };
 
-export function getAutoCorrectMap() {
+// Canonical version in features/document/toolbar/autocorrect.js; re-exported at top.
+function getAutoCorrectMap() {
   try {
     const raw = localStorage.getItem(AC_STORAGE_KEY);
     if (raw) return JSON.parse(raw);
@@ -4964,7 +5096,7 @@ function saveAutoCorrectMap(map) {
   try { localStorage.setItem(AC_STORAGE_KEY, JSON.stringify(map)); } catch (_) {}
 }
 
-export function isAutoCorrectEnabled() {
+function isAutoCorrectEnabled() {
   try {
     const val = localStorage.getItem(AC_ENABLED_KEY);
     if (val === null) return true; // enabled by default
@@ -5433,6 +5565,8 @@ function setEditingMode(mode) {
   state.editingMode = mode;
   syncModeSelectors(mode);
   applyEditingMode(mode);
+  const labels = { editing: 'Editing', suggesting: 'Suggesting', viewing: 'Viewing' };
+  showToast('Switched to ' + (labels[mode] || mode) + ' mode', 'info', 2000);
   announce('Mode: ' + mode.charAt(0).toUpperCase() + mode.slice(1));
 }
 

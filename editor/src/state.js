@@ -93,8 +93,12 @@ export const state = {
   _offscreenImageSrcs: new Map(),
   // E8.4: Performance warning shown flag (avoid repeated warnings)
   _perfWarningShown: false,
+  // X4: Dirty paragraph tracking — only sync paragraphs that changed
+  _dirtyParagraphs: new Set(),
   // E6.3: IME composition in progress — blocks WASM sync until compositionend
   _composing: false,
+  // X18: Undo/redo in progress — blocks remote op application to prevent race conditions
+  _applyingUndo: false,
   // E5.4: Editing mode — 'editing' | 'suggesting' | 'viewing'
   editingMode: 'editing',
   // FS-11: Read-only / Viewer mode — blocks all editing when true
@@ -161,6 +165,10 @@ export function cleanupStaleState() {
   // Trim offscreen image cache
   if (state._offscreenImageSrcs && state._offscreenImageSrcs.size > 5000) {
     state._offscreenImageSrcs.clear();
+  }
+  // X4: Clear dirty paragraph set if it somehow accumulated too many entries
+  if (state._dirtyParagraphs && state._dirtyParagraphs.size > 5000) {
+    state._dirtyParagraphs.clear();
   }
 }
 

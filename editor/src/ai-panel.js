@@ -226,10 +226,84 @@ function hideFloatingBar() {
   state.aiFloatingBarVisible = false;
 }
 
+/** Show a small language picker dropdown near the floating bar.
+ *  Returns the selected language string, or null if cancelled. */
+function showLanguagePicker(anchorEl) {
+  return new Promise(resolve => {
+    const languages = ['Spanish', 'French', 'German', 'Chinese', 'Japanese', 'Hindi', 'Arabic', 'Portuguese', 'Russian', 'Korean', 'Italian', 'Dutch', 'Turkish', 'Polish', 'Swedish'];
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;z-index:300;';
+    const dropdown = document.createElement('div');
+    dropdown.className = 'ai-lang-picker';
+    dropdown.style.cssText = 'position:fixed;z-index:301;background:var(--bg-surface,#fff);border:1px solid var(--border-color,#dadce0);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);padding:4px 0;max-height:260px;overflow-y:auto;min-width:160px;';
+    const title = document.createElement('div');
+    title.textContent = 'Translate to...';
+    title.style.cssText = 'padding:6px 12px;font-size:11px;color:var(--text-muted,#5f6368);font-weight:500;border-bottom:1px solid var(--border-color,#dadce0);margin-bottom:2px;';
+    dropdown.appendChild(title);
+    languages.forEach(lang => {
+      const btn = document.createElement('button');
+      btn.textContent = lang;
+      btn.style.cssText = 'display:block;width:100%;text-align:left;padding:6px 12px;border:none;background:none;font-size:13px;color:var(--text-primary,#202124);cursor:pointer;font-family:var(--font-ui);';
+      btn.addEventListener('mouseenter', () => { btn.style.background = 'var(--accent-light,#e8f0fe)'; });
+      btn.addEventListener('mouseleave', () => { btn.style.background = 'none'; });
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cleanup();
+        resolve(lang);
+      });
+      dropdown.appendChild(btn);
+    });
+    // Position near the anchor element (floating bar or button)
+    if (anchorEl) {
+      const rect = anchorEl.getBoundingClientRect();
+      let top = rect.bottom + 4;
+      let left = rect.left;
+      if (top + 260 > window.innerHeight) top = Math.max(8, rect.top - 260);
+      if (left + 160 > window.innerWidth) left = Math.max(8, window.innerWidth - 168);
+      dropdown.style.top = top + 'px';
+      dropdown.style.left = left + 'px';
+    } else {
+      dropdown.style.top = '50%';
+      dropdown.style.left = '50%';
+      dropdown.style.transform = 'translate(-50%, -50%)';
+    }
+    const cleanup = () => {
+      overlay.remove();
+      dropdown.remove();
+    };
+    overlay.addEventListener('click', () => { cleanup(); resolve(null); });
+    document.addEventListener('keydown', function escHandler(e) {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        document.removeEventListener('keydown', escHandler);
+        cleanup();
+        resolve(null);
+      }
+    });
+    document.body.appendChild(overlay);
+    document.body.appendChild(dropdown);
+  });
+}
+
 /** Handle quick action from floating bar — delegates to ai-inline.js */
 async function floatingAction(action) {
   const text = getSelectedText();
   if (!text) return;
+
+  // For translate, ask for target language first
+  if (action === 'translate') {
+    const anchorEl = _floatingBar || null;
+    const lang = await showLanguagePicker(anchorEl);
+    if (!lang) return; // cancelled
+    hideFloatingBar();
+    try {
+      if (!_aiInlineModule) _aiInlineModule = await import('./ai-inline.js');
+      _aiInlineModule.triggerAIAction(action, null, lang);
+    } catch (err) {
+      console.warn('[ai-panel] Inline module unavailable for translate:', err);
+    }
+    return;
+  }
 
   hideFloatingBar();
 
@@ -686,7 +760,19 @@ function updateContextIndicator() {
 
 export function initAIPanel() {
   const cfg = window.S1_CONFIG || {};
-  if (!cfg.enableAI) return;
+  if (!cfg.enableAI) {
+    // Show "not configured" message if user opens the AI panel
+    if (!window.S1_CONFIG?.aiUrl) {
+      const messages = document.getElementById('aiMessages');
+      if (messages) {
+        messages.innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">' +
+          '<span class="msi" style="font-size:32px;display:block;margin-bottom:8px;">smart_toy</span>' +
+          '<p style="font-weight:500;margin-bottom:4px;">AI Assistant Not Configured</p>' +
+          '<p style="font-size:12px;">Set <code>aiUrl</code> and <code>enableAI</code> in S1_CONFIG to enable AI features.</p></div>';
+      }
+    }
+    return;
+  }
   if (!initAI()) return;
 
   _panel = $('aiPanel');

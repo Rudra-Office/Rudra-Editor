@@ -12,7 +12,7 @@ use axum::{
     extract::DefaultBodyLimit,
     http::Method,
     routing::{delete, get, post},
-    Router,
+    Extension, Router,
 };
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -86,13 +86,27 @@ async fn main() {
         login_limiter,
     });
 
-    // Static editor files directory
-    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| "./public".to_string());
+    // Static editor files directory — check common locations for local dev
+    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| {
+        // Try repo-aware paths first for local dev convenience
+        for candidate in &["./public", "./editor", "./editor/dist"] {
+            if std::path::Path::new(candidate).join("index.html").exists() {
+                return candidate.to_string();
+            }
+        }
+        "./public".to_string()
+    });
+    if !std::path::Path::new(&static_dir).exists() {
+        tracing::warn!(
+            "Static directory '{}' not found. Set S1_STATIC_DIR or run the editor build first.",
+            static_dir
+        );
+    }
 
     // Initialize admin start time
     admin::init_start_time();
 
-    // Startup warnings
+    // ─── Startup security checks ──────────────────────────
     if std::env::var("S1_JWT_SECRET")
         .unwrap_or_default()
         .is_empty()
@@ -105,10 +119,55 @@ async fn main() {
         .unwrap_or_default()
         .eq_ignore_ascii_case("true");
     if !auth_enabled {
-        tracing::warn!(
-            "Authentication disabled (S1_AUTH_ENABLED=false) — all endpoints are public"
+        tracing::warn!("╔══════════════════════════════════════════════════════════╗");
+        tracing::warn!("║  INSECURE MODE: Authentication is DISABLED              ║");
+        tracing::warn!("║  All API endpoints are publicly accessible.             ║");
+        tracing::warn!("║  Set S1_AUTH_ENABLED=true for production deployments.   ║");
+        tracing::warn!("╚══════════════════════════════════════════════════════════╝");
+    }
+    // Reject weak admin credentials in production
+    let admin_user = std::env::var("S1_ADMIN_USER").unwrap_or_default();
+    let admin_pass = std::env::var("S1_ADMIN_PASS").unwrap_or_default();
+    let is_dev_mode = std::env::var("S1_DEV_MODE")
+        .unwrap_or_default()
+        .eq_ignore_ascii_case("true");
+    if !is_dev_mode
+        && (admin_user == "admin" && admin_pass == "admin"
+            || admin_pass.len() < 8 && !admin_pass.is_empty())
+    {
+        tracing::error!(
+            "Weak admin credentials detected (S1_ADMIN_USER/S1_ADMIN_PASS). \
+             Set strong credentials or S1_DEV_MODE=true to bypass this check."
         );
     }
+
+    // Build auth config from environment
+    let auth_config = std::sync::Arc::new(auth::AuthConfig {
+        enabled: auth_enabled,
+        jwt_secret: std::env::var("S1_JWT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty()),
+        allow_anonymous: !auth_enabled,
+        api_keys: Vec::new(), // Loaded from s1.toml if configured
+    });
+
+    // Fail fast: auth is enabled but no JWT secret is configured
+    if auth_enabled && auth_config.jwt_secret.is_none() {
+        tracing::error!(
+            "S1_AUTH_ENABLED=true but S1_JWT_SECRET is not set — \
+             API authentication will reject all Bearer tokens"
+        );
+    }
+
+    // Conditionally attach auth middleware to API routes
+    let api = api_routes();
+    let api = if auth_enabled {
+        tracing::info!("Authentication enabled — API routes are protected");
+        api.layer(axum::middleware::from_fn(auth::auth_middleware))
+            .layer(Extension(auth_config))
+    } else {
+        api
+    };
 
     let app = Router::new()
         // Health
@@ -118,8 +177,8 @@ async fn main() {
         .route("/ws/collab/{file_id}", get(collab::ws_collab_handler))
         // Integration entry point: /edit?token=<jwt>
         .route("/edit", get(integration::handle_edit))
-        // REST API
-        .nest("/api/v1", api_routes())
+        // REST API (auth-protected when S1_AUTH_ENABLED=true)
+        .nest("/api/v1", api)
         // Admin panel (protected by Basic Auth)
         .nest("/admin", admin_routes())
         .with_state(state)
@@ -127,8 +186,24 @@ async fn main() {
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         // Middleware
         .layer(build_cors_layer())
+        .layer(axum::middleware::map_response(|mut response: axum::response::Response| async move {
+            let headers = response.headers_mut();
+            headers.insert(
+                axum::http::header::HeaderName::from_static("content-security-policy"),
+                axum::http::header::HeaderValue::from_static(
+                    "default-src 'self'; \
+                     script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; \
+                     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; \
+                     font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; \
+                     img-src 'self' data: blob:; \
+                     connect-src 'self' ws: wss: http: https:; \
+                     worker-src 'self' blob:"
+                ),
+            );
+            response
+        }))
         .layer(TraceLayer::new_for_http())
-        .layer(DefaultBodyLimit::max(64 * 1024 * 1024));
+        .layer(DefaultBodyLimit::max(config.max_upload_size));
 
     // Background: save dirty collab rooms every 30s
     tokio::spawn(async move {
@@ -202,7 +277,12 @@ async fn main() {
     tracing::info!("═══════════════════════════════════════");
 
     let listener = tokio::net::TcpListener::bind(addr).await.unwrap();
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await
+    .unwrap();
 }
 
 /// Build the CORS layer.

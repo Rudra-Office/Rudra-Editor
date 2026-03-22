@@ -294,7 +294,19 @@ pub struct LoginForm {
 }
 
 /// Admin dashboard.
+/// Serve the admin dashboard.
+///
+/// Prefers the Vite-built `admin.html` from the static directory when available
+/// (set via `S1_STATIC_DIR`). Falls back to the embedded inline HTML for deployments
+/// where the static build is not present.
 pub async fn admin_dashboard() -> Html<String> {
+    // Try serving the Vite-built admin page first
+    let static_dir = std::env::var("S1_STATIC_DIR").unwrap_or_else(|_| "./public".to_string());
+    let admin_path = std::path::Path::new(&static_dir).join("admin.html");
+    if let Ok(contents) = std::fs::read_to_string(&admin_path) {
+        return Html(contents);
+    }
+    // Fallback: embedded inline HTML
     Html(ADMIN_HTML.to_string())
 }
 
@@ -608,67 +620,173 @@ const ADMIN_HTML: &str = r##"<!DOCTYPE html>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#f5f5f5;color:#333}
-.header{background:#1a73e8;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:12px}
+.header{background:#1a73e8;color:#fff;padding:12px 24px;display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .header h1{font-size:16px;font-weight:500}
 .header .logout{margin-left:auto;color:#fff;text-decoration:none;font-size:13px;opacity:.8}
 .header .logout:hover{opacity:1}
+.refresh-bar{display:flex;align-items:center;gap:8px;font-size:11px;color:#fff;opacity:.7}
+.refresh-bar button{background:rgba(255,255,255,.2);border:none;color:#fff;padding:2px 8px;border-radius:4px;cursor:pointer;font-size:11px}
+.refresh-bar button:hover{background:rgba(255,255,255,.35)}
 .container{max-width:1100px;margin:20px auto;padding:0 20px}
-.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin-bottom:20px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px}
 .card{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
 .card-label{font-size:11px;color:#888;text-transform:uppercase;letter-spacing:.5px}
 .card-value{font-size:26px;font-weight:600;margin-top:2px;color:#1a73e8}
+.tabs{display:flex;gap:0;margin-bottom:0;border-bottom:2px solid #e0e0e0}
+.tab{padding:8px 16px;cursor:pointer;font-size:13px;font-weight:500;color:#888;border-bottom:2px solid transparent;margin-bottom:-2px}
+.tab.active{color:#1a73e8;border-bottom-color:#1a73e8}
+.tab:hover{color:#333}
+.tab-panel{display:none;background:#fff;border-radius:0 0 8px 8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:12px}
+.tab-panel.active{display:block}
 .section{background:#fff;border-radius:8px;padding:16px;box-shadow:0 1px 3px rgba(0,0,0,.08);margin-bottom:12px}
 .section h2{font-size:14px;margin-bottom:10px}
-table{width:100%;border-collapse:collapse;font-size:12px}
-th{text-align:left;padding:6px 8px;border-bottom:2px solid #eee;color:#888;font-weight:500}
+.table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+table{width:100%;border-collapse:collapse;font-size:12px;min-width:700px}
+th{text-align:left;padding:6px 8px;border-bottom:2px solid #eee;color:#888;font-weight:500;position:sticky;top:0;background:#fff}
 td{padding:6px 8px;border-bottom:1px solid #f5f5f5}
 .badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:600}
 .badge-editing{background:#e8f5e9;color:#2e7d32}
 .badge-idle{background:#fff3e0;color:#e65100}
 .btn-sm{padding:3px 10px;border:none;border-radius:4px;cursor:pointer;font-size:11px;background:#ef5350;color:#fff}
 .btn-sm:hover{background:#c62828}
+.btn-blue{background:#1a73e8;color:#fff}
+.btn-blue:hover{background:#1557b0}
+.btn-outline{background:transparent;border:1px solid #ccc;color:#555}
+.btn-outline:hover{background:#f5f5f5}
 pre{font-size:11px;background:#f9f9f9;padding:10px;border-radius:4px;overflow-x:auto}
+.toast{position:fixed;bottom:20px;right:20px;padding:10px 20px;border-radius:6px;color:#fff;font-size:13px;z-index:9999;opacity:0;transition:opacity .3s}
+.toast.show{opacity:1}
+.toast-ok{background:#2e7d32}
+.toast-err{background:#c62828}
+.loading{text-align:center;color:#aaa;padding:24px;font-size:13px}
+.error-msg{text-align:center;color:#c62828;padding:16px;font-size:13px}
+.id-cell{font-family:monospace;font-size:10px;cursor:pointer}
+.id-cell:hover{text-decoration:underline}
+.err-row td{font-size:11px}
+.err-src{color:#888;font-size:10px}
+@media(max-width:768px){.cards{grid-template-columns:repeat(2,1fr)}.container{padding:0 8px}}
 </style></head><body>
 <div class="header">
 <h1>Rudra Office Admin</h1>
 <span id="ver" style="font-size:11px;opacity:.6"></span>
+<div class="refresh-bar">
+<span id="lastUpdate"></span>
+<button onclick="r()" title="Refresh now">Refresh</button>
+<button id="pauseBtn" onclick="togglePause()" title="Pause auto-refresh">Pause</button>
+</div>
 <a href="/admin/logout" class="logout">Logout</a>
 </div>
 <div class="container">
-<div class="cards" id="cards"></div>
-<div class="section"><h2>Active Sessions</h2>
-<table><thead><tr><th>ID</th><th>File</th><th>Fmt</th><th>Size</th><th>Editors</th><th>Last Active</th><th>Status</th><th>Age</th><th></th></tr></thead>
-<tbody id="sessions"></tbody></table></div>
-<div class="section"><h2>Config</h2><pre id="config"></pre></div>
+<div class="cards" id="cards"><div class="loading">Loading...</div></div>
+<div class="tabs">
+<div class="tab active" onclick="switchTab('sessions')">Sessions</div>
+<div class="tab" onclick="switchTab('errors')">Errors</div>
+<div class="tab" onclick="switchTab('health')">Health</div>
+<div class="tab" onclick="switchTab('config')">Config</div>
 </div>
+<div class="tab-panel active" id="panel-sessions">
+<div class="table-wrap">
+<table><thead><tr><th>ID</th><th>File</th><th>Fmt</th><th>Size</th><th>Editors</th><th>Last Active</th><th>Status</th><th>Age</th><th>Actions</th></tr></thead>
+<tbody id="sessions"><tr><td colspan="9" class="loading">Loading...</td></tr></tbody></table>
+</div></div>
+<div class="tab-panel" id="panel-errors">
+<div id="errorsContent"><div class="loading">Loading...</div></div>
+</div>
+<div class="tab-panel" id="panel-health">
+<div id="healthContent"><div class="loading">Loading...</div></div>
+</div>
+<div class="tab-panel" id="panel-config">
+<pre id="config">Loading...</pre>
+</div>
+</div>
+<div id="toast" class="toast"></div>
 <script>
-async function r(){
- const s=await(await fetch('/admin/api/stats')).json();
- const ss=await(await fetch('/admin/api/sessions')).json();
- const c=await(await fetch('/admin/api/config')).json();
- document.getElementById('ver').textContent='v'+s.version;
- document.getElementById('cards').innerHTML=`
-  <div class="card"><div class="card-label">Uptime</div><div class="card-value">${fu(s.uptime_secs)}</div></div>
-  <div class="card"><div class="card-label">Sessions</div><div class="card-value">${s.active_sessions}</div></div>
-  <div class="card"><div class="card-label">Editors</div><div class="card-value">${s.total_editors}</div></div>
-  <div class="card"><div class="card-label">Memory</div><div class="card-value">${s.memory_mb.toFixed(1)}MB</div></div>`;
- const tb=document.getElementById('sessions');
- function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML}
- function la(eds){if(!eds||!eds.length)return'-';const acts=eds.filter(e=>e.last_activity).map(e=>e.last_activity);if(!acts.length)return'-';acts.sort();const t=new Date(acts[acts.length-1]);const ago=Math.floor((Date.now()-t.getTime())/1000);return ago<0?'now':fu(ago)+' ago'}
- function edTip(eds){if(!eds||!eds.length)return'';return eds.map(e=>esc(e.user_name)+' ('+esc(e.mode)+')'+( e.last_activity?' last: '+e.last_activity:'')).join('\\n')}
- tb.innerHTML=ss.sessions.length?ss.sessions.map(s=>`<tr>
-  <td style="font-family:monospace;font-size:10px">${esc(s.file_id.substring(0,8))}</td>
-  <td>${esc(s.filename)}</td><td>${esc(s.format)}</td><td>${fs(s.size)}</td>
-  <td title="${edTip(s.editors)}">${s.editor_count}</td>
-  <td>${la(s.editors)}</td>
-  <td><span class="badge badge-${esc(s.status)}">${esc(s.status)}</span></td>
-  <td>${fu(s.created_at_secs_ago)}</td>
-  <td><button class="btn-sm" onclick="cl('${esc(s.file_id)}')">Close</button></td></tr>`).join('')
-  :'<tr><td colspan="9" style="text-align:center;color:#ccc;padding:16px">No active sessions</td></tr>';
- document.getElementById('config').textContent=JSON.stringify(c,null,2);
-}
-async function cl(id){if(!confirm('Close session?'))return;await fetch('/admin/api/sessions/'+encodeURIComponent(id),{method:'DELETE'});r()}
-function fu(s){return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h'}
+let paused=false,refreshTimer=null;
+function esc(s){const d=document.createElement('div');d.textContent=s!=null?String(s):'';return d.innerHTML}
+function fu(s){if(s==null)return'-';return s<60?s+'s':s<3600?Math.floor(s/60)+'m':Math.floor(s/3600)+'h'}
 function fs(b){return b<1024?b+'B':b<1048576?(b/1024).toFixed(1)+'KB':(b/1048576).toFixed(1)+'MB'}
-r();setInterval(r,10000);
+function toast(msg,ok){const t=document.getElementById('toast');t.textContent=msg;t.className='toast show '+(ok?'toast-ok':'toast-err');setTimeout(()=>t.className='toast',3000)}
+function switchTab(name){document.querySelectorAll('.tab').forEach((t,i)=>{t.classList.toggle('active',t.textContent.toLowerCase()===name)});document.querySelectorAll('.tab-panel').forEach(p=>p.classList.toggle('active',p.id==='panel-'+name))}
+function togglePause(){paused=!paused;document.getElementById('pauseBtn').textContent=paused?'Resume':'Pause';if(!paused)startRefresh()}
+function startRefresh(){clearInterval(refreshTimer);if(!paused)refreshTimer=setInterval(r,10000)}
+function copyId(id){navigator.clipboard?.writeText(id);toast('Copied: '+id,true)}
+function la(eds){if(!eds||!eds.length)return'-';const acts=eds.filter(e=>e.last_activity).map(e=>e.last_activity);if(!acts.length)return'-';acts.sort();const t=new Date(acts[acts.length-1]);const ago=Math.floor((Date.now()-t.getTime())/1000);return ago<0?'now':fu(ago)+' ago'}
+function edList(eds){if(!eds||!eds.length)return'<span style="color:#aaa">None</span>';return eds.map(e=>'<span>'+esc(e.user_name)+' <span style="color:#888">('+esc(e.mode)+')</span></span>').join(', ')}
+async function r(){
+ try{
+  const[s,ss,c]=await Promise.all([
+   fetch('/admin/api/stats').then(r=>r.ok?r.json():Promise.reject(r.statusText)),
+   fetch('/admin/api/sessions').then(r=>r.ok?r.json():Promise.reject(r.statusText)),
+   fetch('/admin/api/config').then(r=>r.ok?r.json():Promise.reject(r.statusText)),
+  ]);
+  document.getElementById('ver').textContent='v'+s.version;
+  document.getElementById('lastUpdate').textContent='Updated: '+new Date().toLocaleTimeString();
+  document.getElementById('cards').innerHTML=`
+   <div class="card"><div class="card-label">Uptime</div><div class="card-value">${fu(s.uptime_secs)}</div></div>
+   <div class="card"><div class="card-label">Sessions</div><div class="card-value">${s.active_sessions}</div></div>
+   <div class="card"><div class="card-label">Rooms</div><div class="card-value">${s.active_rooms}</div></div>
+   <div class="card"><div class="card-label">Editors</div><div class="card-value">${s.total_editors}</div></div>
+   <div class="card"><div class="card-label">Memory</div><div class="card-value">${s.memory_mb.toFixed(1)}MB</div></div>`;
+  const tb=document.getElementById('sessions');
+  tb.innerHTML=ss.sessions.length?ss.sessions.map(s=>`<tr>
+   <td class="id-cell" onclick="copyId('${esc(s.file_id)}')" title="Click to copy full ID: ${esc(s.file_id)}">${esc(s.file_id.substring(0,8))}</td>
+   <td>${esc(s.filename)}</td><td>${esc(s.format)}</td><td>${fs(s.size)}</td>
+   <td>${s.editor_count} <button class="btn-sm btn-outline" style="margin-left:4px" onclick="showEditors('${esc(s.file_id)}')" title="View editors">...</button></td>
+   <td>${la(s.editors)}</td>
+   <td><span class="badge badge-${esc(s.status)}">${esc(s.status)}</span></td>
+   <td>${fu(s.created_at_secs_ago)}</td>
+   <td>
+    <button class="btn-sm btn-blue" onclick="forceSync('${esc(s.file_id)}')" title="Force sync">Sync</button>
+    <button class="btn-sm" onclick="cl('${esc(s.file_id)}')" title="Close session">Close</button>
+   </td></tr>`).join('')
+   :'<tr><td colspan="9" style="text-align:center;color:#ccc;padding:16px">No active sessions</td></tr>';
+  document.getElementById('config').textContent=JSON.stringify(c,null,2);
+ }catch(e){
+  document.getElementById('cards').innerHTML='<div class="error-msg">Failed to load dashboard: '+esc(e)+'</div>';
+ }
+ // Load errors tab
+ try{
+  const err=await fetch('/admin/api/errors').then(r=>r.ok?r.json():Promise.reject(r.statusText));
+  const el=document.getElementById('errorsContent');
+  if(!err.errors.length){el.innerHTML='<div style="color:#aaa;text-align:center;padding:16px">No recent errors</div>';return}
+  el.innerHTML='<div class="table-wrap"><table><thead><tr><th>Time</th><th>Source</th><th>Message</th></tr></thead><tbody>'+
+   err.errors.map(e=>`<tr class="err-row"><td style="white-space:nowrap">${esc(e.timestamp?.substring(11,19)||'')}</td><td class="err-src">${esc(e.source)}</td><td>${esc(e.message)}</td></tr>`).join('')+
+   '</tbody></table></div><div style="font-size:11px;color:#888;margin-top:6px">Showing '+err.errors.length+' of '+err.total+' total</div>';
+ }catch(e){document.getElementById('errorsContent').innerHTML='<div class="error-msg">Failed to load errors: '+esc(e)+'</div>'}
+ // Load health tab
+ try{
+  const h=await fetch('/admin/api/health').then(r=>r.ok?r.json():Promise.reject(r.statusText));
+  document.getElementById('healthContent').innerHTML=`
+   <div class="cards" style="margin-bottom:12px">
+    <div class="card"><div class="card-label">Status</div><div class="card-value" style="color:${h.status==='ok'?'#2e7d32':'#c62828'}">${esc(h.status)}</div></div>
+    <div class="card"><div class="card-label">PID</div><div class="card-value" style="font-size:18px">${h.pid||'-'}</div></div>
+    <div class="card"><div class="card-label">Memory</div><div class="card-value">${(h.memory_mb||0).toFixed(1)}MB</div></div>
+    <div class="card"><div class="card-label">Uptime</div><div class="card-value">${fu(h.uptime_secs)}</div></div>
+   </div>
+   <pre>${JSON.stringify(h,null,2)}</pre>`;
+ }catch(e){document.getElementById('healthContent').innerHTML='<div class="error-msg">Failed to load health: '+esc(e)+'</div>'}
+}
+async function cl(id){
+ if(!confirm('Close session '+id.substring(0,8)+'...?'))return;
+ try{const r=await fetch('/admin/api/sessions/'+encodeURIComponent(id),{method:'DELETE'});
+  if(r.ok){toast('Session closed',true)}else{toast('Close failed: '+r.statusText,false)}
+ }catch(e){toast('Close error: '+e,false)}
+ r();
+}
+async function forceSync(id){
+ try{const r=await fetch('/admin/api/sessions/'+encodeURIComponent(id)+'/sync',{method:'POST'});
+  if(r.ok){toast('Sync triggered',true)}else{toast('Sync failed: '+r.statusText,false)}
+ }catch(e){toast('Sync error: '+e,false)}
+}
+async function showEditors(id){
+ try{const r=await fetch('/admin/api/sessions/'+encodeURIComponent(id)+'/editors');
+  const d=await r.json();
+  const eds=d.editors||[];
+  if(!eds.length){toast('No editors connected',true);return}
+  let msg='Editors in '+id.substring(0,8)+'...:\\n\\n';
+  eds.forEach(e=>{msg+=e.user_name+' ('+e.mode+')\\n'});
+  alert(msg);
+ }catch(e){toast('Failed to load editors: '+e,false)}
+}
+r();startRefresh();
 </script></body></html>"##;

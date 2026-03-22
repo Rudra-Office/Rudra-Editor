@@ -131,17 +131,28 @@ impl<'a> LayoutEngine<'a> {
             _ => return self.layout(),
         };
 
-        // Full re-layout (block caching via LayoutCache still avoids re-shaping
-        // unchanged paragraphs). Then replace clean prefix with previous pages
-        // for stable node IDs and consistent references.
+        // Run full layout (block caching avoids re-shaping unchanged paragraphs).
         let mut result = self.layout()?;
 
-        // Replace clean prefix pages with previous ones for stability
-        if result.pages.len() >= dirty_page && previous.pages.len() >= dirty_page {
+        // Compare page heights for the clean prefix. If they match the previous
+        // result, the pagination is stable and we can reuse the previous pages
+        // verbatim. This avoids visual jitter from minor float differences.
+        let prefix_stable = result.pages.len() >= dirty_page
+            && previous.pages.len() >= dirty_page
+            && (0..dirty_page).all(|i| {
+                (result.pages[i].height - previous.pages[i].height).abs() < 0.01
+                    && result.pages[i].blocks.len() == previous.pages[i].blocks.len()
+            });
+
+        if prefix_stable {
+            // Replace clean prefix pages with previous ones for stable node IDs
+            // and consistent visual output — prevents momentary reflow artifacts
             for i in 0..dirty_page {
                 result.pages[i] = previous.pages[i].clone();
             }
         }
+        // If prefix is not stable (an early-page height changed), we must use
+        // the freshly computed pages since all subsequent page breaks shifted.
 
         Ok(result)
     }
@@ -370,7 +381,125 @@ impl<'a> LayoutEngine<'a> {
                                 current_column,
                             );
                             current_y = content_rect.y;
+
+                            // Re-layout in the new column
+                            let block = self.layout_paragraph_cached(
+                                *node_id,
+                                &para_style,
+                                content_rect,
+                                current_y,
+                            )?;
+                            let block_height = block.bounds.height;
+                            page_blocks.push(block);
+                            current_y += block_height + space_after;
+                            prev_space_after = space_after;
+                            continue;
+                        }
+
+                        // All columns exhausted — try line-level paragraph splitting
+                        // before falling back to whole-block page break.
+                        let did_split = if let LayoutBlockKind::Paragraph { ref lines, .. } =
+                            block.kind
+                        {
+                            let remaining_height = content_rect.bottom() - current_y;
+                            let total_lines = lines.len();
+
+                            // Find split point: how many lines fit in the remaining space
+                            let mut cumulative_h = 0.0;
+                            let mut split_at = 0;
+                            for (i, line) in lines.iter().enumerate() {
+                                if cumulative_h + line.height > remaining_height + 0.5 {
+                                    break;
+                                }
+                                cumulative_h += line.height;
+                                split_at = i + 1;
+                            }
+
+                            // Apply orphan/widow control
+                            let min_orphan = self.config.min_orphan_lines;
+                            let min_widow = self.config.min_widow_lines;
+                            if split_at >= min_orphan
+                                && (total_lines - split_at) >= min_widow
+                                && split_at > 0
+                                && split_at < total_lines
+                            {
+                                // Split the paragraph into two blocks
+                                let (first_block, second_block) =
+                                    split_paragraph_block(block, split_at, current_y);
+
+                                page_blocks.push(first_block);
+
+                                // Flush current page
+                                pages.push(self.make_page(
+                                    page_index,
+                                    &page_layout,
+                                    std::mem::take(&mut page_blocks),
+                                    current_section_idx,
+                                ));
+                                page_section_indices.push(current_section_idx);
+                                page_index += 1;
+                                page_floats.clear();
+                                current_column = 0;
+                                let full_rect = page_layout.content_rect();
+                                content_rect = Self::column_content_rect(
+                                    full_rect,
+                                    column_count,
+                                    column_spacing,
+                                    current_column,
+                                );
+                                current_y = content_rect.y;
+
+                                // Place continuation block on the new page
+                                let mut cont = second_block;
+                                cont.bounds.y = current_y;
+                                // Rebase line baseline_y values relative to new block position
+                                if let LayoutBlockKind::Paragraph { ref mut lines, .. } = cont.kind
+                                {
+                                    let mut y_accum = 0.0;
+                                    for line in lines.iter_mut() {
+                                        // baseline_y is relative to block, recalculate
+                                        line.baseline_y = y_accum + line.height * 0.75;
+                                        y_accum += line.height;
+                                    }
+                                }
+                                let cont_height = cont.bounds.height;
+                                page_blocks.push(cont);
+                                current_y += cont_height + space_after;
+                                prev_space_after = space_after;
+
+                                // Handle case where continuation still overflows
+                                if current_y > content_rect.bottom() {
+                                    pages.push(self.make_page(
+                                        page_index,
+                                        &page_layout,
+                                        std::mem::take(&mut page_blocks),
+                                        current_section_idx,
+                                    ));
+                                    page_section_indices.push(current_section_idx);
+                                    page_index += 1;
+                                    page_floats.clear();
+                                    current_column = 0;
+                                    let full_rect = page_layout.content_rect();
+                                    content_rect = Self::column_content_rect(
+                                        full_rect,
+                                        column_count,
+                                        column_spacing,
+                                        current_column,
+                                    );
+                                    current_y = content_rect.y;
+                                    prev_space_after = 0.0;
+                                }
+
+                                true
+                            } else {
+                                false
+                            }
                         } else {
+                            false
+                        };
+
+                        if !did_split {
+                            // Fallback: whole-block page break (existing behavior)
                             // Widow/orphan control: before creating a new page,
                             // check if the last block on the current page is a
                             // short paragraph (fewer than min_orphan_lines lines).
@@ -422,55 +551,55 @@ impl<'a> LayoutEngine<'a> {
                                 page_blocks.push(orphan_block);
                                 current_y += h;
                             }
-                        }
 
-                        // Re-layout in the new column/page
-                        let block = self.layout_paragraph_cached(
-                            *node_id,
-                            &para_style,
-                            content_rect,
-                            current_y,
-                        )?;
-                        let block_height = block.bounds.height;
-                        page_blocks.push(block);
-                        current_y += block_height + space_after;
-                        prev_space_after = space_after;
-                        // If the re-laid-out block still overflows (block
-                        // taller than page/column), advance to next
-                        // column or force a page break so the next block
-                        // starts fresh.
-                        if current_y > content_rect.bottom() {
-                            if current_column + 1 < column_count {
-                                current_column += 1;
-                                let full_rect = page_layout.content_rect();
-                                content_rect = Self::column_content_rect(
-                                    full_rect,
-                                    column_count,
-                                    column_spacing,
-                                    current_column,
-                                );
-                                current_y = content_rect.y;
-                            } else {
-                                pages.push(self.make_page(
-                                    page_index,
-                                    &page_layout,
-                                    std::mem::take(&mut page_blocks),
-                                    current_section_idx,
-                                ));
-                                page_section_indices.push(current_section_idx);
-                                page_index += 1;
-                                page_floats.clear();
-                                current_column = 0;
-                                let full_rect = page_layout.content_rect();
-                                content_rect = Self::column_content_rect(
-                                    full_rect,
-                                    column_count,
-                                    column_spacing,
-                                    current_column,
-                                );
-                                current_y = content_rect.y;
+                            // Re-layout in the new page
+                            let block = self.layout_paragraph_cached(
+                                *node_id,
+                                &para_style,
+                                content_rect,
+                                current_y,
+                            )?;
+                            let block_height = block.bounds.height;
+                            page_blocks.push(block);
+                            current_y += block_height + space_after;
+                            prev_space_after = space_after;
+                            // If the re-laid-out block still overflows (block
+                            // taller than page/column), advance to next
+                            // column or force a page break so the next block
+                            // starts fresh.
+                            if current_y > content_rect.bottom() {
+                                if current_column + 1 < column_count {
+                                    current_column += 1;
+                                    let full_rect = page_layout.content_rect();
+                                    content_rect = Self::column_content_rect(
+                                        full_rect,
+                                        column_count,
+                                        column_spacing,
+                                        current_column,
+                                    );
+                                    current_y = content_rect.y;
+                                } else {
+                                    pages.push(self.make_page(
+                                        page_index,
+                                        &page_layout,
+                                        std::mem::take(&mut page_blocks),
+                                        current_section_idx,
+                                    ));
+                                    page_section_indices.push(current_section_idx);
+                                    page_index += 1;
+                                    page_floats.clear();
+                                    current_column = 0;
+                                    let full_rect = page_layout.content_rect();
+                                    content_rect = Self::column_content_rect(
+                                        full_rect,
+                                        column_count,
+                                        column_spacing,
+                                        current_column,
+                                    );
+                                    current_y = content_rect.y;
+                                }
+                                prev_space_after = 0.0;
                             }
-                            prev_space_after = 0.0;
                         }
                     } else {
                         page_blocks.push(block);
@@ -1168,6 +1297,8 @@ impl<'a> LayoutEngine<'a> {
                         indent_first_line: para_style.indent_first_line,
                         line_height: line_spacing_to_css(&para_style.line_spacing),
                         bidi: para_style.bidi,
+                        is_continuation: false,
+                        split_at_line: 0,
                     },
                 });
             }
@@ -1578,6 +1709,8 @@ impl<'a> LayoutEngine<'a> {
                 indent_first_line: para_style.indent_first_line,
                 line_height: line_spacing_to_css(&para_style.line_spacing),
                 bidi: matches!(direction, s1_text::Direction::Rtl),
+                is_continuation: false,
+                split_at_line: 0,
             },
         })
     }
@@ -3175,6 +3308,8 @@ impl<'a> LayoutEngine<'a> {
                         indent_first_line: 0.0,
                         line_height: None,
                         bidi: false,
+                        is_continuation: false,
+                        split_at_line: 0,
                     },
                 });
             }
@@ -3252,6 +3387,8 @@ impl<'a> LayoutEngine<'a> {
                     indent_first_line: 0.0,
                     line_height: None,
                     bidi: false,
+                    is_continuation: false,
+                    split_at_line: 0,
                 },
             })
         }
@@ -4076,6 +4213,136 @@ fn synthesize_glyphs(text: &str, font_size: f64) -> Vec<ShapedGlyph> {
             }
         })
         .collect()
+}
+
+/// Split a paragraph block at a given line index into two blocks.
+///
+/// The first block contains lines `0..split_at` and the second block contains
+/// lines `split_at..`. The second block is marked `is_continuation: true` so
+/// the renderer knows not to repeat list markers or first-line indent.
+///
+/// Both blocks share the same `source_id` (they represent the same paragraph
+/// node). The first block's `split_at_line` is set to `split_at` so the JS
+/// renderer knows where the split occurred. The second block's `split_at_line`
+/// is also set to `split_at` (the original line index where continuation starts).
+fn split_paragraph_block(
+    block: LayoutBlock,
+    split_at: usize,
+    y_pos: f64,
+) -> (LayoutBlock, LayoutBlock) {
+    let source_id = block.source_id;
+    let bounds = block.bounds;
+
+    match block.kind {
+        LayoutBlockKind::Paragraph {
+            lines,
+            text_align,
+            background_color,
+            border,
+            list_marker,
+            list_level,
+            space_before,
+            space_after,
+            indent_left,
+            indent_right,
+            indent_first_line,
+            line_height,
+            bidi,
+            ..
+        } => {
+            let (first_lines, second_lines): (Vec<_>, Vec<_>) = {
+                let mut first = Vec::with_capacity(split_at);
+                let mut second = Vec::with_capacity(lines.len() - split_at);
+                for (i, line) in lines.into_iter().enumerate() {
+                    if i < split_at {
+                        first.push(line);
+                    } else {
+                        second.push(line);
+                    }
+                }
+                (first, second)
+            };
+
+            let first_height: f64 = first_lines.iter().map(|l| l.height).sum();
+            let second_height: f64 = second_lines.iter().map(|l| l.height).sum();
+
+            let first_block = LayoutBlock {
+                source_id,
+                bounds: Rect::new(bounds.x, y_pos, bounds.width, first_height),
+                kind: LayoutBlockKind::Paragraph {
+                    lines: first_lines,
+                    text_align: text_align.clone(),
+                    background_color,
+                    border: border.clone(),
+                    list_marker: list_marker.clone(),
+                    list_level,
+                    space_before,
+                    space_after: 0.0, // No space after the first part
+                    indent_left,
+                    indent_right,
+                    indent_first_line,
+                    line_height,
+                    bidi,
+                    is_continuation: false,
+                    split_at_line: split_at,
+                },
+            };
+
+            let second_block = LayoutBlock {
+                source_id,
+                bounds: Rect::new(bounds.x, 0.0, bounds.width, second_height),
+                kind: LayoutBlockKind::Paragraph {
+                    lines: second_lines,
+                    text_align,
+                    background_color,
+                    border,
+                    list_marker: None, // Don't repeat list marker on continuation
+                    list_level,
+                    space_before: 0.0, // No space before continuation
+                    space_after,
+                    indent_left,
+                    indent_right,
+                    indent_first_line: 0.0, // No first-line indent on continuation
+                    line_height,
+                    bidi,
+                    is_continuation: true,
+                    split_at_line: split_at,
+                },
+            };
+
+            (first_block, second_block)
+        }
+        // Non-paragraph blocks should not reach here, but handle gracefully
+        other_kind => {
+            let first = LayoutBlock {
+                source_id,
+                bounds,
+                kind: other_kind,
+            };
+            let second = LayoutBlock {
+                source_id,
+                bounds: Rect::new(bounds.x, 0.0, bounds.width, 0.0),
+                kind: LayoutBlockKind::Paragraph {
+                    lines: Vec::new(),
+                    text_align: None,
+                    background_color: None,
+                    border: None,
+                    list_marker: None,
+                    list_level: 0,
+                    space_before: 0.0,
+                    space_after: 0.0,
+                    indent_left: 0.0,
+                    indent_right: 0.0,
+                    indent_first_line: 0.0,
+                    line_height: None,
+                    bidi: false,
+                    is_continuation: true,
+                    split_at_line: 0,
+                },
+            };
+            (first, second)
+        }
+    }
 }
 
 /// Sanitize a floating-point value — replace NaN/infinity with 0.0.

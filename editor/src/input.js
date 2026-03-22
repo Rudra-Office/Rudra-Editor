@@ -6,14 +6,19 @@ import {
   getEditableText,
   addSecondaryCursor, clearSecondarySelections,
 } from './selection.js';
-import { renderDocument, renderNodeById, renderSingleParagraphIfPossible, syncParagraphText, syncAllText, debouncedSync, markLayoutDirty } from './render.js';
+import { renderDocument, renderNodeById, renderSingleParagraphIfPossible, syncParagraphText, syncAllText, syncAllTextFull, debouncedSync, markLayoutDirty } from './render.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction, renderUndoHistory } from './toolbar.js';
 import { deleteSelectedImage, setupImages } from './images.js';
 import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
 import { updatePageBreaks } from './pagination.js';
 import { markDirty, saveVersion, updateDirtyIndicator, updateStatusBar, openAutosaveDB } from './file.js';
-import { broadcastOp, broadcastCrdtOp, isApplyingRemote } from './collab.js';
-import { setZoomLevel, getAutoCorrectMap, isAutoCorrectEnabled, exitFormatPainter, applyFormatPainter, enterHeaderFooterEditMode, exitHeaderFooterEditMode, showToast } from './toolbar-handlers.js';
+import { broadcastOp, broadcastCrdtOp, isApplyingRemote, flushDeferredRemoteOps as _flushDeferredRemoteOps } from './collab.js';
+// Circular dep breakers: import from extracted feature modules instead of toolbar-handlers.js
+import { showToast, announce } from './features/document/toolbar/toast-announce.js';
+import { setZoomLevel } from './features/document/toolbar/zoom.js';
+import { getAutoCorrectMap, isAutoCorrectEnabled } from './features/document/toolbar/autocorrect.js';
+import { exitFormatPainter, applyFormatPainter } from './features/document/toolbar/format-painter.js';
+import { enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './features/document/toolbar/header-footer.js';
 import { closeFindBar } from './find.js';
 
 /**
@@ -248,6 +253,17 @@ export function initInput() {
       return;
     }
 
+    // X12: Sync paragraph before browser-initiated format operations.
+    // Some browsers fire beforeinput with formatBold/formatItalic etc.
+    // Sync now so WASM state is current before the format applies.
+    if (e.inputType && e.inputType.startsWith('format')) {
+      const activeEl = getActiveElement();
+      if (activeEl) {
+        clearTimeout(state.syncTimer);
+        syncParagraphText(activeEl);
+      }
+    }
+
     // ── CRDT Mode: intercept text insert/delete for native CRDT ops ──
     if (state.collabDoc && !state._composing) {
       const info = getSelectionInfo();
@@ -448,8 +464,14 @@ export function initInput() {
   page.addEventListener('input', (e) => {
     if (state.ignoreInput) return;
     const el = getActiveElement();
-    // In CRDT mode, text changes are sent in beforeinput — just sync to keep WASM model in sync
-    if (el) debouncedSync(el);
+    // X12: When pending formats exist, sync immediately BEFORE format application
+    // to ensure WASM model reflects the DOM mutation. Otherwise use debounced sync.
+    if (el && state._pendingFormatInsert && state.pendingFormats && Object.keys(state.pendingFormats).length > 0) {
+      clearTimeout(state.syncTimer);
+      syncParagraphText(el);
+    } else if (el) {
+      debouncedSync(el);
+    }
 
     // ── E-01 fix: Apply pending formats to newly inserted character(s) ──
     if (state._pendingFormatInsert && e.inputType === 'insertText') {
@@ -457,11 +479,6 @@ export function initInput() {
       state._pendingFormatInsert = null;
       const pending = state.pendingFormats;
       if (pending && Object.keys(pending).length > 0 && state.doc) {
-        // Sync the paragraph text immediately so the WASM model has the new character
-        if (el) {
-          clearTimeout(state.syncTimer);
-          syncParagraphText(el);
-        }
         try {
           const startOff = pfi.offset;
           const endOff = startOff + pfi.charCount;
@@ -530,7 +547,7 @@ export function initInput() {
     if (!isSyntheticSelection && (!sel || sel.isCollapsed)) return;
 
     e.preventDefault();
-    syncAllText();
+    syncAllTextFull(); // X4: Full sync needed for accurate clipboard content
 
     // E2.1: Generate clean semantic HTML from WASM model (no data attributes, no node IDs)
     let html = '';
@@ -1135,8 +1152,20 @@ export function initInput() {
             try {
               doc.append_paragraph('');
               broadcastOp({ action: 'insertParagraph', afterNodeId: null, text: '' });
-            } catch (_) {}
+            } catch (e) {
+              console.warn('[input] Failed to create empty paragraph:', e);
+              // Force re-create the document
+              try { doc.clear(); doc.append_paragraph(''); } catch (_) {}
+            }
             renderDocument();
+            // Verify document is not empty
+            try {
+              const html = doc.to_html();
+              if (!html || html.length < 10) {
+                console.error('[input] Document still empty after recovery');
+                showToast('Document recovery failed — please reload', 'error', 0);
+              }
+            } catch (_) {}
             const n = page.querySelector('[data-node-id]');
             if (n) setCursorAtStart(n);
           }
@@ -1510,18 +1539,14 @@ export function initInput() {
       const origStartOffset = info.startOffset;
       try {
         doc.delete_selection(info.startNodeId, info.startOffset, info.endNodeId, info.endOffset);
-        renderDocument();
+        // X7: Don't call renderDocument() here — paste will handle rendering
+        // after insert. Rendering now would invalidate all DOM references and
+        // cause stale node lookups when the paste operation tries to insert.
       } catch (_) {}
-      // After delete + re-render, DOM is rebuilt. Clear stale selection info.
+      // After delete, clear stale selection info.
       state.lastSelInfo = null;
-      // Try to restore cursor at the original start position
-      const restoredEl = page.querySelector(`[data-node-id="${origStartNodeId}"]`);
-      if (restoredEl) {
-        info = { startNodeId: origStartNodeId, startOffset: origStartOffset, startEl: restoredEl };
-      } else {
-        // Start node was deleted — find first available paragraph
-        info = null;
-      }
+      // Update info with WASM-authoritative position (no DOM lookup needed yet)
+      info = { startNodeId: origStartNodeId, startOffset: origStartOffset, startEl: null };
     } else if (info) {
       // Sync text before paste to ensure WASM model matches DOM
       if (info.startEl && info.startEl.isConnected) {
@@ -1553,6 +1578,17 @@ export function initInput() {
           doc.append_paragraph('');
           broadcastOp({ action: 'insertParagraph', afterNodeId: null, text: '' });
           renderDocument(); // Must render so the DOM has the new paragraph
+        } catch (e) {
+          console.error('[input] Cannot create empty paragraph:', e);
+          try { renderDocument(); } catch (_) {}
+        }
+        // Verify document is not empty
+        try {
+          const html = doc.to_html();
+          if (!html || html.length < 10) {
+            console.error('[input] Document still empty after recovery');
+            showToast('Document recovery failed — please reload', 'error', 0);
+          }
         } catch (_) {}
         // Find the newly created paragraph
         try {
@@ -1607,6 +1643,11 @@ export function initInput() {
 
     if (!text) return;
 
+    // X14: Ensure WASM state is current before paste — flush any pending debounced sync.
+    // This prevents stale offsets when pasting plain text with newlines.
+    clearTimeout(state.syncTimer);
+    syncAllText();
+
     if (text.includes('\n')) {
       try {
         recordUndoAction('Paste text');
@@ -1623,6 +1664,9 @@ export function initInput() {
             }
           } catch (_) {}
         }
+        // X14: After multi-line paste that creates new paragraphs, sync all text
+        // to ensure WASM offsets are fresh before any subsequent operations
+        syncAllText();
         renderDocument();
         placeCursorAfterPaste(page, text, info.startNodeId, info.startOffset);
         updateUndoRedo();
@@ -1635,6 +1679,7 @@ export function initInput() {
           const flatText = text.replace(/\n/g, ' ');
           doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, flatText);
           broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text: flatText });
+          syncAllText(); // X14: Sync after fallback paste too
           renderDocument();
           updateUndoRedo();
         } catch (e2) { console.error('paste fallback:', e2); showToast('Operation failed', 'error'); }
@@ -2251,7 +2296,10 @@ function parseClipboardHtml(html) {
       // Remove Word's <w:Sdt> and other Office XML tags that DOMParser may mangle
       .replace(/<\/?w:[^>]+>/gi, '')
       // Remove VML namespace declarations that break DOMParser
-      .replace(/<\/?v:[^>]+>/gi, '');
+      .replace(/<\/?v:[^>]+>/gi, '')
+      // X8: Strip data-field attributes (e.g. PageNumber) from pasted content
+      // to prevent page number fields from merging with the editor's own fields
+      .replace(/\s*data-field="[^"]*"/g, '');
 
     const parser = new DOMParser();
     const doc = parser.parseFromString(cleaned, 'text/html');
@@ -3670,10 +3718,13 @@ function doUndo() {
   if (!state.doc) return;
   // Guard: don't undo while applying remote collaborative ops
   if (isApplyingRemote()) return;
+  // X18: Prevent re-entry during undo execution
+  if (state._applyingUndo) return;
   // ED2-21: Reset format painter on undo to prevent stale painter state
   if (state.formatPainterMode) {
     exitFormatPainter();
   }
+  state._applyingUndo = true;
   clearTimeout(state.syncTimer);
   syncAllText();
   // Save cursor position before undo for restoration
@@ -3711,18 +3762,33 @@ function doUndo() {
     restoreCursorAfterUndoRedo(savedSel);
     updateToolbarState();
     renderUndoHistory();
-    broadcastOp({ action: 'fullDocSync' });
+    // Broadcast undo result with inline doc state so peers can apply
+    // directly without a round-trip requestFullSync
+    try {
+      const bytes = state.doc.export('docx');
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+      broadcastOp({ action: 'fullDocSync', docBase64: base64 });
+    } catch (_) {
+      broadcastOp({ action: 'fullDocSync' });
+    }
   } catch (e) { console.error('undo:', e); }
+  finally { state._applyingUndo = false; }
+  // X18: Apply any remote ops that were deferred during undo
+  _flushDeferredRemoteOps();
+  updateUndoRedo();
 }
 
 function doRedo() {
   if (!state.doc) return;
   // Guard: don't redo while applying remote collaborative ops
   if (isApplyingRemote()) return;
+  // X18: Prevent re-entry during redo execution
+  if (state._applyingUndo) return;
   // ED2-21: Reset format painter on redo to prevent stale painter state
   if (state.formatPainterMode) {
     exitFormatPainter();
   }
+  state._applyingUndo = true;
   clearTimeout(state.syncTimer);
   syncAllText();
   const savedSel = state.lastSelInfo ? { ...state.lastSelInfo } : null;
@@ -3734,8 +3800,20 @@ function doRedo() {
     restoreCursorAfterUndoRedo(savedSel);
     updateToolbarState();
     renderUndoHistory();
-    broadcastOp({ action: 'fullDocSync' });
+    // Broadcast redo result with inline doc state so peers can apply
+    // directly without a round-trip requestFullSync
+    try {
+      const bytes = state.doc.export('docx');
+      const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+      broadcastOp({ action: 'fullDocSync', docBase64: base64 });
+    } catch (_) {
+      broadcastOp({ action: 'fullDocSync' });
+    }
   } catch (e) { console.error('redo:', e); }
+  finally { state._applyingUndo = false; }
+  // X18: Apply any remote ops that were deferred during redo
+  _flushDeferredRemoteOps();
+  updateUndoRedo();
 }
 
 /** Restore cursor to the best available position after undo/redo re-render */

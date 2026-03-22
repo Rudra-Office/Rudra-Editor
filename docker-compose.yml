@@ -12,11 +12,11 @@ services:
       - S1_STORAGE=${S1_STORAGE:-local}
       - S1_DATA_DIR=/data
       - S1_STATIC_DIR=/app/public
-      - S1_AUTH_ENABLED=${S1_AUTH_ENABLED:-false}
-      - S1_JWT_SECRET=${S1_JWT_SECRET:-}
-      - S1_ALLOW_ANONYMOUS=${S1_ALLOW_ANONYMOUS:-true}
-      - S1_ADMIN_USER=${S1_ADMIN_USER:-admin}
-      - S1_ADMIN_PASS=${S1_ADMIN_PASS:-admin}
+      - S1_AUTH_ENABLED=${S1_AUTH_ENABLED:-true}
+      - S1_JWT_SECRET=${S1_JWT_SECRET:?Set S1_JWT_SECRET for production}
+      - S1_ALLOW_ANONYMOUS=${S1_ALLOW_ANONYMOUS:-false}
+      - S1_ADMIN_USER=${S1_ADMIN_USER:?Set S1_ADMIN_USER}
+      - S1_ADMIN_PASS=${S1_ADMIN_PASS:?Set S1_ADMIN_PASS}
       - RUST_LOG=${RUST_LOG:-s1_server=info,tower_http=info}
     volumes:
       - s1-data:/data
@@ -36,11 +36,13 @@ services:
       dockerfile: Dockerfile
     ports:
       - "${AI_PORT:-8081}:8081"
+    volumes:
+      - ai-models:/models
     deploy:
       resources:
         limits:
-          cpus: "${AI_CPUS:-4}"
-          memory: "${AI_MEMORY:-4G}"
+          cpus: "${AI_CPUS:-2}"
+          memory: "${AI_MEMORY:-2G}"
         reservations:
           memory: "2G"
     restart: unless-stopped
@@ -53,3 +55,4 @@ services:
 
 volumes:
   s1-data:
+  ai-models:

@@ -359,8 +359,11 @@ export function renderDocument() {
       pageEl.dataset.page = '1';
       const dims = state.pageDims || { marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72 };
       const ptToPx = 96 / 72;
+      const pageHPx = Math.round((dims.heightPt || 792) * ptToPx);
       pageEl.style.width = Math.round((dims.widthPt || 612) * ptToPx) + 'px';
-      pageEl.style.minHeight = Math.round((dims.heightPt || 792) * ptToPx) + 'px';
+      pageEl.style.minHeight = pageHPx + 'px';
+      pageEl.style.height = pageHPx + 'px';
+      pageEl.dataset.pageHeightPx = String(pageHPx);
 
       const header = document.createElement('div');
       header.className = 'page-header hf-hoverable';
@@ -411,6 +414,25 @@ export function renderDocument() {
 
     // UXP-10: Place footnotes/endnotes sections on the last page
     placeFootnoteSections();
+
+    // Re-substitute page numbers on ALL pages (fixes stale numbers after repagination)
+    const allPages = container.querySelectorAll('.doc-page');
+    const totalPages = allPages.length;
+    allPages.forEach((pageEl, i) => {
+      const pageNum = i + 1;
+      pageEl.dataset.page = String(pageNum);
+      pageEl.querySelectorAll('.page-header [data-field], .page-footer [data-field]').forEach(el => {
+        const field = (el.dataset.field || '').toUpperCase();
+        if (field === 'PAGENUMBER' || field === 'PAGE') el.textContent = String(pageNum);
+        else if (field === 'PAGECOUNT' || field === 'NUMPAGES') el.textContent = String(totalPages);
+      });
+      // Also update page numbers in body content (inline page fields)
+      pageEl.querySelectorAll('.page-content [data-field]').forEach(el => {
+        const field = (el.dataset.field || '').toUpperCase();
+        if (field === 'PAGENUMBER' || field === 'PAGE') el.textContent = String(pageNum);
+        else if (field === 'PAGECOUNT' || field === 'NUMPAGES') el.textContent = String(totalPages);
+      });
+    });
 
     // Post-render fixups across all pages
     fixEmptyBlocks();
@@ -809,6 +831,11 @@ export function cacheAllText() {
 export function syncParagraphText(el) {
   const { doc, syncedTextCache } = state;
   if (!doc || state.ignoreInput || !el) return;
+  // Never sync header/footer paragraphs — their displayed text includes
+  // substituted page number / page count values from field elements.
+  // Syncing that text back to the WASM model would duplicate it alongside
+  // the Field nodes, causing garbled page numbers (e.g. "Page 1Page 1").
+  if (el.closest('.page-header, .page-footer')) return;
   const nodeId = el.dataset?.nodeId;
   if (!nodeId) return;
   // Use getEditableText to exclude list marker text from sync
@@ -842,13 +869,40 @@ export function syncParagraphText(el) {
   } catch (e) { console.error('sync error:', e); }
 }
 
+/**
+ * X4: Dirty-only sync — only syncs paragraphs that have been marked dirty
+ * via input events. For large documents (500+ paragraphs), this prevents
+ * multi-second freezes by skipping unchanged paragraphs.
+ */
 export function syncAllText() {
+  if (!state.doc) return;
+  if (state._dirtyParagraphs.size === 0) return;
+  const container = $('pageContainer');
+  if (!container) return;
+  for (const nodeId of state._dirtyParagraphs) {
+    const el = container.querySelector(`[data-node-id="${nodeId}"]`);
+    // Skip header/footer paragraphs — they contain substituted page numbers
+    if (el && !el.closest('.page-header, .page-footer')) syncParagraphText(el);
+  }
+  state._dirtyParagraphs.clear();
+}
+
+/**
+ * X4: Full sync — iterates ALL paragraphs. Use only for export, collab join,
+ * and other paths that require guaranteed complete sync.
+ */
+export function syncAllTextFull() {
   if (!state.doc) return;
   queryAllNodes('[data-node-id]').forEach(el => {
     if (el.classList.contains('vs-placeholder')) return;
+    // Skip paragraphs inside headers/footers — their text includes substituted
+    // page number field values which must NOT be synced back to the WASM model
+    // (doing so would create duplicate text alongside the Field nodes).
+    if (el.closest('.page-header, .page-footer')) return;
     const tag = el.tagName.toLowerCase();
     if (tag === 'p' || /^h[1-6]$/.test(tag)) syncParagraphText(el);
   });
+  state._dirtyParagraphs.clear();
 }
 
 function clearFindHighlights() {
@@ -865,6 +919,8 @@ function clearFindHighlights() {
 }
 
 export function debouncedSync(el) {
+  // X4: Mark paragraph as dirty immediately for dirty-only sync tracking
+  if (el?.dataset?.nodeId) state._dirtyParagraphs.add(el.dataset.nodeId);
   clearTimeout(state.syncTimer);
   state.syncTimer = setTimeout(() => {
     // E6.3: Don't sync during IME composition — wait for compositionend

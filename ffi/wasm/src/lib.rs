@@ -316,6 +316,27 @@ impl WasmDocument {
         Ok(doc.paragraph_count())
     }
 
+    /// Get an import fidelity report as a JSON string.
+    ///
+    /// Counts objects that could not be rendered faithfully and are shown
+    /// as placeholders. Returns JSON like:
+    /// `{"charts":2,"smartart":1,"ole":0,"missingImages":0,"total":3}`
+    ///
+    /// Consumers can use this to display "3 objects shown as placeholders"
+    /// after opening a document, rather than silently degrading.
+    pub fn fidelity_report_json(&self) -> Result<String, JsError> {
+        let html = self.to_html()?;
+        let charts = html.matches("chart-placeholder").count();
+        let smartart = html.matches("diagram-placeholder").count();
+        let ole = html.matches("ole-placeholder").count();
+        let missing_images = html.matches("s1-image-placeholder").count();
+        let total = charts + smartart + ole + missing_images;
+        Ok(format!(
+            "{{\"charts\":{},\"smartart\":{},\"ole\":{},\"missingImages\":{},\"total\":{}}}",
+            charts, smartart, ole, missing_images, total
+        ))
+    }
+
     /// Render the document as paginated HTML using the layout engine.
     ///
     /// Produces CSS-positioned HTML with real page boundaries. Each page
@@ -458,11 +479,15 @@ impl WasmDocument {
         let layout = doc
             .layout(&font_db)
             .map_err(|e| JsError::new(&e.to_string()))?;
+        self.serialize_page_map(&layout)
+    }
 
+    fn serialize_page_map(&self, layout: &s1_layout::LayoutDocument) -> Result<String, JsError> {
         let mut pages_json = Vec::new();
         for (i, page) in layout.pages.iter().enumerate() {
             let mut node_ids = Vec::new();
             let mut table_chunks_json = Vec::new();
+            let mut para_splits_json = Vec::new();
             for block in &page.blocks {
                 let id_str = format!("{}:{}", block.source_id.replica, block.source_id.counter);
 
@@ -484,6 +509,26 @@ impl WasmDocument {
                     ));
                     // Always include table ID (even duplicates across pages)
                     node_ids.push(id_str);
+                } else if let s1_layout::LayoutBlockKind::Paragraph {
+                    is_continuation,
+                    split_at_line,
+                    lines,
+                    ..
+                } = &block.kind
+                {
+                    if *split_at_line > 0 {
+                        // This paragraph was split across pages
+                        let line_count = lines.len();
+                        let total_height: f64 = lines.iter().map(|l| l.height).sum();
+                        para_splits_json.push(format!(
+                            "{{\"nodeId\":\"{}\",\"isContinuation\":{},\"splitAtLine\":{},\"lineCount\":{},\"blockHeight\":{:.2}}}",
+                            id_str, is_continuation, split_at_line, line_count, total_height,
+                        ));
+                        // Always include the node ID (even duplicates for split paragraphs)
+                        node_ids.push(id_str);
+                    } else if !node_ids.contains(&id_str) {
+                        node_ids.push(id_str);
+                    }
                 } else {
                     if !node_ids.contains(&id_str) {
                         node_ids.push(id_str);
@@ -527,8 +572,13 @@ impl WasmDocument {
             } else {
                 format!("[{}]", table_chunks_json.join(","))
             };
+            let para_splits_str = if para_splits_json.is_empty() {
+                String::from("[]")
+            } else {
+                format!("[{}]", para_splits_json.join(","))
+            };
             pages_json.push(format!(
-                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"tableChunks\":{},\"footer\":\"{}\",\"header\":\"{}\"}}",
+                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"tableChunks\":{},\"paraSplits\":{},\"footer\":\"{}\",\"header\":\"{}\"}}",
                 i + 1,
                 page.width,
                 page.height,
@@ -539,11 +589,25 @@ impl WasmDocument {
                 page.section_index,
                 ids_arr.join(","),
                 table_chunks_str,
+                para_splits_str,
                 escape_json(&footer_text),
                 escape_json(&header_text),
             ));
         }
         Ok(format!("{{\"pages\":[{}]}}", pages_json.join(",")))
+    }
+
+    /// Get page map JSON with font metrics for accurate line-level pagination.
+    pub fn get_page_map_json_with_fonts(
+        &self,
+        font_db: &WasmFontDatabase,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(&font_db.inner)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        // Reuse the same JSON serialization as get_page_map_json
+        self.serialize_page_map(&layout)
     }
 
     /// Export the document as PDF bytes.
@@ -1106,18 +1170,29 @@ impl WasmDocument {
 
     /// Set the entire text content of a paragraph.
     ///
-    /// **WARNING**: When an edit spans multiple runs, this replaces ALL runs
-    /// in the paragraph with a single run, destroying any inline formatting
-    /// (bold, italic, links, etc.). Use `replace_text()` instead if you need
-    /// to preserve run-level formatting.
+    /// # Formatting preservation behavior
     ///
-    /// For single-run edits and no-change cases, formatting IS preserved:
-    /// - If the total text across all runs already matches `new_text`, it is
-    ///   a no-op (preserving per-run formatting).
-    /// - If the edit falls within a single run, a targeted insert/delete is
-    ///   used and that run's formatting is preserved.
-    /// - Only when an edit spans multiple runs are extra runs deleted and the
-    ///   remaining single run receives the new text.
+    /// - **No change**: If `new_text` matches the existing text across all runs,
+    ///   this is a no-op — per-run formatting is fully preserved.
+    /// - **Single-run edit**: If the diff falls within a single run, a targeted
+    ///   insert/delete is used and that run's formatting is preserved.
+    /// - **Cross-run edit**: When the edit spans multiple runs, extra runs are
+    ///   deleted and the surviving run receives the new text. **This collapses
+    ///   inline formatting** (bold, italic, links, font changes, etc.) to a
+    ///   single formatting context.
+    ///
+    /// # Preferred alternatives
+    ///
+    /// For DOM-driven edits from the editor, prefer range-aware operations:
+    /// - `insert_text_in_paragraph()` — insert at a specific offset
+    /// - `delete_text_in_paragraph()` — delete a range within a paragraph
+    /// - `format_selection()` — apply formatting to a character range
+    /// - `replace_text()` — replace text in a range (preserves surrounding formatting)
+    ///
+    /// These operations work at the character/run level and never collapse
+    /// formatting outside the edited range. `set_paragraph_text` should be
+    /// reserved for sync/convergence scenarios where the full paragraph text
+    /// needs to be force-set (e.g., non-CRDT collaboration fallback).
     pub fn set_paragraph_text(&mut self, node_id_str: &str, new_text: &str) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
@@ -1338,6 +1413,10 @@ impl WasmDocument {
     // ─── Formatting ───────────────────────────────────────────────
 
     /// Set bold on a paragraph's first run.
+    ///
+    /// For selection-aware formatting, use `format_selection()` or
+    /// `set_bold_range()` instead — they correctly handle mixed-format
+    /// paragraphs by splitting runs at selection boundaries.
     pub fn set_bold(&mut self, node_id_str: &str, bold: bool) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
@@ -1347,7 +1426,28 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Set bold on a selection range. Preferred over `set_bold` for toolbar
+    /// actions when the user has an active text selection.
+    pub fn set_bold_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        bold: bool,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "bold",
+            if bold { "true" } else { "false" },
+        )
+    }
+
     /// Set italic on a paragraph's first run.
+    /// For selection-aware formatting, use `set_italic_range` or `format_selection`.
     pub fn set_italic(&mut self, node_id_str: &str, italic: bool) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
@@ -1426,6 +1526,105 @@ impl WasmDocument {
         let attrs = s1_model::AttributeMap::new().color(color);
         doc.apply(Operation::set_attributes(run_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    // ─── Selection-aware formatting helpers ─────────────────────
+    // These delegate to format_selection and are the preferred API
+    // for toolbar actions when the user has an active text selection.
+
+    /// Set italic on a selection range.
+    pub fn set_italic_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        italic: bool,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "italic",
+            if italic { "true" } else { "false" },
+        )
+    }
+
+    /// Set underline on a selection range.
+    pub fn set_underline_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        underline: bool,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "underline",
+            if underline { "single" } else { "none" },
+        )
+    }
+
+    /// Set font size on a selection range (in points).
+    pub fn set_font_size_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        size_pt: f64,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "fontSize",
+            &size_pt.to_string(),
+        )
+    }
+
+    /// Set font family on a selection range.
+    pub fn set_font_family_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        font: &str,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "fontFamily",
+            font,
+        )
+    }
+
+    /// Set text color on a selection range (hex string like "FF0000").
+    pub fn set_color_range(
+        &mut self,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
+        hex: &str,
+    ) -> Result<(), JsError> {
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "color",
+            hex,
+        )
     }
 
     /// Set paragraph alignment ("left", "center", "right", "justify").
@@ -1779,7 +1978,9 @@ impl WasmDocument {
 
         // Walk runs to find target
         let mut accumulated = 0usize;
-        let mut target_run_id = *run_children.last().unwrap();
+        let mut target_run_id = *run_children
+            .last()
+            .ok_or_else(|| JsError::new("Empty run"))?;
         let mut local_offset = 0usize;
         for &run_id in &run_children {
             let rlen = run_char_len(doc.model(), run_id);
@@ -8355,6 +8556,11 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
 ///
 /// Extracted as a shared helper so that both `render_node` and
 /// `render_inline_children` use the same logic (L-02).
+///
+/// Field elements are marked `contenteditable="false"` so that:
+/// 1. The editor's text sync (getEditableText) excludes their substituted
+///    text, preventing duplicate page numbers when syncing back to the model.
+/// 2. Users cannot accidentally edit field placeholder text directly.
 fn render_field_html(node: &Node, html: &mut String) {
     if let Some(AttributeValue::FieldType(ft)) = node.attributes.get(&AttributeKey::FieldType) {
         // Emit data-field attribute so the editor's pagination system
@@ -8362,31 +8568,31 @@ fn render_field_html(node: &Node, html: &mut String) {
         // substitute the correct values at render time.
         match ft {
             s1_model::FieldType::PageNumber => {
-                html.push_str("<span class=\"field\" data-field=\"PageNumber\">PAGE</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageNumber\" contenteditable=\"false\">PAGE</span>");
             }
             s1_model::FieldType::PageCount => {
-                html.push_str("<span class=\"field\" data-field=\"PageCount\">NUMPAGES</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageCount\" contenteditable=\"false\">NUMPAGES</span>");
             }
             s1_model::FieldType::Date => {
-                html.push_str("<span class=\"field\" data-field=\"Date\">DATE</span>");
+                html.push_str("<span class=\"field\" data-field=\"Date\" contenteditable=\"false\">DATE</span>");
             }
             s1_model::FieldType::Time => {
-                html.push_str("<span class=\"field\" data-field=\"Time\">TIME</span>");
+                html.push_str("<span class=\"field\" data-field=\"Time\" contenteditable=\"false\">TIME</span>");
             }
             s1_model::FieldType::FileName => {
-                html.push_str("<span class=\"field\" data-field=\"FileName\">FILENAME</span>");
+                html.push_str("<span class=\"field\" data-field=\"FileName\" contenteditable=\"false\">FILENAME</span>");
             }
             s1_model::FieldType::Author => {
-                html.push_str("<span class=\"field\" data-field=\"Author\">AUTHOR</span>");
+                html.push_str("<span class=\"field\" data-field=\"Author\" contenteditable=\"false\">AUTHOR</span>");
             }
             s1_model::FieldType::TableOfContents => {
-                html.push_str("<span class=\"field\" data-field=\"TableOfContents\">TOC</span>");
+                html.push_str("<span class=\"field\" data-field=\"TableOfContents\" contenteditable=\"false\">TOC</span>");
             }
             s1_model::FieldType::Custom => {
-                html.push_str("<span class=\"field\" data-field=\"Custom\">FIELD</span>");
+                html.push_str("<span class=\"field\" data-field=\"Custom\" contenteditable=\"false\">FIELD</span>");
             }
             _ => {
-                html.push_str("<span class=\"field\" data-field=\"Unknown\">FIELD</span>");
+                html.push_str("<span class=\"field\" data-field=\"Unknown\" contenteditable=\"false\">FIELD</span>");
             }
         }
     }
@@ -9726,6 +9932,7 @@ fn layout_block_to_json(block: &s1_layout::LayoutBlock, model: &DocumentModel, j
             indent_first_line,
             line_height,
             bidi,
+            ..
         } => {
             json.push_str("\"type\":\"paragraph\",");
 
@@ -11859,7 +12066,10 @@ fn parse_cell_value_auto(value: &str) -> s1_format_xlsx::CellValue {
 /// Parse CSV text into a Workbook.
 fn parse_csv_to_workbook(text: &str, delimiter: char) -> s1_format_xlsx::Workbook {
     let mut wb = s1_format_xlsx::Workbook::new();
-    let sheet = wb.sheets.first_mut().unwrap();
+    let sheet = match wb.sheets.first_mut() {
+        Some(s) => s,
+        None => return wb, // should never happen, but avoid panic
+    };
 
     for (row_idx, line) in text.lines().enumerate() {
         let mut col_idx = 0u32;
@@ -11899,7 +12109,9 @@ fn parse_csv_to_workbook(text: &str, delimiter: char) -> s1_format_xlsx::Workboo
                             break;
                         }
                         Some(_) => {
-                            field.push(chars.next().unwrap());
+                            if let Some(c) = chars.next() {
+                                field.push(c);
+                            }
                         }
                         None => break,
                     }

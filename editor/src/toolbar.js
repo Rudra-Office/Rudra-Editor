@@ -604,6 +604,18 @@ export function updateFloatingToolbar() {
     hideFloatingToolbar();
     return;
   }
+  // Don't show floating toolbar when AI is active
+  if (state.aiInlineSuggestion || state.aiGenerating) {
+    hideFloatingToolbar();
+    return;
+  }
+  const aiSuggestion = document.getElementById('aiInlineSuggestion');
+  const aiPrompt = document.getElementById('aiInlinePrompt');
+  if ((aiSuggestion && aiSuggestion.style.display !== 'none' && aiSuggestion.style.display !== '') ||
+      (aiPrompt && aiPrompt.style.display !== 'none' && aiPrompt.style.display !== '')) {
+    hideFloatingToolbar();
+    return;
+  }
   // Ensure selection is within editor
   const range = sel.getRangeAt(0);
   const container = $('pageContainer');

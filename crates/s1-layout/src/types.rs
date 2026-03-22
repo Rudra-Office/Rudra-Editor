@@ -132,6 +132,21 @@ pub enum LayoutBlockKind {
         line_height: Option<f64>,
         /// Whether this paragraph has right-to-left (BiDi) direction.
         bidi: bool,
+        /// Whether this block is a continuation of a split paragraph from a previous page.
+        ///
+        /// When a paragraph is too tall to fit on a single page, the layout engine
+        /// splits it at a line boundary. The first part stays on the current page
+        /// (with `is_continuation: false`) and the second part goes on the next page
+        /// (with `is_continuation: true`). The renderer uses this to avoid repeating
+        /// list markers, first-line indent, and space-before on the continuation.
+        is_continuation: bool,
+        /// The line index at which this paragraph was split from the original.
+        ///
+        /// For the first part of a split paragraph, this is the number of lines
+        /// kept on the current page (i.e., the split point). For a continuation
+        /// block, this is the line index in the original paragraph where the
+        /// continuation starts. `0` means no split occurred.
+        split_at_line: usize,
     },
     /// A table with rows.
     Table {

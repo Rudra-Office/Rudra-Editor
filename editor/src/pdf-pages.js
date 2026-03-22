@@ -242,7 +242,7 @@ async function extractPages(pageNums) {
       a.href = url;
       a.download = ($('docName').value || 'document') + '_extracted.pdf';
       a.click();
-      URL.revokeObjectURL(url);
+      setTimeout(() => { try { URL.revokeObjectURL(url); } catch(_) {} }, 60000);
       showToast(`Extracted ${pageNums.length} page(s)`);
     } else {
       showToast('PDF page operations require WASM PDF editor (coming soon)', 'error');
