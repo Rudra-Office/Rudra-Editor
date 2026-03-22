@@ -144,7 +144,9 @@ async fn main() {
     // Build auth config from environment
     let auth_config = std::sync::Arc::new(auth::AuthConfig {
         enabled: auth_enabled,
-        jwt_secret: std::env::var("S1_JWT_SECRET").ok().filter(|s| !s.is_empty()),
+        jwt_secret: std::env::var("S1_JWT_SECRET")
+            .ok()
+            .filter(|s| !s.is_empty()),
         allow_anonymous: !auth_enabled,
         api_keys: Vec::new(), // Loaded from s1.toml if configured
     });

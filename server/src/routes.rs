@@ -45,10 +45,7 @@ fn check_upload_rate(ip: &str) -> bool {
 /// Only trusts `X-Forwarded-For` / `X-Real-IP` headers when
 /// `S1_TRUSTED_PROXY=true` is set, preventing spoofable rate-limit bypass.
 /// Falls back to the TCP socket address.
-fn extract_client_ip(
-    headers: &HeaderMap,
-    peer_addr: Option<std::net::SocketAddr>,
-) -> String {
+fn extract_client_ip(headers: &HeaderMap, peer_addr: Option<std::net::SocketAddr>) -> String {
     static TRUST_PROXY: OnceLock<bool> = OnceLock::new();
     let trust_proxy = *TRUST_PROXY.get_or_init(|| {
         std::env::var("S1_TRUSTED_PROXY")

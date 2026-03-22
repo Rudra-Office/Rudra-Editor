@@ -483,7 +483,6 @@ impl WasmDocument {
     }
 
     fn serialize_page_map(&self, layout: &s1_layout::LayoutDocument) -> Result<String, JsError> {
-
         let mut pages_json = Vec::new();
         for (i, page) in layout.pages.iter().enumerate() {
             let mut node_ids = Vec::new();
@@ -1415,8 +1414,8 @@ impl WasmDocument {
 
     /// Set bold on a paragraph's first run.
     ///
-    /// For selection-aware formatting, use [`format_selection`] or
-    /// [`set_bold_range`] instead — they correctly handle mixed-format
+    /// For selection-aware formatting, use `format_selection()` or
+    /// `set_bold_range()` instead — they correctly handle mixed-format
     /// paragraphs by splitting runs at selection boundaries.
     pub fn set_bold(&mut self, node_id_str: &str, bold: bool) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
@@ -1438,9 +1437,12 @@ impl WasmDocument {
         bold: bool,
     ) -> Result<(), JsError> {
         self.format_selection(
-            start_node_str, start_offset,
-            end_node_str, end_offset,
-            "bold", if bold { "true" } else { "false" },
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "bold",
+            if bold { "true" } else { "false" },
         )
     }
 
@@ -1533,56 +1535,96 @@ impl WasmDocument {
     /// Set italic on a selection range.
     pub fn set_italic_range(
         &mut self,
-        start_node_str: &str, start_offset: usize,
-        end_node_str: &str, end_offset: usize,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
         italic: bool,
     ) -> Result<(), JsError> {
-        self.format_selection(start_node_str, start_offset, end_node_str, end_offset,
-            "italic", if italic { "true" } else { "false" })
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "italic",
+            if italic { "true" } else { "false" },
+        )
     }
 
     /// Set underline on a selection range.
     pub fn set_underline_range(
         &mut self,
-        start_node_str: &str, start_offset: usize,
-        end_node_str: &str, end_offset: usize,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
         underline: bool,
     ) -> Result<(), JsError> {
-        self.format_selection(start_node_str, start_offset, end_node_str, end_offset,
-            "underline", if underline { "single" } else { "none" })
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "underline",
+            if underline { "single" } else { "none" },
+        )
     }
 
     /// Set font size on a selection range (in points).
     pub fn set_font_size_range(
         &mut self,
-        start_node_str: &str, start_offset: usize,
-        end_node_str: &str, end_offset: usize,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
         size_pt: f64,
     ) -> Result<(), JsError> {
-        self.format_selection(start_node_str, start_offset, end_node_str, end_offset,
-            "fontSize", &size_pt.to_string())
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "fontSize",
+            &size_pt.to_string(),
+        )
     }
 
     /// Set font family on a selection range.
     pub fn set_font_family_range(
         &mut self,
-        start_node_str: &str, start_offset: usize,
-        end_node_str: &str, end_offset: usize,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
         font: &str,
     ) -> Result<(), JsError> {
-        self.format_selection(start_node_str, start_offset, end_node_str, end_offset,
-            "fontFamily", font)
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "fontFamily",
+            font,
+        )
     }
 
     /// Set text color on a selection range (hex string like "FF0000").
     pub fn set_color_range(
         &mut self,
-        start_node_str: &str, start_offset: usize,
-        end_node_str: &str, end_offset: usize,
+        start_node_str: &str,
+        start_offset: usize,
+        end_node_str: &str,
+        end_offset: usize,
         hex: &str,
     ) -> Result<(), JsError> {
-        self.format_selection(start_node_str, start_offset, end_node_str, end_offset,
-            "color", hex)
+        self.format_selection(
+            start_node_str,
+            start_offset,
+            end_node_str,
+            end_offset,
+            "color",
+            hex,
+        )
     }
 
     /// Set paragraph alignment ("left", "center", "right", "justify").
