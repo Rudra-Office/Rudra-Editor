@@ -1,5 +1,7 @@
 // s1 Editor Service Worker — offline caching with stale-while-revalidate strategy
-const CACHE_NAME = 's1-editor-v1';
+// X10: Bump version when WASM or JS bundles change to bust stale caches
+const CACHE_VERSION = 2;
+const CACHE_NAME = 's1-editor-v' + CACHE_VERSION;
 const ASSETS_TO_CACHE = [
   '/',
   '/index.html',
@@ -44,6 +46,25 @@ self.addEventListener('fetch', (event) => {
 
   // Skip room/admin API endpoints
   if (url.pathname.startsWith('/rooms') || url.pathname.startsWith('/admin')) return;
+
+  // X10: Always fetch fresh for WASM and JS bundles — prevents stale WASM/JS from being served.
+  // WASM binaries must always match the JS glue code version.
+  if (url.pathname.endsWith('.wasm') || url.pathname.endsWith('.js') || url.pathname.includes('wasm-pkg') || url.pathname.includes('wasm_')) {
+    event.respondWith(
+      fetch(event.request)
+        .then((response) => {
+          if (response && response.ok) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+          }
+          return response;
+        })
+        .catch(() => caches.match(event.request).then((cached) =>
+          cached || new Response('WASM unavailable offline', { status: 503 })
+        ))
+    );
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cached) => {

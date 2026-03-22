@@ -25,10 +25,14 @@ export function initAI() {
 
 /** Check if the AI sidecar is reachable */
 export async function checkAIHealth() {
+  const healthController = new AbortController();
+  const healthTimeout = setTimeout(() => healthController.abort(), 3000);
   try {
-    const res = await fetch(`${_baseUrl}/health`, { signal: AbortSignal.timeout(3000) });
+    const res = await fetch(`${_baseUrl}/health`, { signal: healthController.signal });
+    clearTimeout(healthTimeout);
     return res.ok;
   } catch {
+    clearTimeout(healthTimeout);
     return false;
   }
 }

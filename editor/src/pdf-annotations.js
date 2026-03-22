@@ -800,8 +800,7 @@ function _downloadBlob(data, mimeType) {
   a.download = ($('docName').value || 'document') + '.pdf';
   document.body.appendChild(a);
   a.click();
-  document.body.removeChild(a);
-  URL.revokeObjectURL(url);
+  setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 60000);
 }
 
 document.addEventListener('pdfPageRendered', (event) => {

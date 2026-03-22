@@ -106,11 +106,34 @@ export function countCharsToPoint(container, targetNode, targetOffset) {
       }
     }
 
-    const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+    // X13: Walk text AND element nodes to account for inline images
+    const walker = document.createTreeWalker(container, NodeFilter.SHOW_ALL, {
+      acceptNode(node) {
+        if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+        if (node.nodeType === 1) {
+          if (isInsideNonEditable(node, container)) return NodeFilter.FILTER_REJECT;
+          if (node.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT;
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
     let count = 0, node;
     while ((node = walker.nextNode())) {
-      // Skip text inside non-editable elements (list markers, etc.)
-      if (isInsideNonEditable(node, container)) continue;
+      // X13: IMG nodes count as 1 character (matching \uFFFC in getEditableText)
+      if (node.nodeType === 1 && node.tagName === 'IMG') {
+        if (node === effectiveTarget) return count;
+        // If the target is the IMG's parent and offset puts cursor after the IMG
+        if (effectiveTarget.nodeType === 1 && effectiveTarget === node.parentNode) {
+          const idx = Array.from(effectiveTarget.childNodes).indexOf(node);
+          if (idx >= 0 && idx < effectiveOffset) {
+            count += 1;
+            continue;
+          }
+        }
+        count += 1;
+        continue;
+      }
       // D14: Skip text nodes inside hidden elements or zero-content placeholders
       if (node.parentElement?.closest('[style*="display:none"], [style*="display: none"], [hidden], .equation-placeholder')) continue;
       if (node === effectiveTarget) {
@@ -122,10 +145,25 @@ export function countCharsToPoint(container, targetNode, targetOffset) {
     }
     if (effectiveTarget.nodeType === 1) {
       const kids = effectiveTarget.childNodes;
-      const w2 = document.createTreeWalker(container, NodeFilter.SHOW_TEXT, null);
+      const w2 = document.createTreeWalker(container, NodeFilter.SHOW_ALL, {
+        acceptNode(node) {
+          if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+          if (node.nodeType === 1) {
+            if (isInsideNonEditable(node, container)) return NodeFilter.FILTER_REJECT;
+            if (node.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT;
+            return NodeFilter.FILTER_SKIP;
+          }
+          return NodeFilter.FILTER_SKIP;
+        }
+      });
       let c = 0, n2;
       while ((n2 = w2.nextNode())) {
-        if (isInsideNonEditable(n2, container)) continue;
+        if (n2.nodeType === 1 && n2.tagName === 'IMG') {
+          for (let i = 0; i < effectiveOffset && i < kids.length; i++) {
+            if (kids[i].contains(n2) || kids[i] === n2) { c += 1; break; }
+          }
+          continue;
+        }
         // D14: Skip hidden/placeholder nodes in fallback walker too
         if (n2.parentElement?.closest('[style*="display:none"], [style*="display: none"], [hidden], .equation-placeholder')) continue;
         for (let i = 0; i < effectiveOffset && i < kids.length; i++) {
@@ -245,12 +283,40 @@ export function setCursorAtOffset(el, charOffset) {
   const content = el.closest('.page-content');
   if (content && document.activeElement !== content) content.focus();
 
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+  // X13: Walk text AND element nodes to account for inline images
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL, {
+    acceptNode(node) {
+      if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+      if (node.nodeType === 1) {
+        if (isInsideNonEditable(node, el)) return NodeFilter.FILTER_REJECT;
+        if (node.parentElement?.closest?.('.peer-cursor')) return NodeFilter.FILTER_REJECT;
+        if (node.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT;
+        return NodeFilter.FILTER_SKIP;
+      }
+      return NodeFilter.FILTER_SKIP;
+    }
+  });
   let counted = 0, node;
   while ((node = walker.nextNode())) {
-    // Skip text inside non-editable elements (list markers, peer cursors, etc.)
-    if (isInsideNonEditable(node, el)) continue;
-    if (node.parentElement?.closest?.('.peer-cursor')) continue;
+    // X13: IMG nodes count as 1 character — place cursor after the image
+    if (node.nodeType === 1 && node.tagName === 'IMG') {
+      if (counted + 1 >= charOffset) {
+        const range = document.createRange();
+        if (charOffset <= counted) {
+          // Place cursor before the image
+          range.setStartBefore(node);
+        } else {
+          // Place cursor after the image
+          range.setStartAfter(node);
+        }
+        range.collapse(true);
+        const sel = window.getSelection();
+        sel.removeAllRanges(); sel.addRange(range);
+        return;
+      }
+      counted += 1;
+      continue;
+    }
     // D14: Skip text nodes inside hidden elements or zero-content placeholders
     if (node.parentElement?.closest('[style*="display:none"], [style*="display: none"], [hidden], .equation-placeholder')) continue;
     const chars = Array.from(node.textContent);
@@ -303,11 +369,31 @@ export function setCursorAtStart(el) {
 }
 
 export function setSelectionRange(startEl, startOff, endEl, endOff) {
+  // X13: Account for inline images when resolving character offsets
   const resolve = (el, off) => {
-    const w = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+    const w = document.createTreeWalker(el, NodeFilter.SHOW_ALL, {
+      acceptNode(node) {
+        if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT;
+        if (node.nodeType === 1) {
+          if (isInsideNonEditable(node, el)) return NodeFilter.FILTER_REJECT;
+          if (node.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT;
+          return NodeFilter.FILTER_SKIP;
+        }
+        return NodeFilter.FILTER_SKIP;
+      }
+    });
     let counted = 0, node;
     while ((node = w.nextNode())) {
-      if (isInsideNonEditable(node, el)) continue;
+      if (node.nodeType === 1 && node.tagName === 'IMG') {
+        if (counted + 1 >= off) {
+          // Return a position before or after the image
+          return off <= counted
+            ? { node: node.parentNode, offset: Array.from(node.parentNode.childNodes).indexOf(node) }
+            : { node: node.parentNode, offset: Array.from(node.parentNode.childNodes).indexOf(node) + 1 };
+        }
+        counted += 1;
+        continue;
+      }
       const chars = Array.from(node.textContent);
       if (counted + chars.length >= off) {
         let strOff = 0;
@@ -377,14 +463,31 @@ export function setSelectionRange(startEl, startOff, endEl, endOff) {
 
 // Get only the editable text content (excludes list markers and other non-editable elements)
 export function getEditableText(el) {
-  const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
   let text = '';
+  // X13: Walk all child nodes, not just text nodes — accounts for inline images
+  const walker = document.createTreeWalker(el, NodeFilter.SHOW_ALL, {
+    acceptNode(node) {
+      if (node.nodeType === 3) return NodeFilter.FILTER_ACCEPT; // text
+      if (node.nodeType === 1) {
+        if (isInsideNonEditable(node, el)) return NodeFilter.FILTER_REJECT;
+        if (node.tagName === 'IMG') return NodeFilter.FILTER_ACCEPT; // images
+        if (node.tagName === 'BR') return NodeFilter.FILTER_ACCEPT; // line breaks
+        return NodeFilter.FILTER_SKIP; // skip other elements, walk children
+      }
+      return NodeFilter.FILTER_SKIP;
+    }
+  });
   let node;
   while ((node = walker.nextNode())) {
-    if (isInsideNonEditable(node, el)) continue;
-    // D14: Skip text nodes inside hidden elements or zero-content placeholders
-    if (node.parentElement?.closest('[style*="display:none"], [style*="display: none"], [hidden], .equation-placeholder')) continue;
-    text += node.textContent;
+    if (node.nodeType === 3) {
+      // D14: Skip text nodes inside hidden elements or zero-content placeholders
+      if (node.parentElement?.closest('[style*="display:none"], [style*="display: none"], [hidden], .equation-placeholder')) continue;
+      text += node.textContent;
+    } else if (node.tagName === 'IMG') {
+      text += '\uFFFC'; // Object replacement character — placeholder for image
+    } else if (node.tagName === 'BR') {
+      // BRs in contenteditable represent empty lines — skip
+    }
   }
   return text;
 }

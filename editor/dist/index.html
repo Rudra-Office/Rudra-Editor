@@ -3,7 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; img-src 'self' data: blob:; connect-src 'self' ws: wss: http: https:; worker-src 'self' blob:;">
+  <!-- CSP is enforced via server headers in production (see server/src/main.rs).
+       Not set here to avoid blocking Vite dev server HMR and WASM compilation. -->
   <title>Rudra Office</title>
   <link rel="manifest" href="/manifest.json">
   <meta name="theme-color" content="#1a73e8">
@@ -35,8 +36,8 @@
   <!-- KaTeX — equation rendering -->
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css" crossorigin="anonymous">
   <script defer src="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.js" crossorigin="anonymous"></script>
-  <script type="module" crossorigin src="/assets/index-Dv7i1fwQ.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/index-CenTs8Jf.css">
+  <script type="module" crossorigin src="/assets/index-BQjcRUdh.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/index-D-h4S256.css">
 </head>
 <body>
 <a href="#pageContainer" class="skip-link">Skip to document</a>
@@ -172,6 +173,8 @@
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuPageSetup" role="menuitem" tabindex="-1" title="Configure page size, margins, and orientation"><span class="msi">description</span> Page Setup...</button>
         <button class="app-menu-entry" id="menuColumns" role="menuitem" tabindex="-1" title="Configure text column layout"><span class="msi">view_column</span> Columns...</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuAutoFormat" role="menuitem" tabindex="-1" title="Auto-detect and apply formatting (headings, body text)"><span class="msi">auto_fix_high</span> Auto Format Document</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="reviewMenu">
@@ -497,6 +500,13 @@
         </button>
       </div>
     </div>
+    <div class="welcome-features" style="display:flex;gap:12px;flex-wrap:wrap;justify-content:center;margin-top:16px;">
+      <span style="font-size:12px;color:#5f6368;background:#f1f3f4;padding:4px 10px;border-radius:12px;">DOCX / ODT / PDF</span>
+      <span style="font-size:12px;color:#5f6368;background:#f1f3f4;padding:4px 10px;border-radius:12px;">Real-time Collaboration</span>
+      <span style="font-size:12px;color:#5f6368;background:#f1f3f4;padding:4px 10px;border-radius:12px;">Spreadsheets</span>
+      <span style="font-size:12px;color:#5f6368;background:#f1f3f4;padding:4px 10px;border-radius:12px;">AI Assistant</span>
+      <span style="font-size:12px;color:#5f6368;background:#f1f3f4;padding:4px 10px;border-radius:12px;">Dark Mode</span>
+    </div>
     <div class="drop-zone" id="dropZone">
       <span class="msi drop-icon">upload_file</span>
       <span>Drop a DOCX, ODT, PDF, TXT, CSV, or Markdown file here</span>
@@ -806,6 +816,34 @@
       </div>
     </div>
 
+    <!-- AI Assistant Panel (right sidebar, inside editor-wrapper) -->
+    <div class="ai-panel" id="aiPanel" role="complementary" aria-label="AI Assistant" style="display:none">
+      <div class="ai-panel-resize-handle" title="Drag to resize AI panel"></div>
+      <div class="ai-panel-header">
+        <h3>AI Assistant</h3>
+        <span class="ai-context-chip" id="aiContextLabel" title="Current editing context">Document</span>
+        <button class="ai-clear-btn" id="aiClearBtn" title="Clear conversation"><span class="msi" style="font-size:16px">delete_sweep</span></button>
+        <div class="ai-panel-status" id="aiPanelStatus" title="AI connection status"></div>
+        <button class="ai-panel-close" id="aiPanelClose" aria-label="Close AI panel" title="Close panel"><span class="msi">close</span></button>
+      </div>
+      <div class="ai-panel-mode">
+        <select class="ai-mode-select" id="aiModeSelect" title="Choose AI task"></select>
+      </div>
+      <div class="ai-panel-messages" id="aiMessages">
+        <div class="ai-welcome">
+          <p>How can I help with your document?</p>
+          <div class="ai-suggestions" id="aiSuggestions"></div>
+        </div>
+      </div>
+      <div class="ai-panel-input">
+        <textarea class="ai-input" id="aiInput" rows="2" placeholder="Ask AI to help with your document..." title="Type your request for the AI assistant"></textarea>
+        <div class="ai-input-actions">
+          <button class="ai-send-btn" id="aiSendBtn" title="Send request to AI (Enter)"><span class="msi">send</span></button>
+          <button class="ai-stop-btn" id="aiStopBtn" title="Stop AI generation" style="display:none"><span class="msi">stop</span></button>
+        </div>
+      </div>
+    </div>
+
   </div><!-- end .editor-wrapper -->
 
   <!-- PDF View -->
@@ -1068,40 +1106,6 @@
       <button class="ai-inline-accept" id="aiInlineAccept" title="Accept suggestion (Ctrl+Enter)"><span class="msi" style="font-size:16px">check</span> Accept</button>
       <button class="ai-inline-reject" id="aiInlineReject" title="Reject suggestion (Escape)"><span class="msi" style="font-size:16px">close</span> Reject</button>
       <button class="ai-inline-retry" id="aiInlineRetry" title="Retry with editable prompt"><span class="msi" style="font-size:16px">refresh</span> Retry</button>
-    </div>
-  </div>
-
-  <!-- AI Assistant Panel (right, docked) -->
-  <div class="ai-panel" id="aiPanel" role="complementary" aria-label="AI Assistant" style="display:none">
-    <div class="ai-panel-header">
-      <h3>AI Assistant</h3>
-      <span class="ai-context-chip" id="aiContextLabel" title="Current editing context">Document</span>
-      <button class="ai-clear-btn" id="aiClearBtn" title="Clear conversation"><span class="msi" style="font-size:16px">delete_sweep</span></button>
-      <div class="ai-panel-status" id="aiPanelStatus" title="AI connection status"></div>
-      <button class="ai-panel-close" id="aiPanelClose" aria-label="Close AI panel" title="Close panel"><span class="msi">close</span></button>
-    </div>
-    <div class="ai-panel-mode">
-      <select class="ai-mode-select" id="aiModeSelect" title="Choose AI task">
-        <option value="writer">Writing Assist</option>
-        <option value="grammar">Grammar Check</option>
-        <option value="summarize">Summarize</option>
-        <option value="translate">Translate</option>
-        <option value="formula">Formula Help</option>
-        <option value="data_analysis">Analyze Data</option>
-      </select>
-    </div>
-    <div class="ai-panel-messages" id="aiMessages">
-      <div class="ai-welcome">
-        <p>Select text in your document, then ask the AI to help.</p>
-        <p class="ai-welcome-hint">Or type a question below.</p>
-      </div>
-    </div>
-    <div class="ai-panel-input">
-      <textarea class="ai-input" id="aiInput" rows="2" placeholder="Ask AI to help with your document..." title="Type your request for the AI assistant"></textarea>
-      <div class="ai-input-actions">
-        <button class="ai-send-btn" id="aiSendBtn" title="Send request to AI (Enter)"><span class="msi">send</span></button>
-        <button class="ai-stop-btn" id="aiStopBtn" title="Stop AI generation" style="display:none"><span class="msi">stop</span></button>
-      </div>
     </div>
   </div>
 

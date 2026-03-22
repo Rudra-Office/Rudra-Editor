@@ -274,13 +274,8 @@ export async function closeFileTab(tabId) {
     if (state.pdfViewer) { state.pdfViewer.destroy(); state.pdfViewer = null; }
     if (state.spreadsheetView) { state.spreadsheetView.destroy(); state.spreadsheetView = null; }
 
-    const { switchView } = await import('./file.js');
-    switchView('editor');
-    $('welcomeScreen').style.display = '';
-    $('toolbar').classList.remove('show');
-    const menubar = $('appMenubar');
-    if (menubar) menubar.classList.remove('show');
-    $('statusbar').classList.remove('show');
+    const { deactivateEditor } = await import('./file.js');
+    deactivateEditor();
     $('docName').value = 'Untitled Document';
     renderTabBar();
     return;

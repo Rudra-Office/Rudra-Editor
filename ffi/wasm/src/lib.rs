@@ -458,11 +458,16 @@ impl WasmDocument {
         let layout = doc
             .layout(&font_db)
             .map_err(|e| JsError::new(&e.to_string()))?;
+        self.serialize_page_map(&layout)
+    }
+
+    fn serialize_page_map(&self, layout: &s1_layout::LayoutDocument) -> Result<String, JsError> {
 
         let mut pages_json = Vec::new();
         for (i, page) in layout.pages.iter().enumerate() {
             let mut node_ids = Vec::new();
             let mut table_chunks_json = Vec::new();
+            let mut para_splits_json = Vec::new();
             for block in &page.blocks {
                 let id_str = format!("{}:{}", block.source_id.replica, block.source_id.counter);
 
@@ -484,6 +489,26 @@ impl WasmDocument {
                     ));
                     // Always include table ID (even duplicates across pages)
                     node_ids.push(id_str);
+                } else if let s1_layout::LayoutBlockKind::Paragraph {
+                    is_continuation,
+                    split_at_line,
+                    lines,
+                    ..
+                } = &block.kind
+                {
+                    if *split_at_line > 0 {
+                        // This paragraph was split across pages
+                        let line_count = lines.len();
+                        let total_height: f64 = lines.iter().map(|l| l.height).sum();
+                        para_splits_json.push(format!(
+                            "{{\"nodeId\":\"{}\",\"isContinuation\":{},\"splitAtLine\":{},\"lineCount\":{},\"blockHeight\":{:.2}}}",
+                            id_str, is_continuation, split_at_line, line_count, total_height,
+                        ));
+                        // Always include the node ID (even duplicates for split paragraphs)
+                        node_ids.push(id_str);
+                    } else if !node_ids.contains(&id_str) {
+                        node_ids.push(id_str);
+                    }
                 } else {
                     if !node_ids.contains(&id_str) {
                         node_ids.push(id_str);
@@ -527,8 +552,13 @@ impl WasmDocument {
             } else {
                 format!("[{}]", table_chunks_json.join(","))
             };
+            let para_splits_str = if para_splits_json.is_empty() {
+                String::from("[]")
+            } else {
+                format!("[{}]", para_splits_json.join(","))
+            };
             pages_json.push(format!(
-                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"tableChunks\":{},\"footer\":\"{}\",\"header\":\"{}\"}}",
+                "{{\"pageNum\":{},\"width\":{:.1},\"height\":{:.1},\"marginTop\":{:.1},\"marginBottom\":{:.1},\"marginLeft\":{:.1},\"marginRight\":{:.1},\"sectionIndex\":{},\"nodeIds\":[{}],\"tableChunks\":{},\"paraSplits\":{},\"footer\":\"{}\",\"header\":\"{}\"}}",
                 i + 1,
                 page.width,
                 page.height,
@@ -539,11 +569,25 @@ impl WasmDocument {
                 page.section_index,
                 ids_arr.join(","),
                 table_chunks_str,
+                para_splits_str,
                 escape_json(&footer_text),
                 escape_json(&header_text),
             ));
         }
         Ok(format!("{{\"pages\":[{}]}}", pages_json.join(",")))
+    }
+
+    /// Get page map JSON with font metrics for accurate line-level pagination.
+    pub fn get_page_map_json_with_fonts(
+        &self,
+        font_db: &WasmFontDatabase,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(&font_db.inner)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        // Reuse the same JSON serialization as get_page_map_json
+        self.serialize_page_map(&layout)
     }
 
     /// Export the document as PDF bytes.
@@ -1779,7 +1823,9 @@ impl WasmDocument {
 
         // Walk runs to find target
         let mut accumulated = 0usize;
-        let mut target_run_id = *run_children.last().unwrap();
+        let mut target_run_id = *run_children
+            .last()
+            .ok_or_else(|| JsError::new("Empty run"))?;
         let mut local_offset = 0usize;
         for &run_id in &run_children {
             let rlen = run_char_len(doc.model(), run_id);
@@ -8355,6 +8401,11 @@ fn render_inline_children(model: &DocumentModel, parent_id: NodeId, html: &mut S
 ///
 /// Extracted as a shared helper so that both `render_node` and
 /// `render_inline_children` use the same logic (L-02).
+///
+/// Field elements are marked `contenteditable="false"` so that:
+/// 1. The editor's text sync (getEditableText) excludes their substituted
+///    text, preventing duplicate page numbers when syncing back to the model.
+/// 2. Users cannot accidentally edit field placeholder text directly.
 fn render_field_html(node: &Node, html: &mut String) {
     if let Some(AttributeValue::FieldType(ft)) = node.attributes.get(&AttributeKey::FieldType) {
         // Emit data-field attribute so the editor's pagination system
@@ -8362,31 +8413,31 @@ fn render_field_html(node: &Node, html: &mut String) {
         // substitute the correct values at render time.
         match ft {
             s1_model::FieldType::PageNumber => {
-                html.push_str("<span class=\"field\" data-field=\"PageNumber\">PAGE</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageNumber\" contenteditable=\"false\">PAGE</span>");
             }
             s1_model::FieldType::PageCount => {
-                html.push_str("<span class=\"field\" data-field=\"PageCount\">NUMPAGES</span>");
+                html.push_str("<span class=\"field\" data-field=\"PageCount\" contenteditable=\"false\">NUMPAGES</span>");
             }
             s1_model::FieldType::Date => {
-                html.push_str("<span class=\"field\" data-field=\"Date\">DATE</span>");
+                html.push_str("<span class=\"field\" data-field=\"Date\" contenteditable=\"false\">DATE</span>");
             }
             s1_model::FieldType::Time => {
-                html.push_str("<span class=\"field\" data-field=\"Time\">TIME</span>");
+                html.push_str("<span class=\"field\" data-field=\"Time\" contenteditable=\"false\">TIME</span>");
             }
             s1_model::FieldType::FileName => {
-                html.push_str("<span class=\"field\" data-field=\"FileName\">FILENAME</span>");
+                html.push_str("<span class=\"field\" data-field=\"FileName\" contenteditable=\"false\">FILENAME</span>");
             }
             s1_model::FieldType::Author => {
-                html.push_str("<span class=\"field\" data-field=\"Author\">AUTHOR</span>");
+                html.push_str("<span class=\"field\" data-field=\"Author\" contenteditable=\"false\">AUTHOR</span>");
             }
             s1_model::FieldType::TableOfContents => {
-                html.push_str("<span class=\"field\" data-field=\"TableOfContents\">TOC</span>");
+                html.push_str("<span class=\"field\" data-field=\"TableOfContents\" contenteditable=\"false\">TOC</span>");
             }
             s1_model::FieldType::Custom => {
-                html.push_str("<span class=\"field\" data-field=\"Custom\">FIELD</span>");
+                html.push_str("<span class=\"field\" data-field=\"Custom\" contenteditable=\"false\">FIELD</span>");
             }
             _ => {
-                html.push_str("<span class=\"field\" data-field=\"Unknown\">FIELD</span>");
+                html.push_str("<span class=\"field\" data-field=\"Unknown\" contenteditable=\"false\">FIELD</span>");
             }
         }
     }
@@ -9726,6 +9777,7 @@ fn layout_block_to_json(block: &s1_layout::LayoutBlock, model: &DocumentModel, j
             indent_first_line,
             line_height,
             bidi,
+            ..
         } => {
             json.push_str("\"type\":\"paragraph\",");
 
@@ -11859,7 +11911,10 @@ fn parse_cell_value_auto(value: &str) -> s1_format_xlsx::CellValue {
 /// Parse CSV text into a Workbook.
 fn parse_csv_to_workbook(text: &str, delimiter: char) -> s1_format_xlsx::Workbook {
     let mut wb = s1_format_xlsx::Workbook::new();
-    let sheet = wb.sheets.first_mut().unwrap();
+    let sheet = match wb.sheets.first_mut() {
+        Some(s) => s,
+        None => return wb, // should never happen, but avoid panic
+    };
 
     for (row_idx, line) in text.lines().enumerate() {
         let mut col_idx = 0u32;
@@ -11899,7 +11954,9 @@ fn parse_csv_to_workbook(text: &str, delimiter: char) -> s1_format_xlsx::Workboo
                             break;
                         }
                         Some(_) => {
-                            field.push(chars.next().unwrap());
+                            if let Some(c) = chars.next() {
+                                field.push(c);
+                            }
                         }
                         None => break,
                     }

@@ -1,6 +1,6 @@
 // File operations: new, open, export, drag-drop
 import { state, $ } from './state.js';
-import { renderDocument, syncAllText, applyPageDimensions } from './render.js';
+import { renderDocument, syncAllText, syncAllTextFull, applyPageDimensions } from './render.js';
 import { insertImage } from './images.js';
 import { renderRuler } from './ruler.js';
 import { broadcastOp } from './collab.js';
@@ -98,23 +98,31 @@ function startAutosave() {
 async function doAutosave() {
   if (!state.doc) return;
   try {
-    syncAllText();
+    syncAllTextFull(); // X4: Full sync needed for export integrity
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
     const checksum = await computeHash(bytes);
     openAutosaveDB().then(db => {
       // Atomic write: write to temp key first, then swap to 'current'
       const tx = db.transaction('documents', 'readwrite');
+      tx.onerror = (e) => { console.error('[autosave] Transaction error:', e); };
       const store = tx.objectStore('documents');
       const getReq = store.get('current');
+      // X11: Add error handler for IndexedDB read
+      getReq.onerror = () => {
+        console.error('[autosave] IndexedDB read failed:', getReq.error);
+      };
       getReq.onsuccess = () => {
         const existing = getReq.result;
-        // If another tab saved more recently than our last save, skip
-        if (existing && existing.timestamp > state.lastSaveTimestamp && existing.tabId && existing.tabId !== state.tabId) {
+        // Only write if this tab owns the save, or no save exists, or save is older than 5s
+        if (existing && existing.tabId && existing.tabId !== state.tabId && Date.now() - (existing.timestamp || 0) < 5000) {
+          console.info('[autosave] Skipped — another tab saved more recently');
           const info = $('statusInfo');
-          info._userMsg = true;
-          info.textContent = 'Skipped save (another tab is active)';
-          setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 1500);
+          if (info) {
+            info._userMsg = true;
+            info.textContent = 'Skipped save (another tab is active)';
+            setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 5000);
+          }
           return;
         }
         const now = Date.now();
@@ -142,25 +150,26 @@ async function doAutosave() {
         info._userMsg = true;
         info.textContent = 'All changes saved';
         info.style.color = '#1e8e3e';
-        setTimeout(() => { info._userMsg = false; info.style.color = ''; updateStatusBar(); }, 3000);
+        setTimeout(() => { info._userMsg = false; info.style.color = ''; updateStatusBar(); }, 5000);
       };
     }).catch(e => {
-      // ED2-25: Log autosave failures instead of silently swallowing
-      console.warn('Autosave failed:', e);
-      const info = $('statusInfo');
-      if (info) {
-        info._userMsg = true;
-        info.textContent = 'Autosave failed';
-        setTimeout(() => { info._userMsg = false; updateStatusBar(); }, 3000);
+      if (e.name === 'QuotaExceededError' || (e.message && e.message.includes('quota'))) {
+        showToast('Storage full — please export your work', 'error', 0);
+        clearInterval(state.autosaveTimer);
+        state.autosaveTimer = null;
+      } else {
+        console.error('[autosave] Error:', e);
+        showToast('Autosave failed — export your work to avoid data loss', 'error', 8000);
       }
     });
   } catch (e) {
     if (e.name === 'QuotaExceededError' || (e.message && e.message.includes('quota'))) {
-      showToast('Storage full — autosave disabled. Please export your work.', 'error', 10000);
+      showToast('Storage full — please export your work', 'error', 0);
       clearInterval(state.autosaveTimer);
       state.autosaveTimer = null;
     } else {
-      console.warn('[autosave] Error:', e);
+      console.error('[autosave] Error:', e);
+      showToast('Autosave failed — export your work to avoid data loss', 'error', 8000);
     }
   }
 }
@@ -192,7 +201,7 @@ function countWords(doc) {
 export function saveVersion(label) {
   if (!state.doc) return Promise.resolve();
   try {
-    syncAllText();
+    syncAllTextFull(); // X4: Full sync needed for export integrity
     const bytes = state.doc.export('docx');
     const name = $('docName').value || 'Untitled Document';
     const wordCount = countWords(state.doc);
@@ -217,6 +226,7 @@ export function saveVersion(label) {
 function pruneVersions(db) {
   return new Promise(resolve => {
     const tx = db.transaction('versions', 'readwrite');
+    tx.onerror = (e) => { console.error('[autosave] Prune versions transaction error:', e); };
     const store = tx.objectStore('versions');
     const req = store.getAll();
     req.onsuccess = () => {
@@ -237,6 +247,7 @@ export function getVersions() {
   return openAutosaveDB().then(db => {
     return new Promise((resolve) => {
       const tx = db.transaction('versions', 'readonly');
+      tx.onerror = (e) => { console.error('[autosave] Get versions transaction error:', e); };
       const req = tx.objectStore('versions').getAll();
       req.onsuccess = () => {
         const all = req.result || [];
@@ -252,6 +263,7 @@ export function restoreVersion(id) {
   return openAutosaveDB().then(db => {
     return new Promise((resolve, reject) => {
       const tx = db.transaction('versions', 'readonly');
+      tx.onerror = (e) => { console.error('[autosave] Restore version transaction error:', e); };
       const req = tx.objectStore('versions').get(id);
       req.onsuccess = () => {
         const v = req.result;
@@ -330,6 +342,7 @@ export function checkAutoRecover() {
   return openAutosaveDB().then(db => {
     return new Promise(resolve => {
       const tx = db.transaction('documents', 'readonly');
+      tx.onerror = (e) => { console.error('[autosave] Auto-recover transaction error:', e); };
       const req = tx.objectStore('documents').get('current');
       req.onsuccess = async () => {
         const entry = req.result || null;
@@ -353,6 +366,8 @@ function resetEditorState() {
   state.nodeIdToElement.clear();
   state.syncedTextCache.clear();
   state.nodeToPage.clear();
+  // X4: Clear dirty paragraph tracking for previous document
+  state._dirtyParagraphs.clear();
   state.pageElements = [];
   state.pageMap = null;
   state._lastPageMapHash = null;
@@ -458,10 +473,10 @@ function isPdf(bytes) {
     bytes[0] === 0x25 && bytes[1] === 0x50 && bytes[2] === 0x44 && bytes[3] === 0x46;
 }
 
-function showLoadingOverlay() {
+function showLoadingOverlay(message) {
   const overlay = document.createElement('div');
   overlay.className = 'loading-overlay';
-  overlay.innerHTML = '<div class="loading-spinner"></div>';
+  overlay.innerHTML = '<div class="loading-spinner"></div><div class="loading-text">' + (message || 'Processing...') + '</div>';
   document.body.appendChild(overlay);
   return overlay;
 }
@@ -474,7 +489,7 @@ export async function openFile(bytes, name) {
   if (!state.engine) return;
   // ED2-29: Close find bar when opening a new file
   closeFindBar();
-  const _loadingOverlay = showLoadingOverlay();
+  const _loadingOverlay = showLoadingOverlay('Opening document...');
   try { await _openFileImpl(bytes, name); } finally { removeLoadingOverlay(_loadingOverlay); }
 }
 
@@ -553,8 +568,7 @@ async function _openFileImpl(bytes, name) {
         showToast('Failed to open PDF: ' + msg, 'error');
       }
       // Reset to welcome screen
-      switchView('editor');
-      $('welcomeScreen').style.display = '';
+      deactivateEditor();
     }
     return;
   }
@@ -590,9 +604,17 @@ async function _openFileImpl(bytes, name) {
     } catch (e) {
       console.error('Spreadsheet open error:', e);
       showToast('Failed to open spreadsheet: ' + e.message, 'error');
-      switchView('editor');
-      $('welcomeScreen').style.display = '';
+      deactivateEditor();
     }
+    return;
+  }
+
+  // X16: Detect password-protected / encrypted DOCX before passing to WASM.
+  // Encrypted DOCX uses OLE Compound Document format (not ZIP).
+  // OLE magic bytes: D0 CF 11 E0 A1 B1 1A E1
+  if (bytes.length >= 8 && bytes[0] === 0xD0 && bytes[1] === 0xCF && bytes[2] === 0x11 && bytes[3] === 0xE0 &&
+      bytes[4] === 0xA1 && bytes[5] === 0xB1 && bytes[6] === 0x1A && bytes[7] === 0xE1) {
+    showToast('This document is password-protected and cannot be opened', 'error');
     return;
   }
 
@@ -639,7 +661,13 @@ async function _openFileImpl(bytes, name) {
     const fileType = detectFileTypeFromName(name || 'document.txt');
     addFileTab(displayName, fileType, bytes);
   } catch (e) {
-    showToast('Failed to open: ' + e.message, 'error');
+    // X16: Provide a clear message for password-protected / encrypted files
+    const msg = (e.message || '').toLowerCase();
+    if (msg.includes('zip') || msg.includes('invalid') || msg.includes('magic') || msg.includes('ole') || msg.includes('cfb') || msg.includes('encrypt')) {
+      showToast('This document appears to be password-protected or corrupted. Rudra Office cannot open encrypted files.', 'error', 8000);
+    } else {
+      showToast('Failed to open: ' + e.message, 'error');
+    }
     console.error(e);
   }
 }
@@ -656,10 +684,13 @@ export function updatePdfStatusBar() {
 export function exportDoc(format) {
   const { doc } = state;
   if (!doc) return;
-  const overlay = showLoadingOverlay();
+  const formatLabels = { pdf: 'PDF', docx: 'DOCX', odt: 'ODT', txt: 'TXT', md: 'Markdown' };
+  const formatLabel = formatLabels[format] || format.toUpperCase();
+  const overlay = showLoadingOverlay('Exporting ' + formatLabel + '...');
   try {
-    syncAllText();
+    syncAllTextFull(); // X4: Full sync needed for export integrity
     trackEvent('export', format);
+    const filename = ($('docName').value || 'document');
     if (format === 'pdf') {
       try {
         const fontDb = getFontDb();
@@ -667,7 +698,8 @@ export function exportDoc(format) {
           ? doc.to_pdf_data_url_with_fonts(fontDb)
           : doc.to_pdf_data_url();
         const a = document.createElement('a');
-        a.href = url; a.download = ($('docName').value || 'document') + '.pdf'; a.click();
+        a.href = url; a.download = filename + '.pdf'; a.click();
+        showToast('Exported as ' + filename + '.pdf', 'success', 3000);
       } catch (e) {
         showToast('PDF export failed: ' + e.message, 'error');
         console.error('PDF export error:', e);
@@ -678,8 +710,9 @@ export function exportDoc(format) {
     const blob = new Blob([bytes]);
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = ($('docName').value || 'document') + '.' + format; a.click();
-    setTimeout(() => { URL.revokeObjectURL(url); }, 200);
+    a.href = url; a.download = filename + '.' + format; a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); }, 60000);
+    showToast('Exported as ' + filename + '.' + format, 'success', 3000);
   } catch (e) { showToast('Export failed: ' + e.message, 'error'); } finally { removeLoadingOverlay(overlay); }
 }
 
@@ -690,6 +723,52 @@ function activateEditor() {
   if (menubar) menubar.classList.add('show');
   $('statusbar').classList.add('show');
   switchView('editor');
+}
+
+/**
+ * Deactivate the editor and return to the welcome screen.
+ * Hides all view wrappers (editor, PDF, spreadsheet) so nothing
+ * bleeds through behind the welcome screen.
+ */
+export function deactivateEditor() {
+  // Show the welcome screen
+  $('welcomeScreen').style.display = '';
+  // Hide all view-specific wrappers
+  const wrapper = $('editorWrapper');
+  if (wrapper) wrapper.classList.remove('show');
+  $('pdfView').classList.remove('show');
+  const ssView = $('spreadsheetView');
+  if (ssView) ssView.classList.remove('show');
+  // Hide toolbars, menubar, statusbar
+  $('toolbar').classList.remove('show');
+  const menubar = $('appMenubar');
+  if (menubar) menubar.classList.remove('show');
+  $('statusbar').classList.remove('show');
+  // Hide spreadsheet-specific UI
+  const ssMenubar = $('ssMenubar');
+  if (ssMenubar) ssMenubar.style.display = 'none';
+  const ssToolbar = $('ssToolbar');
+  if (ssToolbar) ssToolbar.style.display = 'none';
+  // Hide ruler
+  const ruler = $('ruler');
+  if (ruler) ruler.style.display = 'none';
+  // Hide doc-specific title bar buttons (name, panels, history, share, collab, etc.)
+  document.querySelectorAll('.doc-only-btn').forEach(b => { b.style.display = 'none'; });
+  const docName = $('docName');
+  if (docName) docName.style.display = 'none';
+  const btnShare = $('btnShare');
+  if (btnShare) btnShare.style.display = 'none';
+  const btnPropsPanel = $('btnPropsPanel');
+  if (btnPropsPanel) btnPropsPanel.style.display = 'none';
+  const btnCommentsToggle = $('btnCommentsToggle');
+  if (btnCommentsToggle) btnCommentsToggle.style.display = 'none';
+  const collabStatus = $('collabStatus');
+  if (collabStatus) collabStatus.style.display = 'none';
+  // Hide file tab bar
+  const tabBar = $('fileTabBar');
+  if (tabBar) tabBar.classList.remove('show');
+  // Reset current view state
+  state.currentView = null;
 }
 
 // Saved cursor position for restoring when switching back to editor view
@@ -710,6 +789,10 @@ export function switchView(view) {
 
   // ED2-20: Destroy PDF viewer (and its scroll handler) when switching away from PDF view
   if (state.currentView === 'pdf' && view !== 'pdf') {
+    // Warn about unsaved PDF annotations before destroying
+    if (state.pdfAnnotations && state.pdfAnnotations.length > 0) {
+      showToast('PDF annotations were not saved. Export PDF to keep them.', 'warning', 5000);
+    }
     if (state.pdfViewer) {
       state.pdfViewer.destroy();
       state.pdfViewer = null;
@@ -766,10 +849,24 @@ export function switchView(view) {
   document.querySelectorAll('.doc-only-btn').forEach(b => {
     b.style.display = (view === 'editor') ? '' : 'none';
   });
+  // Re-show title bar elements that deactivateEditor() hides
+  const docName = $('docName');
+  if (docName) docName.style.display = '';
+  const btnShare = $('btnShare');
+  if (btnShare) btnShare.style.display = '';
+  const btnPropsPanel = $('btnPropsPanel');
+  if (btnPropsPanel) btnPropsPanel.style.display = '';
+  const btnCommentsToggle = $('btnCommentsToggle');
+  if (btnCommentsToggle) btnCommentsToggle.style.display = '';
+  // Hide welcome screen when switching to any view
+  const welcome = $('welcomeScreen');
+  if (welcome) welcome.style.display = 'none';
+  // Show statusbar
+  $('statusbar').classList.add('show');
   // Swap logo based on active view
   const logoImg = document.querySelector('.logo img');
   if (logoImg) {
-    const logoMap = { editor: '/assets/logo-doc.svg', spreadsheet: '/assets/logo-sheet.svg', pdf: '/assets/logo-doc.svg' };
+    const logoMap = { editor: '/logo-doc.svg', spreadsheet: '/logo-sheet.svg', pdf: '/logo-doc.svg' };
     logoImg.src = logoMap[view] || '/assets/logo.svg';
   }
   // Update legacy tab bar (hidden) and new status bar view buttons

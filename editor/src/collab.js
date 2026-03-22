@@ -74,6 +74,8 @@ let _pendingImmediateSync = false; // Bug C8: throttle immediate fullSync on nod
 let _fullSyncTimeout = null; // Timeout for fullSync response (Bug C3)
 let missedPongs = 0; // Bug C6: count missed heartbeat responses
 let _roomFullRetries = 0; // C11: exponential backoff retry when room is full
+// X18: Deferred remote ops — queued during undo/redo execution to prevent race conditions
+let _deferredRemoteOps = [];
 
 // ─── Public API ───────────────────────────────────────
 
@@ -239,6 +241,18 @@ export function isApplyingRemote() {
  */
 export function getCollabRoom() {
   return roomId;
+}
+
+/**
+ * X18: Flush deferred remote ops that were queued during undo/redo execution.
+ * Called by input.js after undo/redo completes.
+ */
+export function flushDeferredRemoteOps() {
+  if (_deferredRemoteOps.length === 0) return;
+  const ops = _deferredRemoteOps.splice(0);
+  for (const { dataStr, fromPeerId } of ops) {
+    applyRemoteOp(dataStr, fromPeerId);
+  }
 }
 
 // ─── WebSocket Connection ─────────────────────────────
@@ -816,6 +830,13 @@ function _trackOpId(opId) {
 
 function applyRemoteOp(dataStr, fromPeerId) {
   if (!state.doc || !dataStr) return;
+
+  // X18: If undo/redo is in progress, defer remote ops to avoid race conditions
+  if (state._applyingUndo) {
+    _deferredRemoteOps.push({ dataStr, fromPeerId });
+    return;
+  }
+
   try {
     const op = JSON.parse(dataStr);
 

@@ -708,6 +708,7 @@ export class SpreadsheetView {
         this.frozenRows = 0;
         this.sortState = {};
         this.filterState = {};
+        this._filterRegion = null;  // { startCol, startRow, endCol, endRow, headerRow }
         this.hiddenRows = new Set();
         this._undoManager = new UndoManager();
         this._clipboard = null;       // { cells, startCol, startRow, endCol, endRow, cut }
@@ -1424,6 +1425,22 @@ export class SpreadsheetView {
             }
         }
 
+        // Highlight the filter region header row with a subtle background
+        if (this._filterRegion && Object.keys(this.filterState).length > 0) {
+            const region = this._filterRegion;
+            const headerVr = visibleRows.find(vr => vr.row === region.headerRow);
+            if (headerVr) {
+                ctx.save();
+                ctx.fillStyle = this._isDarkMode() ? 'rgba(138, 180, 248, 0.08)' : 'rgba(26, 115, 232, 0.06)';
+                for (const vc of visibleCols) {
+                    if (vc.col >= region.startCol && vc.col <= region.endCol) {
+                        ctx.fillRect(vc.x, headerVr.y, vc.width, headerVr.height);
+                    }
+                }
+                ctx.restore();
+            }
+        }
+
         for (const vc of visibleCols) {
             for (const vr of visibleRows) {
                 const key = `${vc.col},${vr.row}`;
@@ -1630,47 +1647,30 @@ export class SpreadsheetView {
 
         ctx.restore();
 
-        // Borders (drawn outside clip region)
-        if (style.borderBottom) {
+        // Borders (drawn outside clip region) — supports both string color and {width,style,color} object
+        const drawBorder = (bdr, x1, y1, x2, y2) => {
+            if (!bdr) return;
             ctx.save();
-            ctx.strokeStyle = style.borderBottom;
-            ctx.lineWidth = 1;
+            if (typeof bdr === 'object') {
+                ctx.strokeStyle = bdr.color || '#000';
+                ctx.lineWidth = bdr.width || 1;
+                if (bdr.style === 'dashed') ctx.setLineDash([4, 2]);
+                else if (bdr.style === 'dotted') ctx.setLineDash([1, 2]);
+            } else {
+                ctx.strokeStyle = bdr;
+                ctx.lineWidth = 1;
+            }
             ctx.beginPath();
-            ctx.moveTo(x, y + h - 0.5);
-            ctx.lineTo(x + w, y + h - 0.5);
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
             ctx.stroke();
+            ctx.setLineDash([]);
             ctx.restore();
-        }
-        if (style.borderTop) {
-            ctx.save();
-            ctx.strokeStyle = style.borderTop;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x, y + 0.5);
-            ctx.lineTo(x + w, y + 0.5);
-            ctx.stroke();
-            ctx.restore();
-        }
-        if (style.borderLeft) {
-            ctx.save();
-            ctx.strokeStyle = style.borderLeft;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x + 0.5, y);
-            ctx.lineTo(x + 0.5, y + h);
-            ctx.stroke();
-            ctx.restore();
-        }
-        if (style.borderRight) {
-            ctx.save();
-            ctx.strokeStyle = style.borderRight;
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            ctx.moveTo(x + w - 0.5, y);
-            ctx.lineTo(x + w - 0.5, y + h);
-            ctx.stroke();
-            ctx.restore();
-        }
+        };
+        drawBorder(style.borderBottom, x, y + h - 0.5, x + w, y + h - 0.5);
+        drawBorder(style.borderTop, x, y + 0.5, x + w, y + 0.5);
+        drawBorder(style.borderLeft, x + 0.5, y, x + 0.5, y + h);
+        drawBorder(style.borderRight, x + w - 0.5, y, x + w - 0.5, y + h);
     }
 
     _renderGridLines(ctx, visibleCols, visibleRows, w, h) {
@@ -2286,6 +2286,26 @@ export class SpreadsheetView {
             this.commitEdit();
         }
 
+        // Check for filter dropdown icon click in the header row
+        if (this._filterRegion && Object.keys(this.filterState).length > 0) {
+            const region = this._filterRegion;
+            if (cell.row === region.headerRow && cell.col >= region.startCol && cell.col <= region.endCol) {
+                const cellRight = this._cellScreenX(cell.col) + this.getColumnWidth(cell.col);
+                if (canvasX >= cellRight - 18) {
+                    this.selectedCell = { col: cell.col, row: cell.row };
+                    this._updateFormulaBar();
+                    this.render();
+                    // Open filter dialog for this column, or remove if already filtered
+                    if (this.filterState[cell.col]) {
+                        this._showAdvancedFilterDialog(cell.col, region);
+                    } else {
+                        this._showAdvancedFilterDialog(cell.col, region);
+                    }
+                    return;
+                }
+            }
+        }
+
         // Check for validation dropdown click
         {
             const sheet = this._sheet();
@@ -2537,10 +2557,17 @@ export class SpreadsheetView {
             { label: 'Sort A-Z', action: () => this.sort(cell.col, true) },
             { label: 'Sort Z-A', action: () => this.sort(cell.col, false) },
             { label: '---' },
-            { label: this.filterState[cell.col] ? 'Remove filter' : 'Add filter', action: () => {
-                if (this.filterState[cell.col]) this.removeFilter(cell.col);
-                else this.addFilter(cell.col);
+            { label: this.filterState[cell.col] ? 'Edit filter' : 'Add filter', action: () => {
+                this.addFilter(cell.col);
             }},
+            ...(Object.keys(this.filterState).length > 0 ? [{
+                label: 'Remove all filters', action: () => {
+                    this.filterState = {};
+                    this._filterRegion = null;
+                    this._recomputeHiddenRows();
+                    this.render();
+                }
+            }] : []),
             { label: '---' },
             { label: cellData?.hyperlink ? 'Edit Link' : 'Insert Link', action: () => {
                 const existingUrl = cellData?.hyperlink || '';
@@ -3262,26 +3289,70 @@ export class SpreadsheetView {
     }
 
     // ─── Filter (S2.5 Advanced) ────────────────────
+
+    _detectTableRegion(col, row) {
+        const sheet = this._sheet();
+        if (!sheet) return null;
+
+        // Expand from the clicked cell to find the contiguous data region
+        let startCol = col, endCol = col, startRow = row, endRow = row;
+
+        // Expand left — look for contiguous non-empty cells in the current row
+        while (startCol > 0 && sheet.getCell(startCol - 1, row)) startCol--;
+        // Expand right
+        while (endCol < 100 && sheet.getCell(endCol + 1, row)) endCol++;
+        // Expand up to find header row (first row of contiguous data)
+        while (startRow > 0 && sheet.getCell(col, startRow - 1)) startRow--;
+        // Expand down to find last data row
+        while (endRow < 10000 && sheet.getCell(col, endRow + 1)) endRow++;
+
+        // Verify we have at least a header and one data row
+        if (endRow <= startRow) return null;
+
+        return { startCol, startRow, endCol, endRow, headerRow: startRow };
+    }
+
     addFilter(col) {
         const sheet = this._sheet();
         if (!sheet) return;
-        // Show the advanced filter dialog
-        this._showAdvancedFilterDialog(col);
+
+        // Auto-detect the table region around the clicked cell
+        const row = this.selectedCell.row;
+        const region = this._detectTableRegion(col, row);
+
+        if (region) {
+            // Store the active filter region so we know which columns have filter icons
+            this._filterRegion = region;
+            // Show the advanced filter dialog for the clicked column
+            this._showAdvancedFilterDialog(col, region);
+        } else {
+            // Fallback: just filter the single column
+            this._showAdvancedFilterDialog(col);
+        }
     }
 
     removeFilter(col) {
         delete this.filterState[col];
+        // If no more filters active, clear the filter region
+        if (Object.keys(this.filterState).length === 0) {
+            this._filterRegion = null;
+        }
         this._recomputeHiddenRows();
         this.render();
     }
 
-    _showAdvancedFilterDialog(col) {
+    _showAdvancedFilterDialog(col, region) {
         const sheet = this._sheet();
         if (!sheet) return;
 
-        // Collect unique values for the value list (skip header row 0)
+        // Determine the header row and data range from region or default
+        const headerRow = region ? region.headerRow : 0;
+        const dataStartRow = headerRow + 1;
+        const dataEndRow = region ? region.endRow : sheet.maxRow;
+
+        // Collect unique values for the value list (skip header row)
         const allValues = new Set();
-        for (let r = 1; r <= sheet.maxRow; r++) {
+        for (let r = dataStartRow; r <= dataEndRow; r++) {
             const cell = sheet.getCell(col, r);
             allValues.add(cell ? String(cell.value ?? '') : '');
         }
@@ -3303,7 +3374,9 @@ export class SpreadsheetView {
                 + (v === '' ? '(Blank)' : this._xmlEsc(v)) + '</label>';
         }
 
-        modal.innerHTML = '<h3>Filter Column ' + this.getCellA1Col(col) + '</h3>'
+        const headerCell = sheet.getCell(col, headerRow);
+        const headerLabel = headerCell ? String(headerCell.value ?? this.getCellA1Col(col)) : this.getCellA1Col(col);
+        modal.innerHTML = '<h3>Filter: ' + this._xmlEsc(headerLabel) + '</h3>'
             + '<div style="display:flex;flex-direction:column;gap:10px;padding:8px 0;">'
             + '<div class="modal-field"><label style="font-size:12px;color:#5f6368;margin-bottom:4px;display:block;">Filter type</label>'
             + '<select id="fltType" style="width:100%;padding:6px 8px;border:1px solid #dadce0;border-radius:4px;font-size:13px;">'
@@ -3385,8 +3458,12 @@ export class SpreadsheetView {
         const sheet = this._sheet();
         if (!sheet) return;
 
-        // Row 0 is header, never hidden (AND logic across all filter columns)
-        for (let r = 1; r <= sheet.maxRow; r++) {
+        // Use filter region header row, or default to row 0
+        const headerRow = this._filterRegion ? this._filterRegion.headerRow : 0;
+        const dataEndRow = this._filterRegion ? this._filterRegion.endRow : sheet.maxRow;
+
+        // Header row is never hidden (AND logic across all filter columns)
+        for (let r = headerRow + 1; r <= dataEndRow; r++) {
             let visible = true;
             for (const col of filterCols) {
                 const filter = this.filterState[col];
@@ -3664,7 +3741,15 @@ export class SpreadsheetView {
         for (let c = range.startCol; c <= range.endCol; c++) {
             for (let r = range.startRow; r <= range.endRow; r++) {
                 const cell = sheet.getCell(c, r);
-                if (cell) cells[`${c - range.startCol},${r - range.startRow}`] = { ...cell };
+                if (cell) {
+                    // Deep copy the cell including style with border properties
+                    const copy = { ...cell };
+                    if (cell.style) copy.style = { ...cell.style };
+                    cells[`${c - range.startCol},${r - range.startRow}`] = copy;
+                } else {
+                    // Store empty cells so paste knows to clear the target position
+                    cells[`${c - range.startCol},${r - range.startRow}`] = { value: '', formula: null, display: '', type: 'string', style: null, empty: true };
+                }
             }
         }
 
@@ -3720,39 +3805,48 @@ export class SpreadsheetView {
 
     pasteCells() {
         if (!this._clipboard) {
-            // U12: Try HTML clipboard first for table detection, then plain text
+            // System clipboard: try HTML first (for format fidelity from Excel/Sheets/web),
+            // fall back to plain text (tab-separated) if no HTML table found.
+            const self = this;
+            const pasteFromText = (text) => {
+                if (!text) return;
+                const lines = text.split('\n');
+                const { col, row } = self.selectedCell;
+                for (let r = 0; r < lines.length; r++) {
+                    if (lines[r] === '' && r === lines.length - 1) continue;
+                    const cols = lines[r].split('\t');
+                    for (let c = 0; c < cols.length; c++) {
+                        self._setCellValue(col + c, row + r, cols[c]);
+                    }
+                }
+                self.render();
+            };
             if (navigator.clipboard.read) {
                 navigator.clipboard.read().then(items => {
+                    let htmlBlob = null, textBlob = null;
                     for (const item of items) {
-                        if (item.types.includes('text/html')) {
-                            item.getType('text/html').then(blob => blob.text()).then(html => {
-                                const parsed = this._parseHtmlTable(html);
-                                if (parsed) {
-                                    this._pasteGrid(parsed);
-                                } else {
-                                    // Fallback: try plain text
-                                    item.getType('text/plain').then(blob => blob.text()).then(text => {
-                                        this._pasteGrid(this._detectTableInText(text));
-                                    }).catch(() => {});
-                                }
-                            }).catch(() => {});
-                            return;
-                        }
+                        if (item.types.includes('text/html')) htmlBlob = item.getType('text/html');
+                        if (item.types.includes('text/plain')) textBlob = item.getType('text/plain');
                     }
-                    // No HTML — try plain text
-                    navigator.clipboard.readText().then(text => {
-                        if (text) this._pasteGrid(this._detectTableInText(text));
-                    }).catch(() => {});
+                    if (htmlBlob) {
+                        htmlBlob.then(blob => blob.text()).then(html => {
+                            const parsed = self._parseHtmlTable(html);
+                            if (parsed && parsed.rows.length > 0) {
+                                self._pasteGrid(parsed);
+                            } else if (textBlob) {
+                                textBlob.then(blob => blob.text()).then(pasteFromText).catch(() => {});
+                            }
+                        }).catch(() => {
+                            if (textBlob) textBlob.then(blob => blob.text()).then(pasteFromText).catch(() => {});
+                        });
+                    } else if (textBlob) {
+                        textBlob.then(blob => blob.text()).then(pasteFromText).catch(() => {});
+                    }
                 }).catch(() => {
-                    // clipboard.read() not supported — fallback to readText
-                    navigator.clipboard.readText().then(text => {
-                        if (text) this._pasteGrid(this._detectTableInText(text));
-                    }).catch(() => {});
+                    navigator.clipboard.readText().then(pasteFromText).catch(() => {});
                 });
             } else {
-                navigator.clipboard.readText().then(text => {
-                    if (text) this._pasteGrid(this._detectTableInText(text));
-                }).catch(() => {});
+                navigator.clipboard.readText().then(pasteFromText).catch(() => {});
             }
             return;
         }
@@ -3765,15 +3859,21 @@ export class SpreadsheetView {
         for (let c = 0; c < width; c++) {
             for (let r = 0; r < height; r++) {
                 const src = cells[`${c},${r}`];
-                if (src) {
+                if (src && src.empty) {
+                    // Source was an empty cell in the copied range — clear target
+                    this._setCellValue(col + c, row + r, '');
+                } else if (src) {
                     const rawVal = src.formula || String(src.value ?? '');
                     this._setCellValue(col + c, row + r, rawVal);
-                    // U11: Preserve style from source cell on paste
+                    // U11: Preserve style from source cell on paste (including borders)
                     if (src.style && Object.keys(src.style).length > 0) {
-                        const targetCell = sheet.getCell(col + c, row + r);
-                        if (targetCell) {
-                            targetCell.style = { ...src.style };
+                        let targetCell = sheet.getCell(col + c, row + r);
+                        // If _setCellValue deleted the cell (empty value), recreate it to hold the style
+                        if (!targetCell) {
+                            targetCell = { value: '', formula: null, display: '', type: 'string', style: null };
+                            sheet.setCell(col + c, row + r, targetCell);
                         }
+                        targetCell.style = { ...src.style };
                     }
                 } else {
                     this._setCellValue(col + c, row + r, '');
@@ -3797,8 +3897,12 @@ export class SpreadsheetView {
                 if (val && val.value !== undefined) {
                     this._setCellValue(col + c, row + r, String(val.value));
                     if (val.style) {
-                        const cell = sheet.getCell(col + c, row + r);
-                        if (cell) cell.style = { ...cell.style, ...val.style };
+                        let cell = sheet.getCell(col + c, row + r);
+                        if (!cell) {
+                            cell = { value: val.value || '', formula: null, display: String(val.value || ''), type: 'string', style: {} };
+                            sheet.setCell(col + c, row + r, cell);
+                        }
+                        cell.style = { ...(cell.style || {}), ...val.style };
                     }
                 } else if (typeof val === 'string') {
                     this._setCellValue(col + c, row + r, val);
@@ -3821,41 +3925,146 @@ export class SpreadsheetView {
                 }
             }
         }
+        // Apply merged cells from HTML table
+        if (grid.merges && grid.merges.length > 0) {
+            for (const m of grid.merges) {
+                sheet.merges.push({
+                    startCol: col + m.startCol,
+                    startRow: row + m.startRow,
+                    endCol: col + m.endCol,
+                    endRow: row + m.endRow
+                });
+            }
+        }
         this.render();
     }
 
     _parseHtmlTable(html) {
-        // Parse HTML clipboard data for <table> elements
+        // Parse HTML clipboard data for <table> elements with full format fidelity
         const parser = new DOMParser();
         const doc = parser.parseFromString(html, 'text/html');
         const table = doc.querySelector('table');
         if (!table) return null;
         const rows = [];
+        const merges = [];
+        // Track active rowspans: colIdx -> { remainingRows, value, style }
+        const activeRowspans = new Map();
+        let rowIdx = 0;
         for (const tr of table.querySelectorAll('tr')) {
             const row = [];
+            let colIdx = 0;
+            // Fill in cells from active rowspans before processing this row's <td>s
+            while (activeRowspans.has(colIdx)) {
+                const span = activeRowspans.get(colIdx);
+                row.push(''); // empty cell covered by rowspan
+                span.remainingRows--;
+                if (span.remainingRows <= 0) activeRowspans.delete(colIdx);
+                colIdx++;
+            }
             for (const td of tr.querySelectorAll('td, th')) {
+                // Skip past columns that are covered by active rowspans
+                while (activeRowspans.has(colIdx)) {
+                    const span = activeRowspans.get(colIdx);
+                    row.push('');
+                    span.remainingRows--;
+                    if (span.remainingRows <= 0) activeRowspans.delete(colIdx);
+                    colIdx++;
+                }
                 const style = {};
-                if (td.tagName === 'TH' || td.style.fontWeight === 'bold' || td.querySelector('b, strong')) {
+                const cs = td.style;
+                // Font weight
+                if (td.tagName === 'TH' || cs.fontWeight === 'bold' || cs.fontWeight >= 600 || td.querySelector('b, strong')) {
                     style.bold = true;
                 }
-                if (td.style.fontStyle === 'italic' || td.querySelector('i, em')) {
+                // Italic
+                if (cs.fontStyle === 'italic' || td.querySelector('i, em')) {
                     style.italic = true;
                 }
-                if (td.style.backgroundColor) {
-                    style.fill = td.style.backgroundColor;
+                // Underline
+                if (cs.textDecoration?.includes('underline') || td.querySelector('u')) {
+                    style.underline = true;
                 }
-                if (td.style.color) {
-                    style.color = td.style.color;
+                // Strikethrough
+                if (cs.textDecoration?.includes('line-through') || td.querySelector('s, strike, del')) {
+                    style.strikethrough = true;
                 }
-                if (td.style.textAlign) {
-                    style.align = td.style.textAlign;
+                // Background color
+                if (cs.backgroundColor && cs.backgroundColor !== 'transparent' && cs.backgroundColor !== 'rgba(0, 0, 0, 0)') {
+                    style.fill = cs.backgroundColor;
+                }
+                // Text color
+                if (cs.color && cs.color !== 'rgb(0, 0, 0)') {
+                    style.color = cs.color;
+                }
+                // Alignment
+                if (cs.textAlign && cs.textAlign !== 'start') {
+                    style.align = cs.textAlign;
+                }
+                // Font size
+                if (cs.fontSize) {
+                    const px = parseFloat(cs.fontSize);
+                    if (px && px !== 13) style.fontSize = Math.round(px);
+                }
+                // Font family
+                if (cs.fontFamily) {
+                    const fam = cs.fontFamily.replace(/["']/g, '').split(',')[0].trim();
+                    if (fam && fam !== 'Arial') style.fontFamily = fam;
+                }
+                // Borders
+                const parseBorder = (val) => {
+                    if (!val || val === 'none' || val === 'initial') return null;
+                    // e.g. "1px solid rgb(0,0,0)" or "thin solid #000"
+                    const parts = val.split(' ');
+                    if (parts.length >= 2 && parts[1] !== 'none') {
+                        return { width: parseFloat(parts[0]) || 1, style: parts[1], color: parts.slice(2).join(' ') || '#000' };
+                    }
+                    return null;
+                };
+                const bt = parseBorder(cs.borderTop); if (bt) style.borderTop = bt;
+                const br = parseBorder(cs.borderRight); if (br) style.borderRight = br;
+                const bb = parseBorder(cs.borderBottom); if (bb) style.borderBottom = bb;
+                const bl = parseBorder(cs.borderLeft); if (bl) style.borderLeft = bl;
+                // Number format hint from data-type or mso-number-format
+                const dataType = td.getAttribute('data-type') || td.getAttribute('x:num');
+                if (dataType) style._dataType = dataType;
+                // Colspan/rowspan → merges + rowspan tracking
+                const colspan = parseInt(td.getAttribute('colspan')) || 1;
+                const rowspan = parseInt(td.getAttribute('rowspan')) || 1;
+                if (colspan > 1 || rowspan > 1) {
+                    merges.push({ startCol: colIdx, startRow: rowIdx, endCol: colIdx + colspan - 1, endRow: rowIdx + rowspan - 1 });
+                }
+                // Track rowspans so subsequent rows know to skip these columns
+                if (rowspan > 1) {
+                    for (let cs = 0; cs < colspan; cs++) {
+                        activeRowspans.set(colIdx + cs, { remainingRows: rowspan - 1 });
+                    }
                 }
                 const text = td.textContent.trim();
                 row.push(Object.keys(style).length > 0 ? { value: text, style } : text);
+                // For colspan > 1, push empty cells for the extra columns
+                for (let cs = 1; cs < colspan; cs++) {
+                    row.push('');
+                }
+                colIdx += colspan;
+            }
+            // Fill trailing columns covered by active rowspans
+            while (activeRowspans.has(colIdx)) {
+                const span = activeRowspans.get(colIdx);
+                row.push('');
+                span.remainingRows--;
+                if (span.remainingRows <= 0) activeRowspans.delete(colIdx);
+                colIdx++;
             }
             if (row.length > 0) rows.push(row);
+            // Decrement remaining rowspans that weren't encountered in this row's loop
+            for (const [ci, span] of activeRowspans) {
+                if (span.remainingRows > 0 && ci >= colIdx) {
+                    // This column wasn't visited — will be handled in next row's pre-fill
+                }
+            }
+            rowIdx++;
         }
-        return rows.length > 0 ? { rows, isTable: true } : null;
+        return rows.length > 0 ? { rows, isTable: true, merges } : null;
     }
 
     _detectTableInText(text) {
@@ -4021,8 +4230,7 @@ export class SpreadsheetView {
         a.download = (filename || 'spreadsheet') + '.csv';
         document.body.appendChild(a);
         a.click();
-        document.body.removeChild(a);
-        URL.revokeObjectURL(url);
+        setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 60000);
     }
 
     // ─── Cell Formatting ─────────────────────────
@@ -4397,10 +4605,49 @@ export class SpreadsheetView {
         // Draw validation dropdown arrows
         this._renderValidationIndicators(ctx, visibleCols, visibleRows);
 
+        // Draw filter dropdown icons in the header row of the filter region
+        this._renderFilterIcons(ctx, visibleCols, visibleRows);
+
         // S4.1: Draw peer cursors (collaboration)
         this._renderPeerCursors(ctx);
 
         ctx.restore();
+    }
+
+    _renderFilterIcons(ctx, visibleCols, visibleRows) {
+        const region = this._filterRegion;
+        if (!region) return;
+        if (Object.keys(this.filterState).length === 0) return;
+
+        const headerRow = region.headerRow;
+        // Find the visible row entry for the header row
+        const headerVr = visibleRows.find(vr => vr.row === headerRow);
+        if (!headerVr) return;
+
+        const hc = this._getThemeColors();
+
+        for (const vc of visibleCols) {
+            // Only draw filter icons for columns within the table region
+            if (vc.col < region.startCol || vc.col > region.endCol) continue;
+
+            const hasActiveFilter = !!this.filterState[vc.col];
+
+            // Draw a small dropdown arrow in the header row cell
+            const ax = vc.x + vc.width - 16;
+            const ay = headerVr.y + headerVr.height / 2;
+
+            // Background circle for the icon
+            ctx.save();
+            ctx.fillStyle = hasActiveFilter ? hc.selectionBorder : hc.textSecondary;
+            ctx.globalAlpha = hasActiveFilter ? 1.0 : 0.5;
+            ctx.beginPath();
+            ctx.moveTo(ax, ay - 3);
+            ctx.lineTo(ax + 8, ay - 3);
+            ctx.lineTo(ax + 4, ay + 3);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+        }
     }
 
     _renderFindHighlights(ctx, visibleCols, visibleRows) {
@@ -4500,6 +4747,18 @@ export class SpreadsheetView {
         }
     }
 
+    // X15: Escape formula injection vectors in XLSX export shared strings.
+    // Cell values starting with =, +, -, @, |, tab, or CR are formula injection vectors.
+    // Prefix with single quote to force text interpretation in Excel.
+    // Only applied during XLSX export — internal cell model is NOT modified.
+    _escapeForExcel(val) {
+        if (typeof val !== 'string') return val;
+        if (val.length > 0 && '=-+@|\t\r'.includes(val[0])) {
+            return "'" + val;
+        }
+        return val;
+    }
+
     // ─── XLSX Export (S1.3) ──────────────────────────
     exportXLSX() {
         const wb = this.workbook;
@@ -4520,7 +4779,8 @@ export class SpreadsheetView {
             for (const key of Object.keys(sheet.cells)) {
                 const cell = sheet.cells[key];
                 if (cell && cell.type === 'string' && cell.value !== '' && cell.value != null) {
-                    const sv = String(cell.value);
+                    // X15: Escape formula injection when writing to XLSX shared strings
+                    const sv = this._escapeForExcel(String(cell.value));
                     if (!ssMap.has(sv)) { ssMap.set(sv, sharedStrings.length); sharedStrings.push(sv); }
                 }
             }
@@ -4550,7 +4810,7 @@ export class SpreadsheetView {
                     if (cell.formula) { const res = evaluateFormula(cell.formula, sheet); rx += '<c r="'+ref+'"><f>'+this._xmlEsc(cell.formula.slice(1))+'</f><v>'+this._xmlEsc(String(res))+'</v></c>'; }
                     else if (cell.type === 'number' || typeof cell.value === 'number') rx += '<c r="'+ref+'"><v>'+cell.value+'</v></c>';
                     else if (cell.type === 'boolean') rx += '<c r="'+ref+'" t="b"><v>'+(cell.value?'1':'0')+'</v></c>';
-                    else { const sv = String(cell.value??''); const idx = ssMap.get(sv); if (idx!==undefined) rx += '<c r="'+ref+'" t="s"><v>'+idx+'</v></c>'; else rx += '<c r="'+ref+'" t="inlineStr"><is><t>'+this._xmlEsc(sv)+'</t></is></c>'; }
+                    else { const sv = this._escapeForExcel(String(cell.value??'')); const idx = ssMap.get(sv); if (idx!==undefined) rx += '<c r="'+ref+'" t="s"><v>'+idx+'</v></c>'; else rx += '<c r="'+ref+'" t="inlineStr"><is><t>'+this._xmlEsc(sv)+'</t></is></c>'; }
                 }
                 rx += '</row>'; if (rHas) sx += rx;
             }

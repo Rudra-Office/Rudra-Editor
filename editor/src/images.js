@@ -5,6 +5,15 @@ import { updateUndoRedo, recordUndoAction } from './toolbar.js';
 import { getActiveNodeId } from './selection.js';
 import { broadcastOp } from './collab.js';
 
+// X19: Track pending Blob URLs to prevent memory leaks on tab close/error
+const _pendingBlobUrls = new Set();
+window.addEventListener('beforeunload', () => {
+  for (const url of _pendingBlobUrls) {
+    URL.revokeObjectURL(url);
+  }
+  _pendingBlobUrls.clear();
+});
+
 let _imgDelegationSetup = false;
 export function setupImages(scope) {
   // Set up event delegation ONCE on pageContainer — check flag BEFORE any listener work
@@ -340,7 +349,11 @@ export function insertImage(file) {
     const type = file.type || 'image/png';
     const img = new Image();
     const url = URL.createObjectURL(file);
+    _pendingBlobUrls.add(url); // X19: Track blob URL
     img.onload = () => {
+      // X19: Revoke blob URL immediately after reading dimensions to prevent memory leak
+      URL.revokeObjectURL(url);
+      _pendingBlobUrls.delete(url);
       try {
         // Convert pixels to points (1pt = 1/72in, 1px = 1/96in at standard DPI)
         const pxToPt = 72 / 96;
@@ -352,16 +365,16 @@ export function insertImage(file) {
       } catch(e) {
         console.error('Image load processing error:', e);
       }
-      URL.revokeObjectURL(url);
     };
     img.onerror = () => {
+      URL.revokeObjectURL(url); // X19: Clean up on error too
+      _pendingBlobUrls.delete(url);
       try {
         doc.insert_image(nodeId, bytes, type, 300, 200);
         broadcastOp({ action: 'insertImage', afterNodeId: nodeId });
         renderDocument();
         updateUndoRedo();
       } catch (e) { console.error('insert image:', e); }
-      URL.revokeObjectURL(url);
     };
     img.src = url;
   };
@@ -510,7 +523,11 @@ export function initImageContextMenu() {
         const type = file.type || 'image/png';
         const img = new Image();
         const url = URL.createObjectURL(file);
+        _pendingBlobUrls.add(url); // X19: Track blob URL
         img.onload = () => {
+          // X19: Revoke blob URL immediately after reading dimensions
+          URL.revokeObjectURL(url);
+          _pendingBlobUrls.delete(url);
           const pxToPt = 72 / 96;
           let w = img.naturalWidth * pxToPt, h = img.naturalHeight * pxToPt;
           if (w > 468) { h *= 468 / w; w = 468; }
@@ -531,10 +548,10 @@ export function initImageContextMenu() {
               updateUndoRedo();
             } catch (e2) { console.error('replace image fallback:', e2); }
           }
-          URL.revokeObjectURL(url);
         };
         img.onerror = () => {
-          URL.revokeObjectURL(url);
+          URL.revokeObjectURL(url); // X19: Clean up on error too
+          _pendingBlobUrls.delete(url);
           console.error('Failed to load replacement image');
         };
         img.src = url;

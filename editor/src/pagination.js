@@ -53,7 +53,13 @@ export function repaginate() {
 
   // Get authoritative page map from WASM layout engine
   let pageMapJson = null;
-  try { pageMapJson = doc.get_page_map_json(); } catch (_) {}
+  try {
+    // Use font-aware layout when fonts are loaded for accurate line-level pagination
+    const fontDb = state.fontDb;
+    pageMapJson = (fontDb && typeof doc.get_page_map_json_with_fonts === 'function')
+      ? doc.get_page_map_json_with_fonts(fontDb)
+      : doc.get_page_map_json();
+  } catch (_) {}
 
   let pageMap = null;
   if (pageMapJson) {
@@ -96,10 +102,12 @@ export function repaginate() {
   // Get page dimensions
   const dims = state.pageDims || { marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72 };
 
-  // Build nodeToPage map and table chunk map
+  // Build nodeToPage map, table chunk map, and paragraph split map
   const newNodeToPage = new Map();
   // tableChunkMap: Map<pageNum, Map<tableId, {rowIds, isContinuation, chunkId}>>
   const tableChunkMap = new Map();
+  // paraSplitMap: Map<pageNum, Map<nodeId, {isContinuation, splitAtLine, lineCount, blockHeight, splitId}>>
+  const paraSplitMap = new Map();
   for (const pg of pages) {
     // Process table chunks for this page
     if (pg.tableChunks && pg.tableChunks.length > 0) {
@@ -117,6 +125,24 @@ export function repaginate() {
       tableChunkMap.set(pg.pageNum, pageChunks);
     }
 
+    // Process paragraph splits for this page
+    if (pg.paraSplits && pg.paraSplits.length > 0) {
+      const pageSplits = new Map();
+      for (const split of pg.paraSplits) {
+        const splitId = split.isContinuation
+          ? `${split.nodeId}-cont`
+          : split.nodeId;
+        pageSplits.set(split.nodeId, {
+          isContinuation: split.isContinuation,
+          splitAtLine: split.splitAtLine,
+          lineCount: split.lineCount,
+          blockHeight: split.blockHeight,
+          splitId,
+        });
+      }
+      paraSplitMap.set(pg.pageNum, pageSplits);
+    }
+
     for (const nid of pg.nodeIds) {
       // For tables with chunks, map the chunk ID (not the raw table ID)
       const pageChunks = tableChunkMap.get(pg.pageNum);
@@ -128,7 +154,17 @@ export function repaginate() {
           newNodeToPage.set(nid, pg.pageNum);
         }
       } else {
-        newNodeToPage.set(nid, pg.pageNum);
+        // For split paragraphs, use the splitId so both halves can coexist
+        const pageSplits = paraSplitMap.get(pg.pageNum);
+        const split = pageSplits?.get(nid);
+        if (split) {
+          newNodeToPage.set(split.splitId, pg.pageNum);
+          if (!split.isContinuation) {
+            newNodeToPage.set(nid, pg.pageNum);
+          }
+        } else {
+          newNodeToPage.set(nid, pg.pageNum);
+        }
       }
     }
   }
@@ -172,11 +208,15 @@ export function repaginate() {
     const ftr = (isFirstPage && hasDifferentFirst) ? firstPageFooterHtml : defaultFooterHtml;
     updatePageHeaderFooter(pageEl, pageNum, numPages, hdr, ftr);
 
-    // Build the effective node ID list for this page (replacing table IDs with chunk IDs)
+    // Build the effective node ID list for this page (replacing table/split IDs with chunk/split IDs)
     const pageChunks = tableChunkMap.get(pg.pageNum);
+    const pageSplits = paraSplitMap.get(pg.pageNum);
     const effectiveNodeIds = pg.nodeIds.map(nid => {
       const chunk = pageChunks?.get(nid);
-      return chunk ? chunk.chunkId : nid;
+      if (chunk) return chunk.chunkId;
+      const split = pageSplits?.get(nid);
+      if (split) return split.splitId;
+      return nid;
     });
 
     // Set of nodeIds that belong on this page
@@ -231,6 +271,45 @@ export function repaginate() {
         } catch (e) {
           console.warn('render_table_chunk failed:', e);
         }
+        continue;
+      }
+
+      // Check if this is a split paragraph
+      const split = pageSplits?.get(originalId);
+      if (split) {
+        // Split paragraph: render from WASM, then apply CSS clipping
+        try {
+          const html = doc.render_node_html(originalId);
+          const temp = document.createElement('div');
+          temp.innerHTML = html;
+          const newEl = temp.firstElementChild;
+          if (newEl) {
+            if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
+            newEl.dataset.nodeId = effectiveId;
+            if (split.isContinuation) {
+              // Continuation: wrap in a clipping container that hides the first N lines.
+              // We use a wrapper div with overflow:hidden and a negative margin-top
+              // on the inner paragraph to scroll the content up, hiding the already-shown lines.
+              newEl.dataset.splitContinuation = 'true';
+              newEl.dataset.splitAtLine = String(split.splitAtLine);
+              newEl.style.listStyleType = 'none'; // Don't repeat list markers
+            } else {
+              // First part of split: mark it so we can apply height clipping after layout
+              newEl.dataset.splitFirst = 'true';
+              newEl.dataset.splitAtLine = String(split.splitAtLine);
+              newEl.dataset.splitBlockHeight = String(split.blockHeight);
+            }
+            if (lastInserted && lastInserted.nextSibling) {
+              contentEl.insertBefore(newEl, lastInserted.nextSibling);
+            } else if (!lastInserted) {
+              contentEl.prepend(newEl);
+            } else {
+              contentEl.appendChild(newEl);
+            }
+            lastInserted = newEl;
+            state.nodeIdToElement.set(effectiveId, newEl);
+          }
+        } catch (_) {}
         continue;
       }
 
@@ -294,8 +373,8 @@ export function repaginate() {
               targetContent.appendChild(el);
             }
           }
-        } else if (el.dataset.tableSource) {
-          // Stale table chunk — remove it
+        } else if (el.dataset.tableSource || el.dataset.splitContinuation || el.dataset.splitFirst) {
+          // Stale table chunk or split paragraph part — remove it
           el.remove();
         }
       }
@@ -465,8 +544,11 @@ function createPageElement(pageNum, pgData, dims, headerHtml, footerHtml, totalP
 function applyPageStyle(pageEl, pgData, defaultDims) {
   const w = (pgData?.width || 612) * PT_TO_PX;
   const h = (pgData?.height || 792) * PT_TO_PX;
+  const hPx = Math.round(h);
   pageEl.style.width = Math.round(w) + 'px';
-  pageEl.style.minHeight = Math.round(h) + 'px';
+  pageEl.style.minHeight = hPx + 'px';
+  pageEl.style.height = hPx + 'px'; // Fixed height for line-level overflow
+  pageEl.dataset.pageHeightPx = String(hPx);
 
   // Content area gets per-page margins (from layout engine) or fallback to section defaults
   const contentEl = pageEl.querySelector('.page-content');
@@ -579,6 +661,176 @@ function substitutePageNumbers(container, pageNum, totalPages) {
       el.textContent = String(totalPages);
     }
   });
+}
+
+
+/**
+ * DOM-based overflow split: detect paragraphs that overflow their page container
+ * and visually split them by cloning to the next page with CSS clipping.
+ * This works regardless of whether WASM provides font-accurate line heights.
+ */
+function domBasedOverflowSplit() {
+  const pageEls = state.pageElements;
+  if (!pageEls || pageEls.length < 1) return;
+
+  // Clean up previous DOM-based splits
+  document.querySelectorAll('.dom-split-clone').forEach(el => el.remove());
+  document.querySelectorAll('[data-dom-split-first]').forEach(el => {
+    el.style.maxHeight = '';
+    el.style.overflow = '';
+    el.removeAttribute('data-dom-split-first');
+  });
+
+  for (let i = 0; i < pageEls.length; i++) {
+    const pageEl = pageEls[i];
+    const contentEl = pageEl.querySelector('.page-content');
+    if (!contentEl) continue;
+
+    // Get available content height (page height minus header, footer, padding)
+    const header = pageEl.querySelector('.page-header');
+    const footer = pageEl.querySelector('.page-footer');
+    const pageH = parseFloat(pageEl.dataset.pageHeightPx) || pageEl.offsetHeight;
+    const headerH = header ? header.offsetHeight : 0;
+    const footerH = footer ? footer.offsetHeight : 0;
+    const paddingTop = parseFloat(getComputedStyle(contentEl).paddingTop) || 0;
+    const paddingBot = parseFloat(getComputedStyle(contentEl).paddingBottom) || 0;
+    const availableH = pageH - headerH - footerH - paddingTop - paddingBot;
+
+    if (availableH <= 0) continue;
+
+    // Check if content overflows
+    const contentH = contentEl.scrollHeight;
+    if (contentH <= availableH + 2) continue; // +2px tolerance
+
+    // Find the last paragraph that starts within the page but overflows past it
+    const children = Array.from(contentEl.querySelectorAll(':scope > [data-node-id]'));
+    for (const child of children) {
+      const childTop = child.offsetTop - contentEl.offsetTop;
+      const childH = child.offsetHeight;
+
+      // This paragraph starts on this page but overflows past it
+      if (childTop < availableH && childTop + childH > availableH + 2) {
+        const overflowAt = availableH - childTop; // px from top of paragraph where page ends
+
+        // Skip if very little content would remain on either side (orphan/widow)
+        if (overflowAt < 30 || childH - overflowAt < 30) continue;
+
+        // Clip the original to show only the part that fits
+        child.style.maxHeight = overflowAt + 'px';
+        child.style.overflow = 'hidden';
+        child.setAttribute('data-dom-split-first', 'true');
+
+        // Clone to next page with negative margin to hide already-shown part
+        const nextPageEl = pageEls[i + 1];
+        if (nextPageEl) {
+          const nextContent = nextPageEl.querySelector('.page-content');
+          if (nextContent) {
+            const clone = child.cloneNode(true);
+            clone.className = child.className + ' dom-split-clone';
+            clone.style.maxHeight = '';
+            clone.style.overflow = '';
+            clone.style.marginTop = '-' + overflowAt + 'px';
+            clone.contentEditable = 'false';
+            clone.removeAttribute('data-node-id'); // Don't duplicate node IDs
+            clone.removeAttribute('data-dom-split-first');
+
+            // Wrap in overflow container
+            const wrapper = document.createElement('div');
+            wrapper.className = 'dom-split-wrapper';
+            wrapper.style.overflow = 'hidden';
+            wrapper.appendChild(clone);
+            nextContent.prepend(wrapper);
+          }
+        }
+
+        // Only handle the first overflowing paragraph per page
+        break;
+      }
+    }
+  }
+}
+
+/**
+ * Apply CSS clipping for split paragraphs.
+ *
+ * The Rust layout engine splits tall paragraphs at line boundaries. The first
+ * part of the split stays on the current page and the continuation goes on the
+ * next page. Both halves reference the same paragraph node but with different
+ * `data-node-id` values (original vs original-cont).
+ *
+ * Since the JS side renders the full paragraph HTML for both halves, we use
+ * CSS to clip each half to show only its portion:
+ *
+ * - First half (`data-split-first`): gets `max-height` and `overflow:hidden`
+ *   to clip off the continuation lines at the bottom.
+ *
+ * - Continuation half (`data-split-continuation`): gets wrapped in a clipping
+ *   container with `overflow:hidden`, and the inner paragraph gets a negative
+ *   `margin-top` to scroll the first-half lines out of view. The continuation
+ *   is also marked non-editable to prevent duplicate editing issues (editing
+ *   should happen on the first-half element; changes propagate via WASM sync).
+ */
+function applySplitParagraphClipping() {
+  const pageEls = state.pageElements;
+  if (!pageEls || pageEls.length === 0) return;
+
+  for (const pageEl of pageEls) {
+    const contentEl = pageEl.querySelector('.page-content');
+    if (!contentEl) continue;
+
+    // Handle first-half split paragraphs: clip to blockHeight
+    contentEl.querySelectorAll('[data-split-first]').forEach(el => {
+      const heightPt = parseFloat(el.dataset.splitBlockHeight);
+      if (heightPt && heightPt > 0) {
+        const heightPx = Math.ceil(heightPt * PT_TO_PX);
+        el.style.maxHeight = heightPx + 'px';
+        el.style.overflow = 'hidden';
+      }
+    });
+
+    // Handle continuation split paragraphs: hide already-shown lines
+    contentEl.querySelectorAll('[data-split-continuation]').forEach(el => {
+      try {
+      const splitAtLine = parseInt(el.dataset.splitAtLine, 10) || 0;
+      if (splitAtLine <= 0) return;
+
+      const nid = el.dataset.nodeId || el.getAttribute('data-node-id');
+      if (!nid) return;
+      const originalId = nid.replace(/-cont$/, '');
+      let firstHalfHeight = 0;
+
+      for (const otherPage of pageEls) {
+        if (otherPage === pageEl) continue;
+        const otherContent = otherPage.querySelector('.page-content');
+        if (!otherContent) continue;
+        const firstHalf = otherContent.querySelector(`[data-node-id="${CSS.escape(originalId)}"][data-split-first]`);
+        if (firstHalf) {
+          // Use the rendered height of the first half as the offset
+          firstHalfHeight = firstHalf.scrollHeight;
+          break;
+        }
+      }
+
+      if (firstHalfHeight > 0) {
+        // If the element isn't already wrapped, wrap it
+        if (!el.parentElement?.classList?.contains('split-cont-wrapper')) {
+          const wrapper = document.createElement('div');
+          wrapper.className = 'split-cont-wrapper';
+          wrapper.style.overflow = 'hidden';
+          el.parentElement.insertBefore(wrapper, el);
+          wrapper.appendChild(el);
+          // Copy the data-node-id to wrapper for reconciliation
+          wrapper.dataset.nodeId = el.dataset.nodeId;
+          el.removeAttribute('data-node-id');
+        }
+        el.style.marginTop = `-${firstHalfHeight}px`;
+      }
+
+      // Make continuation non-editable to avoid duplicate editing
+      el.contentEditable = 'false';
+      } catch (_) { /* skip malformed split elements */ }
+    });
+  }
 }
 
 /**

@@ -4,6 +4,7 @@
 import { state, $ } from './state.js';
 import { aiComplete, abortAI } from './ai.js';
 import { detectContext, buildContextPrompt } from './ai-panel.js';
+import { renderDocument, syncAllText } from './render.js';
 
 let _promptEl, _promptInput, _suggestionEl, _diffEl;
 let _lastAction = null;
@@ -133,6 +134,10 @@ export function showInlineSuggestion(nodeId, original, suggested, action, startO
 
   state.aiInlineSuggestion = { nodeId, original, suggested, action, startOffset: startOffset ?? 0, multiNodeInfo: multiNodeInfo || null };
 
+  // Hide floating toolbar to avoid overlap
+  const floatingTb = document.querySelector('.floating-toolbar');
+  if (floatingTb) floatingTb.classList.remove('visible');
+
   // Show action label (Bug 59) + character count delta (Enhancement 90)
   const actionLabels = { improve: 'Improve', shorter: 'Shorten', longer: 'Expand', grammar: 'Grammar', translate: 'Translate', custom: 'Custom' };
   const label = actionLabels[action] || action;
@@ -181,9 +186,8 @@ function tryInsertAsTable(nodeId, aiText) {
     // Insert table via WASM
     doc.insert_table(nodeId, numRows, numCols);
 
-    // Trigger re-render so the table appears in DOM
-    const editorCanvas = $('editorCanvas');
-    if (editorCanvas) editorCanvas.dispatchEvent(new Event('input', { bubbles: true }));
+    // Re-render DOM from WASM model so the table appears
+    renderDocument();
 
     state.dirty = true;
     state.undoHistory = state.undoHistory || [];
@@ -199,7 +203,7 @@ function tryInsertAsTable(nodeId, aiText) {
 
 // ── Core AI Action Trigger ──────────────────────────
 
-export async function triggerAIAction(action, customPrompt) {
+export async function triggerAIAction(action, customPrompt, targetLanguage) {
   if (state.aiGenerating) return;
   if (!state.aiAvailable) return;
   // Rate limiting: 1 second cooldown between requests (Enhancement 39)
@@ -280,7 +284,9 @@ export async function triggerAIAction(action, customPrompt) {
     shorter: `Make this more concise while keeping the key points. Return only the shortened text:\n\n${selectedText}`,
     longer: `Expand on this with more detail and supporting points. Return only the expanded text:\n\n${selectedText}`,
     grammar: `Fix any grammar, spelling, and punctuation issues. Return only the corrected text:\n\n${selectedText}`,
-    translate: `Detect the language of this text. If it's English, translate to Spanish. If it's any other language, translate to English. Return only the translated text, nothing else:\n\n${selectedText}`,
+    translate: targetLanguage
+      ? `Translate the following text to ${targetLanguage}. Return only the translated text, nothing else:\n\n${selectedText}`
+      : `Detect the language of this text. If it's English, translate to Spanish. If it's any other language, translate to English. Return only the translated text, nothing else:\n\n${selectedText}`,
     custom: customPrompt ? `${customPrompt}\n\nText:\n${selectedText}` : selectedText,
   };
 
@@ -376,6 +382,11 @@ export function acceptSuggestion() {
   const doc = state.doc;
   if (!doc) { hideInlineSuggestion(); return; }
 
+  // Sync DOM text to WASM model before applying replacements.
+  // This ensures the WASM model reflects any edits the user made in the
+  // contentEditable DOM since the AI suggestion was generated.
+  try { syncAllText(); } catch (_) {}
+
   // Check if AI generated a table — insert as real WASM table (Enhancement 71)
   if (suggestion.action === 'custom' && suggested.includes('|') && suggested.split('\n').filter(l => l.includes('|')).length >= 2) {
     if (tryInsertAsTable(nodeId, suggested)) {
@@ -411,16 +422,24 @@ export function acceptSuggestion() {
       // Apply each chunk to its corresponding paragraph via set_paragraph_text.
       const suggestedParas = suggested.split('\n').filter(s => s.trim());
 
-      // Warn if paragraph count doesn't match (Bug 74 fix)
+      // Safety: if AI returned empty or almost nothing, don't wipe the document
+      if (suggestedParas.length === 0 || (suggestedParas.length === 1 && suggestedParas[0].length < 5)) {
+        if (_diffEl) _diffEl.innerHTML = '<span class="ai-inline-loading" style="color:var(--danger)">AI returned empty result. Please retry.</span>';
+        if (_suggestionEl) _suggestionEl.style.display = 'block';
+        setTimeout(() => hideInlineSuggestion(), 3000);
+        return;
+      }
+
+      // Warn if paragraph count doesn't match
       if (suggestedParas.length !== multiNodeInfo.length) {
-        // If AI returned fewer paragraphs, pad with empty strings
-        while (suggestedParas.length < multiNodeInfo.length) {
-          suggestedParas.push('');
-        }
         // If AI returned more, join the extras into the last paragraph
         if (suggestedParas.length > multiNodeInfo.length) {
           const extra = suggestedParas.splice(multiNodeInfo.length);
           suggestedParas[multiNodeInfo.length - 1] += '\n' + extra.join('\n');
+        }
+        // If AI returned fewer, keep original text for unmatched paragraphs (don't pad with empty)
+        while (suggestedParas.length < multiNodeInfo.length) {
+          suggestedParas.push(multiNodeInfo[suggestedParas.length].text);
         }
       }
 
@@ -438,11 +457,8 @@ export function acceptSuggestion() {
         }
       }
 
-      // Trigger re-render from WASM model to preserve inline elements
-      try {
-        const editorCanvas = $('editorCanvas');
-        if (editorCanvas) editorCanvas.dispatchEvent(new Event('input', { bubbles: true }));
-      } catch (_) {}
+      // Re-render DOM from WASM model to reflect changes
+      renderDocument();
 
       // Mark dirty and record undo
       state.dirty = true;
@@ -485,16 +501,8 @@ export function acceptSuggestion() {
         console.warn('[ai-inline] WASM replace_text failed:', wasmErr);
       }
 
-      // Trigger re-render from WASM model to preserve inline elements (images, links, equations)
-      try {
-        const editorCanvas = $('editorCanvas');
-        if (editorCanvas) editorCanvas.dispatchEvent(new Event('input', { bubbles: true }));
-      } catch (_) {
-        // Fallback: direct textContent update (loses inline formatting elements)
-        const before = fullText.slice(0, jsOffset);
-        const after = fullText.slice(jsOffset + original.length);
-        el.textContent = before + suggested + after;
-      }
+      // Re-render DOM from WASM model to reflect the replacement
+      renderDocument();
 
       // Mark dirty and record undo (Enhancement 34)
       state.dirty = true;
@@ -503,17 +511,40 @@ export function acceptSuggestion() {
       if (state.undoHistory.length > 50) state.undoHistory.length = 50;
 
       // Restore cursor to end of replaced text (Enhancement 37)
+      // Re-query the DOM element since renderDocument() rebuilds the DOM.
+      // Walk text nodes to find the correct position (paragraphs may have
+      // nested span elements for formatting rather than a single text node).
       try {
-        const sel = window.getSelection();
-        const range = document.createRange();
-        const textNode = el.firstChild;
-        if (textNode) {
+        const updatedEl = $('editorCanvas')?.querySelector(`[data-node-id="${nodeId}"]`);
+        if (updatedEl) {
           const endPos = jsOffset + suggested.length;
-          const safePos = Math.min(endPos, textNode.textContent?.length || 0);
-          range.setStart(textNode, safePos);
-          range.collapse(true);
-          sel.removeAllRanges();
-          sel.addRange(range);
+          const walker = document.createTreeWalker(updatedEl, NodeFilter.SHOW_TEXT);
+          let charCount = 0;
+          let placed = false;
+          while (walker.nextNode()) {
+            const tn = walker.currentNode;
+            const tnLen = tn.textContent?.length || 0;
+            if (charCount + tnLen >= endPos) {
+              const range = document.createRange();
+              range.setStart(tn, Math.min(endPos - charCount, tnLen));
+              range.collapse(true);
+              const sel = window.getSelection();
+              sel.removeAllRanges();
+              sel.addRange(range);
+              placed = true;
+              break;
+            }
+            charCount += tnLen;
+          }
+          if (!placed) {
+            // Fallback: place cursor at end of paragraph
+            const range = document.createRange();
+            range.selectNodeContents(updatedEl);
+            range.collapse(false);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(range);
+          }
         }
       } catch (_) { /* cursor restore is non-critical */ }
 

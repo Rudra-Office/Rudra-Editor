@@ -111,6 +111,11 @@ async function boot() {
     initFind();
     initImageContextMenu();
     initCollabUI();
+    // Hide Share button when no collaboration relay is configured
+    const btnShare = $('btnShare');
+    if (btnShare && (!window.S1_CONFIG?.relayUrl && !window.S1_CONFIG?.enableCollab)) {
+      btnShare.style.display = 'none';
+    }
     initTouch();
     initPinchToZoom();
     initTableCellAnnouncements();
@@ -335,7 +340,7 @@ function initPdfToolbar() {
       a.download = ($('docName').value || 'document') + '.pdf';
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 200);
+      setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 60000);
       state.pdfModified = false;
 
       const { showToast } = await import('./toolbar-handlers.js');
@@ -350,7 +355,7 @@ function initPdfToolbar() {
       a.download = ($('docName').value || 'document') + '.pdf';
       document.body.appendChild(a);
       a.click();
-      setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 200);
+      setTimeout(() => { try { document.body.removeChild(a); } catch(_) {} URL.revokeObjectURL(url); }, 60000);
 
       const { showToast } = await import('./toolbar-handlers.js');
       showToast('Saved without annotations (WASM editor unavailable)', 'error');
@@ -668,7 +673,7 @@ function initSpreadsheetToolbar() {
       a.href = url;
       a.download = ($('docName')?.value || 'spreadsheet') + '.xlsx';
       a.click();
-      setTimeout(() => { URL.revokeObjectURL(url); }, 200);
+      setTimeout(() => { URL.revokeObjectURL(url); }, 60000);
     } catch (e) { console.error('XLSX export error:', e); }
   });
 
@@ -688,15 +693,13 @@ function initSpreadsheetToolbar() {
   $('ssMenuClose')?.addEventListener('click', async () => {
     closeSsMenus();
     if (state.spreadsheetView) { state.spreadsheetView.destroy(); state.spreadsheetView = null; }
-    const { switchView } = await import('./file.js');
+    const { deactivateEditor } = await import('./file.js');
     const { closeFileTab } = await import('./tabs.js');
     // Close the active tab if there is one
     if (state.activeFileId) {
       closeFileTab(state.activeFileId);
     } else {
-      switchView('editor');
-      $('welcomeScreen').style.display = '';
-      $('statusbar').classList.remove('show');
+      deactivateEditor();
     }
   });
 

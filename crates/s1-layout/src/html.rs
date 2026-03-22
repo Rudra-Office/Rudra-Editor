@@ -181,6 +181,7 @@ fn render_block_with_offset(html: &mut String, block: &LayoutBlock, x_offset: f6
             indent_first_line,
             line_height,
             bidi,
+            ..
         } => {
             render_paragraph(
                 html,
@@ -715,6 +716,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
 
@@ -858,6 +861,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
 
@@ -905,6 +910,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
                 lines: vec![LayoutLine {
                     baseline_y: 10.0,
                     height: 14.4,
@@ -1101,6 +1108,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
 
@@ -1125,6 +1134,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
 
@@ -1205,6 +1216,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
 
@@ -1332,6 +1345,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {
@@ -1406,6 +1421,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {
@@ -1480,6 +1497,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {
@@ -1554,6 +1573,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {
@@ -1628,6 +1649,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {
@@ -1702,6 +1725,8 @@ mod tests {
                 indent_first_line: 0.0,
                 line_height: None,
                 bidi: false,
+                is_continuation: false,
+                split_at_line: 0,
             },
         };
         let page = LayoutPage {

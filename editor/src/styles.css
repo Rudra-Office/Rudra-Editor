@@ -850,6 +850,46 @@ body.format-painter-active [contenteditable] { cursor: copy !important; }
   -webkit-font-smoothing:antialiased;
   caret-color:var(--accent);
 }
+/* Split paragraph clipping — first part and continuation wrapper */
+[data-split-first]{overflow:hidden}
+.split-cont-wrapper{overflow:hidden}
+
+/* X17: RTL text direction support — page-level (whole document RTL) */
+.page-content[dir="rtl"], [dir="rtl"] .page-content {
+  direction: rtl;
+  text-align: right;
+}
+.page-content[dir="rtl"] p, [dir="rtl"] .page-content p,
+.page-content[dir="rtl"] h1, [dir="rtl"] .page-content h1,
+.page-content[dir="rtl"] h2, [dir="rtl"] .page-content h2,
+.page-content[dir="rtl"] h3, [dir="rtl"] .page-content h3,
+.page-content[dir="rtl"] h4, [dir="rtl"] .page-content h4,
+.page-content[dir="rtl"] h5, [dir="rtl"] .page-content h5,
+.page-content[dir="rtl"] h6, [dir="rtl"] .page-content h6 {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: embed;
+}
+/* X17: Per-paragraph RTL — WASM emits dir="rtl" on individual <p>/<h*> elements */
+.page-content p[dir="rtl"],
+.page-content h1[dir="rtl"],
+.page-content h2[dir="rtl"],
+.page-content h3[dir="rtl"],
+.page-content h4[dir="rtl"],
+.page-content h5[dir="rtl"],
+.page-content h6[dir="rtl"],
+.page-content li[dir="rtl"] {
+  direction: rtl;
+  text-align: right;
+  unicode-bidi: embed;
+}
+/* X17: Ensure nested inline elements inherit RTL direction */
+.page-content [dir="rtl"] span,
+.page-content [dir="rtl"] strong,
+.page-content [dir="rtl"] em,
+.page-content [dir="rtl"] a {
+  unicode-bidi: embed;
+}
 
 /* Empty page placeholder */
 .page-content:empty::before{
@@ -2889,6 +2929,7 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
   position: relative;
   width: 0;
   min-width: 0;
+  height: 100%;
   overflow: hidden;
   background: var(--bg-white);
   border-left: 1px solid var(--border-light);
@@ -2898,8 +2939,9 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
   transition: width .25s ease, min-width .25s ease;
 }
 .ai-panel.show {
-  width: 340px;
-  min-width: 340px;
+  display: flex;
+  width: 360px;
+  min-width: 360px;
 }
 .ai-panel-header {
   display: flex;
@@ -3247,7 +3289,7 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 /* ── AI Inline Prompt ── */
 .ai-inline-prompt {
   position: fixed;
-  z-index: 250;
+  z-index: calc(var(--z-modal) + 10);
   display: none;
   flex-direction: column;
   gap: 4px;
@@ -3282,7 +3324,7 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 /* ── AI Inline Suggestion (diff view) ── */
 .ai-inline-suggestion {
   position: fixed;
-  z-index: 250;
+  z-index: calc(var(--z-modal) + 10);
   display: none;
   flex-direction: column;
   gap: 8px;
@@ -3387,6 +3429,10 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 [data-theme="dark"] .ai-floating-context { color: #9aa0a6; }
 [data-theme="dark"] .ai-floating-btn { color: #bdc1c6; }
 [data-theme="dark"] .ai-floating-btn:hover { background: rgba(138,180,248,.15); color: #8ab4f8; }
+[data-theme="dark"] .ai-lang-picker { background: #292a2d; border-color: #3c4043; box-shadow: 0 4px 16px rgba(0,0,0,.4); }
+[data-theme="dark"] .ai-lang-picker button { color: #e8eaed; }
+[data-theme="dark"] .ai-lang-picker button:hover { background: rgba(138,180,248,.15) !important; }
+[data-theme="dark"] .ai-lang-picker div:first-child { color: #9aa0a6; border-color: #3c4043; }
 [data-theme="dark"] .ai-hint-bubble { background: #8ab4f8; color: #202124; }
 [data-theme="dark"] .ai-inline-prompt { background: #292a2d; border-color: #8ab4f8; }
 [data-theme="dark"] .ai-inline-prompt-input { background: #35363a; border-color: #5f6368; color: #e8eaed; }
@@ -3743,8 +3789,8 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
   #pageContainer{gap:0 !important;padding:0 !important;zoom:1 !important}
   .doc-page{
     box-shadow:none !important;margin:0 !important;
-    width:100% !important;min-height:auto !important;
-    transform:none !important;
+    width:100% !important;min-height:auto !important;height:auto !important;
+    transform:none !important;overflow:hidden !important;
     break-after:page;page-break-after:always;
     border:none !important;
   }
@@ -4270,8 +4316,8 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
   .doc-page{
     width:100% !important;
     min-width:auto !important;
-    min-height:auto !important;
-    margin:0 !important;
+    min-height:auto !important;height:auto !important;
+    margin:0 !important;overflow:hidden !important;
     box-shadow:none !important;
     border-radius:0 !important;
   }
@@ -4695,10 +4741,12 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 }
 .toast-error { background: #c62828; }
 .toast-success { background: #2e7d32; }
+.toast-warning { background: #e8710a; }
 @keyframes toast-in { to { opacity: 1; transform: translateY(0); } }
 [data-theme="dark"] .toast { background: #e8eaed; color: #202124; }
 [data-theme="dark"] .toast-error { background: #f28b82; color: #202124; }
 [data-theme="dark"] .toast-success { background: #81c995; color: #202124; }
+[data-theme="dark"] .toast-warning { background: #fdd663; color: #202124; }
 .collab-toast {
   padding: 10px 18px;
   background: var(--text-primary);
@@ -6844,8 +6892,8 @@ table[data-node-id] th {
    ═══════════════════════════════════════════════════ */
 .loading-overlay {
   position: fixed; inset: 0; background: rgba(255,255,255,.7);
-  display: flex; align-items: center; justify-content: center;
-  z-index: 9999; pointer-events: all;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 12px; z-index: 9999; pointer-events: all;
   animation: fade-in .2s ease;
 }
 @keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
@@ -6854,7 +6902,12 @@ table[data-node-id] th {
   border-top-color: var(--accent); border-radius: 50%;
   animation: spin 0.8s linear infinite;
 }
+.loading-text {
+  font-size: 13px; color: #5f6368; font-family: var(--font-ui);
+}
 @keyframes spin { to { transform: rotate(360deg); } }
+[data-theme="dark"] .loading-overlay { background: rgba(32,33,36,.7); }
+[data-theme="dark"] .loading-text { color: #bdc1c6; }
 
 /* ═══════════════════════════════════════════════════
    DESTRUCTIVE / DANGER BUTTON STYLES

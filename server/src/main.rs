@@ -127,6 +127,22 @@ async fn main() {
         .fallback_service(ServeDir::new(&static_dir).append_index_html_on_directories(true))
         // Middleware
         .layer(build_cors_layer())
+        .layer(axum::middleware::map_response(|mut response: axum::response::Response| async move {
+            let headers = response.headers_mut();
+            headers.insert(
+                axum::http::header::HeaderName::from_static("content-security-policy"),
+                axum::http::header::HeaderValue::from_static(
+                    "default-src 'self'; \
+                     script-src 'self' 'unsafe-inline' 'wasm-unsafe-eval' https://cdn.jsdelivr.net; \
+                     style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; \
+                     font-src 'self' https://fonts.gstatic.com https://cdn.jsdelivr.net; \
+                     img-src 'self' data: blob:; \
+                     connect-src 'self' ws: wss: http: https:; \
+                     worker-src 'self' blob:"
+                ),
+            );
+            response
+        }))
         .layer(TraceLayer::new_for_http())
         .layer(DefaultBodyLimit::max(64 * 1024 * 1024));
 

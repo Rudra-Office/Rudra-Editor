@@ -442,7 +442,7 @@ function wireDigitalSignEvents() {
           a.href = url;
           a.download = ($('docName').value || 'document') + '_signed.pdf';
           a.click();
-          URL.revokeObjectURL(url);
+          setTimeout(() => { try { URL.revokeObjectURL(url); } catch(_) {} }, 60000);
 
           closeDigitalSignModal();
           showToast('Document signed and saved');
