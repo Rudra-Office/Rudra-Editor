@@ -159,10 +159,15 @@ export function renderSingleParagraphIfPossible(nodeId, options = {}) {
   const updatedEl = renderNodeById(nodeId);
   if (!updatedEl) return false;
 
-  // D21: If height changed significantly, we must re-paginate the document
-  // to avoid page overflow or gaps. A threshold of 2px ignores rounding errors.
+  // D21: If height changed significantly, re-paginate. Try WASM-authority
+  // path first (renderAffectedPages); fall through to full render if unavailable.
   const newHeight = updatedEl.offsetHeight;
   if (Math.abs(newHeight - oldHeight) > 2) {
+    if (state.doc && typeof state.doc.get_affected_pages === 'function') {
+      try {
+        if (renderAffectedPages(nodeId)) return true;
+      } catch (_) {}
+    }
     return false; // Height changed — full re-render needed for pagination
   }
 
@@ -280,6 +285,17 @@ export function renderDocument() {
       console.warn('Canvas render failed, falling back to DOM rendering');
     } catch (e) {
       console.error('Canvas render error, falling back to DOM:', e);
+    }
+  }
+
+  // Stage C: Try WASM-authority rendering path (get_page_html per page)
+  if (typeof doc.get_page_count === 'function' && typeof doc.get_page_html === 'function') {
+    try {
+      renderDocumentFromWasm();
+      return; // Success — skip legacy path
+    } catch (e) {
+      console.warn('WASM page rendering failed, falling back to legacy path:', e);
+      _rendering = true; // renderDocumentFromWasm sets _rendering=false on success
     }
   }
 
@@ -1876,4 +1892,314 @@ function teardownVirtualScroll() {
 export function renderSmart(nodeId) {
   if (nodeId && renderSingleParagraphIfPossible(nodeId)) return;
   renderDocument();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// Stage B: WASM-Authority Page Rendering
+// ═══════════════════════════════════════════════════════════════════════
+//
+// These functions use the new get_page_html() WASM API to render pages
+// directly from layout engine output, bypassing DOM measurement and
+// CSS clipping. The editor becomes a projection layer.
+
+/**
+ * Render a single page from WASM page HTML.
+ * Replaces the .page-content innerHTML of the page at `pageIndex`.
+ *
+ * @param {number} pageIndex - 0-based page index
+ */
+export function renderPageFromWasm(pageIndex) {
+  const { doc } = state;
+  if (!doc || typeof doc.get_page_html !== 'function') return;
+
+  const fontDb = getFontDb();
+  let html;
+  try {
+    html = (fontDb && typeof doc.get_page_html_with_fonts === 'function')
+      ? doc.get_page_html_with_fonts(pageIndex, fontDb)
+      : doc.get_page_html(pageIndex);
+  } catch (e) {
+    console.error(`renderPageFromWasm(${pageIndex}):`, e);
+    return;
+  }
+
+  const pageEl = state.pageElements[pageIndex];
+  if (!pageEl) return;
+  const content = pageEl.querySelector('.page-content');
+  if (!content) return;
+
+  // Replace content
+  content.innerHTML = html;
+
+  // Per-page fixups
+  try { setupImages(content); } catch (_) {}
+  try { renderDocumentEquations(content); } catch (_) {}
+  try { renderDocumentBookmarks(content); } catch (_) {}
+
+  // Substitute page numbers in this page's header/footer
+  const pageNum = pageIndex + 1;
+  const totalPages = state.pageElements.length;
+  pageEl.querySelectorAll('.page-header [data-field], .page-footer [data-field], .page-content [data-field]').forEach(el => {
+    const field = (el.dataset.field || '').toUpperCase();
+    if (field === 'PAGENUMBER' || field === 'PAGE') el.textContent = String(pageNum);
+    else if (field === 'PAGECOUNT' || field === 'NUMPAGES') el.textContent = String(totalPages);
+  });
+
+  // Update nodeIdToElement map for nodes on this page
+  content.querySelectorAll('[data-node-id]').forEach(el => {
+    state.nodeIdToElement.set(el.dataset.nodeId, el);
+  });
+
+  // Update syncedTextCache for paragraphs on this page (use getEditableText
+  // for consistency with syncParagraphText — strips list markers, non-editable spans)
+  content.querySelectorAll('p[data-node-id], h1[data-node-id], h2[data-node-id], h3[data-node-id], h4[data-node-id], h5[data-node-id], h6[data-node-id]').forEach(el => {
+    const nid = el.dataset.nodeId;
+    if (nid) {
+      state.syncedTextCache.set(nid, getEditableText(el));
+    }
+  });
+}
+
+/**
+ * Ensure the correct number of .doc-page elements exist in pageContainer.
+ * Creates or removes page elements as needed.
+ *
+ * @param {number} pageCount - Desired number of pages
+ */
+function ensurePageElements(pageCount) {
+  const container = $('pageContainer');
+  if (!container) return;
+
+  const dims = state.pageDims || {
+    widthPt: 612, heightPt: 792,
+    marginTopPt: 72, marginBottomPt: 72, marginLeftPt: 72, marginRightPt: 72
+  };
+  const ptToPx = 96 / 72;
+  const pageWPx = Math.round((dims.widthPt || 612) * ptToPx);
+  const pageHPx = Math.round((dims.heightPt || 792) * ptToPx);
+
+  // Remove excess pages
+  while (state.pageElements.length > pageCount) {
+    const el = state.pageElements.pop();
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+  }
+
+  // Add missing pages
+  while (state.pageElements.length < pageCount) {
+    const idx = state.pageElements.length;
+    const pageNum = idx + 1;
+
+    const pageEl = document.createElement('div');
+    pageEl.className = 'doc-page';
+    pageEl.dataset.page = String(pageNum);
+    pageEl.style.width = pageWPx + 'px';
+    pageEl.style.minHeight = pageHPx + 'px';
+    pageEl.style.height = pageHPx + 'px';
+    pageEl.dataset.pageHeightPx = String(pageHPx);
+
+    const header = document.createElement('div');
+    header.className = 'page-header hf-hoverable';
+    header.contentEditable = 'false';
+    header.setAttribute('data-hf-kind', 'header');
+    header.setAttribute('title', 'Double-click to edit header');
+    pageEl.appendChild(header);
+
+    const content = document.createElement('div');
+    content.className = 'page-content';
+    content.contentEditable = state.readOnlyMode ? 'false' : 'true';
+    content.spellcheck = isSpellCheckEnabled();
+    content.lang = 'en';
+    content.setAttribute('role', 'textbox');
+    content.setAttribute('aria-multiline', 'true');
+    content.setAttribute('aria-label', `Page ${pageNum} content`);
+    pageEl.appendChild(content);
+
+    const footer = document.createElement('div');
+    footer.className = 'page-footer hf-hoverable';
+    footer.contentEditable = 'false';
+    footer.setAttribute('data-hf-kind', 'footer');
+    footer.setAttribute('title', 'Double-click to edit footer');
+    pageEl.appendChild(footer);
+
+    container.appendChild(pageEl);
+    state.pageElements.push(pageEl);
+  }
+}
+
+/**
+ * Re-render only the pages affected by a node edit using WASM page HTML.
+ * Call this after mutations instead of full renderDocument() for
+ * incremental updates without full DOM rebuild.
+ *
+ * @param {string} nodeId - The node that was edited
+ * @returns {boolean} true if the incremental render succeeded
+ */
+export function renderAffectedPages(nodeId) {
+  const { doc } = state;
+  if (!doc || typeof doc.get_affected_pages !== 'function') return false;
+  if (!doc.get_page_html) return false;
+
+  // Save cursor before re-render
+  let savedNodeId = null, savedOffset = 0;
+  try {
+    const sel = window.getSelection();
+    if (sel && sel.rangeCount > 0) {
+      const anchor = sel.anchorNode;
+      const block = (anchor?.nodeType === 1 ? anchor : anchor?.parentElement)?.closest?.('[data-node-id]');
+      if (block) {
+        savedNodeId = block.dataset.nodeId;
+        const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+        let off = 0, tn;
+        while ((tn = walker.nextNode())) {
+          if (tn === sel.anchorNode) { off += sel.anchorOffset; break; }
+          off += tn.textContent.length;
+        }
+        savedOffset = off;
+      }
+    }
+  } catch (_) {}
+
+  try {
+    // Compute layout + get new page count
+    const fontDb = getFontDb();
+    const newCount = (fontDb && typeof doc.get_page_count_with_fonts === 'function')
+      ? doc.get_page_count_with_fonts(fontDb)
+      : doc.get_page_count();
+
+    // Adjust page elements
+    ensurePageElements(newCount);
+
+    // Get affected pages
+    const affectedJson = doc.get_affected_pages(nodeId);
+    const affected = JSON.parse(affectedJson);
+
+    // Re-render each affected page
+    for (const pageIdx of affected) {
+      if (pageIdx >= 0 && pageIdx < newCount) {
+        renderPageFromWasm(pageIdx);
+      }
+    }
+
+    // Post-render updates
+    updateUndoRedo();
+    updateStatusBar();
+    state._onTextChanged?.();
+
+    // Restore cursor
+    if (savedNodeId) {
+      const el = state.nodeIdToElement.get(savedNodeId)
+        || document.querySelector(`[data-node-id="${savedNodeId}"]`);
+      if (el) {
+        try { setCursorAtOffset(el, savedOffset); } catch (_) {}
+      }
+    }
+
+    return true;
+  } catch (e) {
+    console.error('renderAffectedPages failed:', e);
+    return false;
+  }
+}
+
+/**
+ * Full document render using WASM page-level HTML.
+ * Alternative to renderDocument() that uses get_page_html() instead of
+ * to_html() + repaginate(). Each page's HTML comes directly from WASM.
+ */
+export function renderDocumentFromWasm() {
+  const { doc } = state;
+  if (!doc || typeof doc.get_page_count !== 'function') {
+    // Fallback to old path if API not available
+    renderDocument();
+    return;
+  }
+
+  _rendering = true;
+  try {
+    // Save cursor
+    let _savedNodeId = null, _savedOffset = 0;
+    try {
+      const sel = window.getSelection();
+      if (sel && sel.rangeCount > 0) {
+        const anchor = sel.anchorNode;
+        const block = (anchor?.nodeType === 1 ? anchor : anchor?.parentElement)?.closest?.('[data-node-id]');
+        if (block) {
+          _savedNodeId = block.dataset.nodeId;
+          const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT, null);
+          let off = 0, tn;
+          while ((tn = walker.nextNode())) {
+            if (tn === sel.anchorNode) { off += sel.anchorOffset; break; }
+            off += tn.textContent.length;
+          }
+          _savedOffset = off;
+        }
+      }
+    } catch (_) {}
+
+    teardownVirtualScroll();
+    state.ignoreInput = true;
+    state.nodeIdToElement.clear();
+    state.syncedTextCache.clear();
+
+    applyPageDimensions();
+
+    // Get page count from WASM layout
+    const fontDb = getFontDb();
+    const pageCount = (fontDb && typeof doc.get_page_count_with_fonts === 'function')
+      ? doc.get_page_count_with_fonts(fontDb)
+      : doc.get_page_count();
+
+    // Clear and rebuild page container
+    const container = $('pageContainer');
+    if (container) {
+      container.innerHTML = '';
+      state.pageElements = [];
+      state.nodeToPage.clear();
+    }
+
+    ensurePageElements(pageCount);
+
+    // Render each page from WASM
+    for (let i = 0; i < pageCount; i++) {
+      renderPageFromWasm(i);
+    }
+
+    // Post-render fixups
+    fixEmptyBlocks();
+    cacheAllText();
+    _nodeMapDirty = true;
+    populateNodeIdMap();
+    setupTrackChangeHandlers();
+    setupTOCHandlers();
+    setupFootnoteHandlers();
+    autoNumberFootnotes();
+    applyTocStyling();
+    applyColumnLayout();
+
+    state.ignoreInput = false;
+    state.pagesRendered = false;
+    updateUndoRedo();
+    updateTrackChanges();
+    refreshTrackChangesPanel();
+    updateStatusBar();
+    checkLargeDocumentWarning();
+    applyZoom();
+    maybeInitVirtualScroll();
+    state._onTextChanged?.();
+    refreshPageThumbnails();
+
+    // Restore cursor
+    if (_savedNodeId && container) {
+      const el = container.querySelector(`[data-node-id="${_savedNodeId}"]`);
+      if (el) {
+        try { setCursorAtOffset(el, _savedOffset); } catch (_) {}
+      }
+    }
+  } catch (e) {
+    console.error('renderDocumentFromWasm error:', e);
+    // Fall back to old render path
+    try { renderDocument(); } catch (_) {}
+  } finally {
+    _rendering = false;
+  }
 }

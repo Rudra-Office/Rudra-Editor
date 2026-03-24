@@ -16,6 +16,7 @@
     "vite": "^5.0.0"
   },
   "dependencies": {
+    "katex": "^0.16.9",
     "pdfjs-dist": "^5.5.207"
   }
 }

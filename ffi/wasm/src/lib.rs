@@ -36,6 +36,7 @@ impl WasmEngine {
             inner: Some(self.inner.create()),
             batch_label: None,
             batch_count: 0,
+            layout_cache: std::cell::RefCell::new(None),
         }
     }
 
@@ -51,6 +52,7 @@ impl WasmEngine {
             batch_label: None,
             batch_count: 0,
             inner: Some(doc),
+            layout_cache: std::cell::RefCell::new(None),
         })
     }
 
@@ -67,6 +69,7 @@ impl WasmEngine {
             batch_label: None,
             batch_count: 0,
             inner: Some(doc),
+            layout_cache: std::cell::RefCell::new(None),
         })
     }
 }
@@ -205,6 +208,10 @@ pub struct WasmDocument {
     /// Call `end_batch()` to apply all as a single undo step.
     batch_label: Option<String>,
     batch_count: usize,
+    /// Cached layout result. Invalidated on any mutation via `doc_mut()`.
+    /// Uses `RefCell` for interior mutability so read-like methods (`&self`)
+    /// can lazily compute and cache the layout.
+    layout_cache: std::cell::RefCell<Option<s1_layout::LayoutDocument>>,
 }
 
 #[wasm_bindgen]
@@ -214,6 +221,7 @@ impl WasmDocument {
         self.inner = None;
         self.batch_label = None;
         self.batch_count = 0;
+        *self.layout_cache.get_mut() = None;
     }
 
     /// Begin a batch of operations that form a single undo step.
@@ -486,6 +494,8 @@ impl WasmDocument {
         let mut pages_json = Vec::new();
         // Track accumulated height for paragraphs that split across pages
         let mut para_accumulated_heights = std::collections::HashMap::new();
+        // Track accumulated character offsets for split paragraph fragments.
+        let mut para_accumulated_chars = std::collections::HashMap::new();
 
         for (i, page) in layout.pages.iter().enumerate() {
             let mut node_ids = Vec::new();
@@ -523,13 +533,27 @@ impl WasmDocument {
                         // This paragraph was split across pages
                         let line_count = lines.len();
                         let block_height: f64 = lines.iter().map(|l| l.height).sum();
-                        
-                        let offset_height = para_accumulated_heights.get(&block.source_id).cloned().unwrap_or(0.0);
-                        para_accumulated_heights.insert(block.source_id, offset_height + block_height);
+                        let block_char_len: usize = lines
+                            .iter()
+                            .map(|l| l.runs.iter().map(|r| r.text.chars().count()).sum::<usize>())
+                            .sum();
+
+                        let offset_height = para_accumulated_heights
+                            .get(&block.source_id)
+                            .cloned()
+                            .unwrap_or(0.0);
+                        para_accumulated_heights
+                            .insert(block.source_id, offset_height + block_height);
+                        let char_start = para_accumulated_chars
+                            .get(&block.source_id)
+                            .cloned()
+                            .unwrap_or(0usize);
+                        let char_end = char_start + block_char_len;
+                        para_accumulated_chars.insert(block.source_id, char_end);
 
                         para_splits_json.push(format!(
-                            "{{\"nodeId\":\"{}\",\"isContinuation\":{},\"splitAtLine\":{},\"lineCount\":{},\"blockHeight\":{:.2},\"offsetHeight\":{:.2}}}",
-                            id_str, is_continuation, split_at_line, line_count, block_height, offset_height,
+                            "{{\"nodeId\":\"{}\",\"isContinuation\":{},\"splitAtLine\":{},\"lineCount\":{},\"blockHeight\":{:.2},\"offsetHeight\":{:.2},\"charStart\":{},\"charEnd\":{}}}",
+                            id_str, is_continuation, split_at_line, line_count, block_height, offset_height, char_start, char_end,
                         ));
                         // Always include the node ID (even duplicates for split paragraphs)
                         node_ids.push(id_str);
@@ -615,6 +639,97 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))?;
         // Reuse the same JSON serialization as get_page_map_json
         self.serialize_page_map(&layout)
+    }
+
+    // ── Page-level rendering API ──────────────────────────────────────
+    //
+    // These methods make WASM the sole authority for page layout.
+    // The editor becomes a projection layer: capture input → send ops →
+    // render exactly what WASM returns.
+
+    /// Get the total number of pages using default (empty) font metrics.
+    ///
+    /// Lazily computes and caches layout. The cache is invalidated on any
+    /// document mutation.
+    pub fn get_page_count(&self) -> Result<usize, JsError> {
+        let font_db = s1_text::FontDatabase::empty();
+        self.ensure_layout(&font_db)?;
+        let cache = self.layout_cache.borrow();
+        Ok(cache.as_ref().unwrap().pages.len())
+    }
+
+    /// Get the total number of pages using loaded fonts for accurate metrics.
+    ///
+    /// Lazily computes and caches layout. The cache is invalidated on any
+    /// document mutation.
+    pub fn get_page_count_with_fonts(&self, font_db: &WasmFontDatabase) -> Result<usize, JsError> {
+        // Always recompute when called with fonts — the caller may have
+        // loaded new fonts since the last call.
+        *self.layout_cache.borrow_mut() = None;
+        self.ensure_layout(&font_db.inner)?;
+        let cache = self.layout_cache.borrow();
+        Ok(cache.as_ref().unwrap().pages.len())
+    }
+
+    /// Get ready-to-mount HTML for a single page using default font metrics.
+    ///
+    /// Returns document-model HTML (semantic `<p>`, `<h1>`, `<table>` with
+    /// `data-node-id`) filtered to the blocks on `page_index`. Split
+    /// paragraphs get `data-split="first"` or `data-split="continuation"`.
+    ///
+    /// Call `get_page_count()` first to ensure layout is cached.
+    pub fn get_page_html(&self, page_index: usize) -> Result<String, JsError> {
+        let font_db = s1_text::FontDatabase::empty();
+        self.ensure_layout(&font_db)?;
+        self.render_page_html(page_index)
+    }
+
+    /// Get ready-to-mount HTML for a single page using loaded fonts.
+    ///
+    /// Call `get_page_count_with_fonts()` first to ensure layout is cached,
+    /// or this will lazily compute layout.
+    pub fn get_page_html_with_fonts(
+        &self,
+        page_index: usize,
+        font_db: &WasmFontDatabase,
+    ) -> Result<String, JsError> {
+        self.ensure_layout(&font_db.inner)?;
+        self.render_page_html(page_index)
+    }
+
+    /// Get page indices affected by a node, plus adjacent pages.
+    ///
+    /// Returns a JSON array of 0-based page indices, e.g. `[1,2,3]`.
+    /// Used by the editor to know which pages to re-render after an edit.
+    ///
+    /// Layout must already be cached (call `get_page_count*` first).
+    pub fn get_affected_pages(&self, node_id_str: &str) -> Result<String, JsError> {
+        let nid = parse_node_id(node_id_str)?;
+        let cache = self.layout_cache.borrow();
+        let layout = cache
+            .as_ref()
+            .ok_or_else(|| JsError::new("Layout not computed — call get_page_count first"))?;
+
+        let total = layout.pages.len();
+        let mut hit = std::collections::BTreeSet::new();
+        for (i, page) in layout.pages.iter().enumerate() {
+            let found = page.blocks.iter().any(|b| b.source_id == nid)
+                || page.header.as_ref().is_some_and(|h| h.source_id == nid)
+                || page.footer.as_ref().is_some_and(|f| f.source_id == nid)
+                || page.footnotes.iter().any(|f| f.source_id == nid)
+                || page.floating_images.iter().any(|f| f.source_id == nid);
+            if found {
+                if i > 0 {
+                    hit.insert(i - 1);
+                }
+                hit.insert(i);
+                if i + 1 < total {
+                    hit.insert(i + 1);
+                }
+            }
+        }
+        let nums: Vec<String> = hit.iter().map(|i| i.to_string()).collect();
+        Ok(format!("[{}]", nums.join(",")))
     }
 
     /// Export the document as PDF bytes.
@@ -1223,25 +1338,31 @@ impl WasmDocument {
         let mut char_offset = 0usize;
         for &child_id in &para.children {
             if let Some(child) = doc.node(child_id) {
-                if child.node_type == NodeType::Run {
-                    // Find text node in this run
-                    for &text_child in &child.children {
-                        if let Some(tc) = doc.node(text_child) {
-                            if tc.node_type == NodeType::Text {
-                                let text = tc.text_content.as_deref().unwrap_or("").to_string();
-                                let len = text.chars().count();
-                                run_info.push((
-                                    child_id,
-                                    text_child,
-                                    text,
-                                    char_offset,
-                                    char_offset + len,
-                                ));
-                                char_offset += len;
-                                break;
+                match child.node_type {
+                    NodeType::Run => {
+                        // Find text node in this run
+                        for &text_child in &child.children {
+                            if let Some(tc) = doc.node(text_child) {
+                                if tc.node_type == NodeType::Text {
+                                    let text = tc.text_content.as_deref().unwrap_or("").to_string();
+                                    let len = text.chars().count();
+                                    run_info.push((
+                                        child_id,
+                                        text_child,
+                                        text,
+                                        char_offset,
+                                        char_offset + len,
+                                    ));
+                                    char_offset += len;
+                                    break;
+                                }
                             }
                         }
                     }
+                    NodeType::LineBreak | NodeType::Tab => {
+                        char_offset += 1;
+                    }
+                    _ => {}
                 }
             }
         }
@@ -1399,6 +1520,10 @@ impl WasmDocument {
     ) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
+
+        if paragraph_range_contains_inline_nodes(doc.model(), para_id, offset, offset + length) {
+            return delete_text_range_in_paragraph(doc, para_id, offset, offset + length);
+        }
 
         // Check if deletion stays within a single text node
         match find_text_node_at_char_offset(doc.model(), para_id, offset) {
@@ -1794,33 +1919,17 @@ impl WasmDocument {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
 
-        // Find the run and text node at the given offset
         let para = doc
             .node(para_id)
             .ok_or_else(|| JsError::new("Paragraph not found"))?;
-        let run_children: Vec<NodeId> = para
-            .children
-            .iter()
-            .filter(|&&c| {
-                doc.node(c)
-                    .map(|n| n.node_type == NodeType::Run)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .collect();
+        let para_children = para.children.clone();
 
-        if run_children.is_empty() {
-            // No runs: create a run with a line break
-            let run_id = doc.next_id();
+        if para_children.is_empty() {
+            // Empty paragraph: insert a bare line break node as a paragraph child.
             let lb_id = doc.next_id();
             let mut txn = Transaction::with_label("Insert line break");
             txn.push(Operation::insert_node(
                 para_id,
-                0,
-                Node::new(run_id, NodeType::Run),
-            ));
-            txn.push(Operation::insert_node(
-                run_id,
                 0,
                 Node::new(lb_id, NodeType::LineBreak),
             ));
@@ -1829,122 +1938,67 @@ impl WasmDocument {
                 .map_err(|e| JsError::new(&e.to_string()));
         }
 
-        // Walk runs to find which run and local offset
         let mut accumulated = 0usize;
-        let mut target_run_id = *run_children
-            .last()
-            .ok_or_else(|| JsError::new("No runs found in paragraph"))?;
-        let mut local_offset = 0usize;
-        for &run_id in &run_children {
-            let rlen = run_char_len(doc.model(), run_id);
-            if char_offset <= accumulated + rlen {
-                target_run_id = run_id;
-                local_offset = char_offset - accumulated;
-                break;
+        let mut insert_index = para_children.len();
+        let mut found = false;
+
+        for (idx, &child_id) in para_children.iter().enumerate() {
+            let Some(child) = doc.node(child_id) else {
+                continue;
+            };
+            match child.node_type {
+                NodeType::Run => {
+                    let run_len = run_char_len(doc.model(), child_id);
+                    if char_offset <= accumulated + run_len {
+                        let local_offset = char_offset - accumulated;
+                        if local_offset == 0 {
+                            insert_index = idx;
+                        } else if local_offset >= run_len {
+                            insert_index = idx + 1;
+                        } else {
+                            split_run_internal(doc, child_id, local_offset)?;
+                            insert_index = idx + 1;
+                        }
+                        found = true;
+                        break;
+                    }
+                    accumulated += run_len;
+                }
+                NodeType::LineBreak | NodeType::Tab => {
+                    if char_offset <= accumulated + 1 {
+                        insert_index = if char_offset == accumulated {
+                            idx
+                        } else {
+                            idx + 1
+                        };
+                        found = true;
+                        break;
+                    }
+                    accumulated += 1;
+                }
+                _ => {}
             }
-            accumulated += rlen;
         }
 
-        // Find the text node within this run at the local offset
-        let run = doc
-            .node(target_run_id)
-            .ok_or_else(|| JsError::new("Run not found"))?;
-        let run_children_ids: Vec<NodeId> = run.children.clone();
-        let mut text_accumulated = 0usize;
-        let mut target_text_idx = 0usize; // index in run.children
-        let mut text_local_offset = local_offset;
-        let mut found_text = false;
-
-        for (idx, &child_id) in run_children_ids.iter().enumerate() {
-            if let Some(child) = doc.node(child_id) {
-                if child.node_type == NodeType::Text {
-                    let len = child
-                        .text_content
-                        .as_ref()
-                        .map(|t| t.chars().count())
-                        .unwrap_or(0);
-                    if local_offset <= text_accumulated + len {
-                        target_text_idx = idx;
-                        text_local_offset = local_offset - text_accumulated;
-                        found_text = true;
-                        break;
-                    }
-                    text_accumulated += len;
-                } else if child.node_type == NodeType::LineBreak {
-                    // Line breaks count as 1 character for offset purposes
-                    if local_offset <= text_accumulated + 1 {
-                        target_text_idx = idx;
-                        text_local_offset = 0;
-                        found_text = true;
-                        break;
-                    }
-                    text_accumulated += 1;
-                }
-            }
+        if !found && char_offset > accumulated {
+            return Err(JsError::new("Offset out of range"));
         }
 
         let lb_id = doc.next_id();
         let mut txn = Transaction::with_label("Insert line break");
-
-        if found_text && text_local_offset > 0 {
-            // Split the text node: delete tail, create new text with tail after the break
-            let text_node_id = run_children_ids[target_text_idx];
-            if let Some(text_node) = doc.node(text_node_id) {
-                if text_node.node_type == NodeType::Text {
-                    let content = text_node.text_content.clone().unwrap_or_default();
-                    let char_len = content.chars().count();
-                    let tail: String = content.chars().skip(text_local_offset).collect();
-                    let tail_len = char_len - text_local_offset;
-
-                    // Delete tail from current text node
-                    if tail_len > 0 {
-                        txn.push(Operation::delete_text(
-                            text_node_id,
-                            text_local_offset,
-                            tail_len,
-                        ));
-                    }
-                    // Insert line break after this text node
-                    txn.push(Operation::insert_node(
-                        target_run_id,
-                        target_text_idx + 1,
-                        Node::new(lb_id, NodeType::LineBreak),
-                    ));
-                    // Insert new text node with tail after the line break
-                    if !tail.is_empty() {
-                        let new_text_id = doc.next_id();
-                        txn.push(Operation::insert_node(
-                            target_run_id,
-                            target_text_idx + 2,
-                            Node::text(new_text_id, &tail),
-                        ));
-                    }
-                } else {
-                    // Not a text node — just insert line break after it
-                    txn.push(Operation::insert_node(
-                        target_run_id,
-                        target_text_idx + 1,
-                        Node::new(lb_id, NodeType::LineBreak),
-                    ));
-                }
-            }
-        } else {
-            // Insert at the beginning of the run or right before the found element
-            txn.push(Operation::insert_node(
-                target_run_id,
-                target_text_idx,
-                Node::new(lb_id, NodeType::LineBreak),
-            ));
-        }
-
+        txn.push(Operation::insert_node(
+            para_id,
+            insert_index,
+            Node::new(lb_id, NodeType::LineBreak),
+        ));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
     /// Insert a tab node at the given character offset within a paragraph.
     ///
-    /// Like `insert_line_break`, this inserts a `Tab` node inside the
-    /// appropriate run, splitting text nodes as needed. Tab nodes render
+    /// Like `insert_line_break`, this inserts a `Tab` node at paragraph level,
+    /// splitting runs as needed. Tab nodes render
     /// as `&emsp;` in HTML and as proper tab stops in layout.
     pub fn insert_tab(&mut self, node_id_str: &str, char_offset: usize) -> Result<(), JsError> {
         let doc = self.doc_mut()?;
@@ -1953,28 +2007,13 @@ impl WasmDocument {
         let para = doc
             .node(para_id)
             .ok_or_else(|| JsError::new("Paragraph not found"))?;
-        let run_children: Vec<NodeId> = para
-            .children
-            .iter()
-            .filter(|&&c| {
-                doc.node(c)
-                    .map(|n| n.node_type == NodeType::Run)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .collect();
+        let para_children = para.children.clone();
 
-        if run_children.is_empty() {
-            let run_id = doc.next_id();
+        if para_children.is_empty() {
             let tab_id = doc.next_id();
             let mut txn = Transaction::with_label("Insert tab");
             txn.push(Operation::insert_node(
                 para_id,
-                0,
-                Node::new(run_id, NodeType::Run),
-            ));
-            txn.push(Operation::insert_node(
-                run_id,
                 0,
                 Node::new(tab_id, NodeType::Tab),
             ));
@@ -1983,106 +2022,59 @@ impl WasmDocument {
                 .map_err(|e| JsError::new(&e.to_string()));
         }
 
-        // Walk runs to find target
         let mut accumulated = 0usize;
-        let mut target_run_id = *run_children
-            .last()
-            .ok_or_else(|| JsError::new("Empty run"))?;
-        let mut local_offset = 0usize;
-        for &run_id in &run_children {
-            let rlen = run_char_len(doc.model(), run_id);
-            if char_offset <= accumulated + rlen {
-                target_run_id = run_id;
-                local_offset = char_offset - accumulated;
-                break;
+        let mut insert_index = para_children.len();
+        let mut found = false;
+
+        for (idx, &child_id) in para_children.iter().enumerate() {
+            let Some(child) = doc.node(child_id) else {
+                continue;
+            };
+            match child.node_type {
+                NodeType::Run => {
+                    let run_len = run_char_len(doc.model(), child_id);
+                    if char_offset <= accumulated + run_len {
+                        let local_offset = char_offset - accumulated;
+                        if local_offset == 0 {
+                            insert_index = idx;
+                        } else if local_offset >= run_len {
+                            insert_index = idx + 1;
+                        } else {
+                            split_run_internal(doc, child_id, local_offset)?;
+                            insert_index = idx + 1;
+                        }
+                        found = true;
+                        break;
+                    }
+                    accumulated += run_len;
+                }
+                NodeType::LineBreak | NodeType::Tab => {
+                    if char_offset <= accumulated + 1 {
+                        insert_index = if char_offset == accumulated {
+                            idx
+                        } else {
+                            idx + 1
+                        };
+                        found = true;
+                        break;
+                    }
+                    accumulated += 1;
+                }
+                _ => {}
             }
-            accumulated += rlen;
         }
 
-        let run = doc
-            .node(target_run_id)
-            .ok_or_else(|| JsError::new("Run not found"))?;
-        let run_children_ids: Vec<NodeId> = run.children.clone();
-        let mut text_accumulated = 0usize;
-        let mut target_text_idx = 0usize;
-        let mut text_local_offset = local_offset;
-        let mut found_text = false;
-
-        for (idx, &child_id) in run_children_ids.iter().enumerate() {
-            if let Some(child) = doc.node(child_id) {
-                if child.node_type == NodeType::Text {
-                    let len = child
-                        .text_content
-                        .as_ref()
-                        .map(|t| t.chars().count())
-                        .unwrap_or(0);
-                    if local_offset <= text_accumulated + len {
-                        target_text_idx = idx;
-                        text_local_offset = local_offset - text_accumulated;
-                        found_text = true;
-                        break;
-                    }
-                    text_accumulated += len;
-                } else if matches!(child.node_type, NodeType::LineBreak | NodeType::Tab) {
-                    if local_offset <= text_accumulated + 1 {
-                        target_text_idx = idx;
-                        text_local_offset = 0;
-                        found_text = true;
-                        break;
-                    }
-                    text_accumulated += 1;
-                }
-            }
+        if !found && char_offset > accumulated {
+            return Err(JsError::new("Offset out of range"));
         }
 
         let tab_id = doc.next_id();
         let mut txn = Transaction::with_label("Insert tab");
-
-        if found_text && text_local_offset > 0 {
-            let text_node_id = run_children_ids[target_text_idx];
-            if let Some(text_node) = doc.node(text_node_id) {
-                if text_node.node_type == NodeType::Text {
-                    let content = text_node.text_content.clone().unwrap_or_default();
-                    let char_len = content.chars().count();
-                    let tail: String = content.chars().skip(text_local_offset).collect();
-                    let tail_len = char_len - text_local_offset;
-
-                    if tail_len > 0 {
-                        txn.push(Operation::delete_text(
-                            text_node_id,
-                            text_local_offset,
-                            tail_len,
-                        ));
-                    }
-                    txn.push(Operation::insert_node(
-                        target_run_id,
-                        target_text_idx + 1,
-                        Node::new(tab_id, NodeType::Tab),
-                    ));
-                    if !tail.is_empty() {
-                        let new_text_id = doc.next_id();
-                        txn.push(Operation::insert_node(
-                            target_run_id,
-                            target_text_idx + 2,
-                            Node::text(new_text_id, &tail),
-                        ));
-                    }
-                } else {
-                    txn.push(Operation::insert_node(
-                        target_run_id,
-                        target_text_idx + 1,
-                        Node::new(tab_id, NodeType::Tab),
-                    ));
-                }
-            }
-        } else {
-            txn.push(Operation::insert_node(
-                target_run_id,
-                target_text_idx,
-                Node::new(tab_id, NodeType::Tab),
-            ));
-        }
-
+        txn.push(Operation::insert_node(
+            para_id,
+            insert_index,
+            Node::new(tab_id, NodeType::Tab),
+        ));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))
     }
@@ -2262,6 +2254,33 @@ impl WasmDocument {
         Ok(html)
     }
 
+    /// Render a paragraph node as HTML for the half-open character range
+    /// `[start_char, end_char)`. Used by pagination to mount page-specific
+    /// fragments for split paragraphs instead of rendering the full paragraph
+    /// and clipping it in CSS.
+    pub fn render_node_slice(
+        &self,
+        node_id_str: &str,
+        start_char: usize,
+        end_char: usize,
+    ) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let nid = parse_node_id(node_id_str)?;
+        let model = doc.model();
+        let node = model
+            .node(nid)
+            .ok_or_else(|| JsError::new(&format!("Node {} not found", node_id_str)))?;
+
+        if node.node_type != NodeType::Paragraph {
+            return self.render_node_html(node_id_str);
+        }
+
+        let mut html = String::new();
+        let safe_end = end_char.max(start_char);
+        render_paragraph_clean_partial(model, nid, Some(start_char), Some(safe_end), &mut html);
+        Ok(html)
+    }
+
     /// Render a table with only specific rows (for split-table pagination).
     ///
     /// `table_id_str` is the table node ID (e.g., "1:5").
@@ -2377,14 +2396,27 @@ impl WasmDocument {
         let mut accumulated = 0usize;
         let mut split_run_idx = run_children.len(); // default: after all runs
         let mut local_offset = 0usize;
-        for (i, &run_id) in run_children.iter().enumerate() {
-            let rlen = run_char_len(doc.model(), run_id);
-            if char_offset <= accumulated + rlen {
-                split_run_idx = i;
-                local_offset = char_offset - accumulated;
-                break;
+        let mut run_scan_idx = 0usize;
+        for &child_id in &para.children {
+            if let Some(child) = doc.node(child_id) {
+                match child.node_type {
+                    NodeType::Run => {
+                        let run_id = run_children[run_scan_idx];
+                        let rlen = run_char_len(doc.model(), run_id);
+                        if char_offset <= accumulated + rlen {
+                            split_run_idx = run_scan_idx;
+                            local_offset = char_offset - accumulated;
+                            break;
+                        }
+                        accumulated += rlen;
+                        run_scan_idx += 1;
+                    }
+                    NodeType::LineBreak | NodeType::Tab => {
+                        accumulated += 1;
+                    }
+                    _ => {}
+                }
             }
-            accumulated += rlen;
         }
 
         // Allocate IDs for new paragraph
@@ -2573,6 +2605,15 @@ impl WasmDocument {
 
         // 1. Delete tail of first paragraph (from start_offset to end)
         let del_from_start = start_total_chars.saturating_sub(start_offset);
+        let start_run_id = doc.node(start_text_id).and_then(|n| n.parent);
+        let start_run_fully_selected = doc
+            .node(start_text_id)
+            .and_then(|n| n.parent)
+            .map(|run_id| {
+                let run_len = run_char_len(doc.model(), run_id);
+                start_local_offset == 0 && run_len > 0 && del_from_start >= run_len
+            })
+            .unwrap_or(false);
         if del_from_start > 0 {
             // Delete remaining text from the start offset's text node
             txn.push(Operation::delete_text(
@@ -2591,19 +2632,30 @@ impl WasmDocument {
                 let mut accumulated = 0usize;
                 for &child_id in &p.children {
                     if let Some(child) = doc.node(child_id) {
-                        if child.node_type == NodeType::Run {
-                            let rlen = run_char_len(doc.model(), child_id);
-                            if past_split {
-                                runs_to_delete.push(child_id);
-                            } else if accumulated + rlen >= start_offset
-                                && start_offset > accumulated
-                            {
-                                past_split = true;
-                            } else if accumulated >= start_offset {
-                                runs_to_delete.push(child_id);
-                                past_split = true;
+                        match child.node_type {
+                            NodeType::Run => {
+                                let rlen = run_char_len(doc.model(), child_id);
+                                if past_split {
+                                    if Some(child_id) != start_run_id {
+                                        runs_to_delete.push(child_id);
+                                    }
+                                } else if accumulated + rlen >= start_offset
+                                    && start_offset > accumulated
+                                {
+                                    past_split = true;
+                                } else if accumulated >= start_offset {
+                                    if !(start_run_fully_selected && Some(child_id) == start_run_id)
+                                    {
+                                        runs_to_delete.push(child_id);
+                                    }
+                                    past_split = true;
+                                }
+                                accumulated += rlen;
                             }
-                            accumulated += rlen;
+                            NodeType::LineBreak | NodeType::Tab => {
+                                accumulated += 1;
+                            }
+                            _ => {}
                         }
                     }
                 }
@@ -3216,11 +3268,12 @@ impl WasmDocument {
         let doc = self.doc_mut()?;
         let table_id = parse_node_id(table_id_str)?;
         let mut txn = Transaction::with_label("Set table column widths");
-        txn.push(Operation::set_attribute(
-            table_id,
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(
             AttributeKey::TableColumnWidths,
             AttributeValue::String(widths_csv.to_string()),
-        ));
+        );
+        txn.push(Operation::set_attributes(table_id, attrs));
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))
     }
@@ -3422,6 +3475,52 @@ impl WasmDocument {
 
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Sort a table by the text content of a specific column.
+    ///
+    /// Skips the first row (assumed header) if the table has more than one row.
+    pub fn sort_table_by_column(
+        &mut self,
+        table_id_str: &str,
+        col_index: u32,
+        ascending: bool,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let table_id = parse_node_id(table_id_str)?;
+        let table = doc
+            .node(table_id)
+            .ok_or_else(|| JsError::new("Table not found"))?;
+
+        let mut row_data: Vec<(NodeId, String)> = Vec::new();
+        for &row_id in &table.children {
+            let row = doc
+                .node(row_id)
+                .ok_or_else(|| JsError::new("Row not found"))?;
+            let text = if let Some(&cell_id) = row.children.get(col_index as usize) {
+                extract_paragraph_text(doc.model(), cell_id)
+            } else {
+                String::new()
+            };
+            row_data.push((row_id, text));
+        }
+
+        let has_header = row_data.len() > 1;
+        let start_idx = if has_header { 1 } else { 0 };
+        row_data[start_idx..].sort_by(|a, b| {
+            if ascending {
+                a.1.cmp(&b.1)
+            } else {
+                b.1.cmp(&a.1)
+            }
+        });
+
+        // Reorder via move_node
+        for (i, &(row_id, _)) in row_data.iter().enumerate().skip(start_idx) {
+            doc.apply(Operation::move_node(row_id, table_id, i))
+                .map_err(|e| JsError::new(&e.to_string()))?;
+        }
+        Ok(())
     }
 
     /// Set the text content of a table cell.
@@ -4340,12 +4439,18 @@ impl WasmDocument {
                         .get_string(&AttributeKey::CommentParentId)
                         .unwrap_or("");
 
+                    let resolved = child
+                        .attributes
+                        .get_bool(&AttributeKey::CommentResolved)
+                        .unwrap_or(false);
+
                     let mut entry = format!(
-                        "{{\"id\":\"{}\",\"author\":\"{}\",\"date\":\"{}\",\"text\":\"{}\"",
+                        "{{\"id\":\"{}\",\"author\":\"{}\",\"date\":\"{}\",\"text\":\"{}\",\"resolved\":{}",
                         escape_json(id_str),
                         escape_json(author),
                         escape_json(date),
-                        escape_json(&text)
+                        escape_json(&text),
+                        resolved
                     );
                     if !parent_id.is_empty() {
                         entry.push_str(&format!(",\"parentId\":\"{}\"", escape_json(parent_id)));
@@ -5049,37 +5154,69 @@ impl WasmDocument {
             return Ok(());
         }
 
-        let (text_node_id, local_offset, _node_text_len) =
-            find_text_node_at_char_offset(doc.model(), para_id, safe_offset)?;
+        let range_contains_inline_nodes = safe_length > 0
+            && paragraph_range_contains_inline_nodes(
+                doc.model(),
+                para_id,
+                safe_offset,
+                safe_offset + safe_length,
+            );
 
-        // Bug W4: Check if deletion spans beyond this text node (cross-run).
-        // If so, use range deletion first, then insert into the first run's
-        // text node so the replacement inherits the run formatting at the
-        // insertion point.
-        let fits_single_node = local_offset + safe_length <= _node_text_len;
+        let single_node_target = if range_contains_inline_nodes {
+            None
+        } else {
+            let (text_node_id, local_offset, node_text_len) =
+                find_text_node_at_char_offset(doc.model(), para_id, safe_offset)?;
+            Some((text_node_id, local_offset, node_text_len))
+        };
 
-        if fits_single_node {
-            // Deletion fits in one text node — simple path
-            let mut txn = Transaction::with_label("Replace text");
-            if safe_length > 0 {
-                txn.push(Operation::delete_text(
-                    text_node_id,
-                    local_offset,
-                    safe_length,
-                ));
+        if let Some((text_node_id, local_offset, node_text_len)) = single_node_target {
+            if local_offset + safe_length > node_text_len {
+                // Deletion spans multiple runs — delete range first, then insert
+                // into the text node at the start offset (which preserves run formatting).
+                if safe_length > 0 {
+                    delete_text_range_in_paragraph(
+                        doc,
+                        para_id,
+                        safe_offset,
+                        safe_offset + safe_length,
+                    )?;
+                }
+                if !replacement.is_empty() {
+                    let (ins_text_node_id, ins_local_offset, _) =
+                        find_text_node_at_char_offset(doc.model(), para_id, safe_offset)?;
+                    doc.apply(Operation::insert_text(
+                        ins_text_node_id,
+                        ins_local_offset,
+                        replacement,
+                    ))
+                    .map_err(|e| JsError::new(&format!("Replace text failed: {}", e)))
+                } else {
+                    Ok(())
+                }
+            } else {
+                // Deletion fits in one text node — simple path
+                let mut txn = Transaction::with_label("Replace text");
+                if safe_length > 0 {
+                    txn.push(Operation::delete_text(
+                        text_node_id,
+                        local_offset,
+                        safe_length,
+                    ));
+                }
+                if !replacement.is_empty() {
+                    txn.push(Operation::insert_text(
+                        text_node_id,
+                        local_offset,
+                        replacement,
+                    ));
+                }
+                if txn.is_empty() {
+                    return Ok(());
+                }
+                doc.apply_transaction(&txn)
+                    .map_err(|e| JsError::new(&format!("Replace text failed: {}", e)))
             }
-            if !replacement.is_empty() {
-                txn.push(Operation::insert_text(
-                    text_node_id,
-                    local_offset,
-                    replacement,
-                ));
-            }
-            if txn.is_empty() {
-                return Ok(());
-            }
-            doc.apply_transaction(&txn)
-                .map_err(|e| JsError::new(&format!("Replace text failed: {}", e)))
         } else {
             // Deletion spans multiple runs — delete range first, then insert
             // into the text node at the start offset (which preserves run formatting).
@@ -5184,23 +5321,15 @@ impl WasmDocument {
             self.insert_text_in_paragraph(para_id_str, offset, lines[0])?;
         } else {
             // Multi-line: insert first line, split, insert remaining
-            let doc = self.doc_mut()?;
-            let para_id = parse_node_id(para_id_str)?;
-            let (text_node_id, _) = find_first_text_node(doc.model(), para_id)?;
-
-            // Insert first line at offset
-            let mut txn = Transaction::with_label("Paste text");
-            if !lines[0].is_empty() {
-                txn.push(Operation::insert_text(text_node_id, offset, lines[0]));
-            }
-            doc.apply_transaction(&txn)
-                .map_err(|e| JsError::new(&e.to_string()))?;
+            self.insert_text_in_paragraph(para_id_str, offset, lines[0])?;
 
             // Split and create new paragraphs for remaining lines
             let mut current_para_str = para_id_str.to_string();
             let first_line_len = lines[0].chars().count();
             let split_offset = offset + first_line_len;
 
+            let para_id = parse_node_id(para_id_str)?;
+            let doc = self.doc_mut()?;
             // Split at end of first inserted text
             let full_text = extract_paragraph_text(doc.model(), para_id);
             let char_count = full_text.chars().count();
@@ -5672,6 +5801,163 @@ impl WasmDocument {
         Ok(reply_id_val)
     }
 
+    /// Edit a comment's text content.
+    ///
+    /// Replaces the text in the first paragraph of the CommentBody node
+    /// matching `comment_id`.
+    pub fn edit_comment(&mut self, comment_id: &str, new_text: &str) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let root_id = doc.model().root_id();
+        let root_node = doc
+            .node(root_id)
+            .ok_or_else(|| JsError::new("Root not found"))?;
+
+        // Find the CommentBody with this comment ID
+        let mut cb_id = None;
+        for &child_id in &root_node.children {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::CommentBody
+                    && child.attributes.get_string(&AttributeKey::CommentId) == Some(comment_id)
+                {
+                    cb_id = Some(child_id);
+                    break;
+                }
+            }
+        }
+        let cb_id = cb_id.ok_or_else(|| {
+            JsError::new(&format!("Comment body not found for id: {}", comment_id))
+        })?;
+
+        // Find the first paragraph → first run → first text node
+        let cb_node = doc
+            .node(cb_id)
+            .ok_or_else(|| JsError::new("Comment body node missing"))?;
+        if let Some(&para_id) = cb_node.children.first() {
+            if let Some(para) = doc.node(para_id) {
+                if let Some(&run_id) = para.children.first() {
+                    if let Some(run) = doc.node(run_id) {
+                        if let Some(&text_id) = run.children.first() {
+                            // Get current text length to delete it
+                            let old_len = doc
+                                .node(text_id)
+                                .and_then(|n| n.text_content.as_ref())
+                                .map(|t| t.chars().count())
+                                .unwrap_or(0);
+                            let mut txn = Transaction::with_label("Edit comment");
+                            if old_len > 0 {
+                                txn.push(Operation::delete_text(text_id, 0, old_len));
+                            }
+                            if !new_text.is_empty() {
+                                txn.push(Operation::insert_text(text_id, 0, new_text.to_string()));
+                            }
+                            return doc
+                                .apply_transaction(&txn)
+                                .map_err(|e| JsError::new(&e.to_string()));
+                        }
+                    }
+                }
+            }
+        }
+        Err(JsError::new("Comment has no text node to edit"))
+    }
+
+    /// Set the resolved status of a comment.
+    ///
+    /// Persists the resolved state as a `CommentResolved` attribute on
+    /// the CommentBody node, so it survives save/load and collab sync.
+    pub fn resolve_comment(&mut self, comment_id: &str, resolved: bool) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let root_id = doc.model().root_id();
+        let root_node = doc
+            .node(root_id)
+            .ok_or_else(|| JsError::new("Root not found"))?;
+
+        let mut cb_id = None;
+        for &child_id in &root_node.children {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::CommentBody
+                    && child.attributes.get_string(&AttributeKey::CommentId) == Some(comment_id)
+                    && child
+                        .attributes
+                        .get_string(&AttributeKey::CommentParentId)
+                        .is_none()
+                {
+                    cb_id = Some(child_id);
+                    break;
+                }
+            }
+        }
+        let cb_id = cb_id.ok_or_else(|| {
+            JsError::new(&format!("Comment body not found for id: {}", comment_id))
+        })?;
+
+        let mut txn = Transaction::with_label(if resolved {
+            "Resolve comment"
+        } else {
+            "Unresolve comment"
+        });
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(
+            AttributeKey::CommentResolved,
+            AttributeValue::Bool(resolved),
+        );
+        txn.push(Operation::set_attributes(cb_id, attrs));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Delete a comment reply by its comment ID.
+    ///
+    /// Removes the CommentBody node that has the given `reply_id` as its
+    /// CommentId attribute. Only deletes replies (nodes with CommentParentId).
+    pub fn delete_comment_reply(&mut self, reply_id: &str) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let root_id = doc.model().root_id();
+        let root_node = doc
+            .node(root_id)
+            .ok_or_else(|| JsError::new("Root not found"))?;
+
+        let mut node_to_delete = None;
+        for &child_id in &root_node.children {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::CommentBody
+                    && child.attributes.get_string(&AttributeKey::CommentId) == Some(reply_id)
+                    && child
+                        .attributes
+                        .get_string(&AttributeKey::CommentParentId)
+                        .is_some()
+                {
+                    node_to_delete = Some(child_id);
+                    break;
+                }
+            }
+        }
+        let nid = node_to_delete.ok_or_else(|| {
+            JsError::new(&format!("Comment reply not found for id: {}", reply_id))
+        })?;
+
+        let mut txn = Transaction::with_label("Delete comment reply");
+        txn.push(Operation::delete_node(nid));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Enable or disable track changes mode.
+    ///
+    /// When enabled, subsequent text edits create revision markers.
+    /// This stores the state on the document metadata so it persists.
+    pub fn set_track_changes_enabled(&mut self, enabled: bool) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        doc.metadata_mut().track_changes = enabled;
+        Ok(())
+    }
+
+    /// Check if track changes mode is currently enabled.
+    pub fn is_track_changes_enabled(&self) -> Result<bool, JsError> {
+        let doc = self.doc()?;
+        Ok(doc.metadata().track_changes)
+    }
+
     // ─── E8: Performance APIs ────────────────────────────────────
 
     /// Set the maximum number of undo steps to keep.
@@ -5888,6 +6174,7 @@ impl WasmDocument {
     /// After calling this, all other methods will return an error.
     pub fn free(&mut self) {
         self.inner = None;
+        *self.layout_cache.get_mut() = None;
     }
 
     /// Check if this document handle is still valid.
@@ -5904,9 +6191,169 @@ impl WasmDocument {
     }
 
     fn doc_mut(&mut self) -> Result<&mut s1engine::Document, JsError> {
+        // Invalidate layout cache on any mutation.
+        *self.layout_cache.get_mut() = None;
         self.inner
             .as_mut()
             .ok_or_else(|| JsError::new("Document has been freed"))
+    }
+
+    /// Lazily compute and cache layout. No-op if cache is already populated.
+    fn ensure_layout(&self, font_db: &s1_text::FontDatabase) -> Result<(), JsError> {
+        if self.layout_cache.borrow().is_some() {
+            return Ok(());
+        }
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(font_db)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        *self.layout_cache.borrow_mut() = Some(layout);
+        Ok(())
+    }
+
+    /// Core implementation for `get_page_html` / `get_page_html_with_fonts`.
+    ///
+    /// Produces document-model HTML for a single page using the cached layout.
+    fn render_page_html(&self, page_index: usize) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let sections = doc.sections();
+        let cache = self.layout_cache.borrow();
+        let layout = cache
+            .as_ref()
+            .ok_or_else(|| JsError::new("Layout not computed"))?;
+        let page = layout.pages.get(page_index).ok_or_else(|| {
+            JsError::new(&format!(
+                "Page index {} out of range ({})",
+                page_index,
+                layout.pages.len()
+            ))
+        })?;
+
+        let mut html = String::with_capacity(4096);
+
+        // ── Header ──────────────────────────────────────────────
+        let sec = sections.get(page.section_index);
+        if let Some(sec) = sec {
+            use s1_model::section::HeaderFooterType;
+            // Determine which header to show: first-page vs default
+            let is_first_page_of_section = page_index == 0
+                || layout
+                    .pages
+                    .get(page_index.wrapping_sub(1))
+                    .is_none_or(|prev| prev.section_index != page.section_index);
+            let header_ref = if sec.title_page && is_first_page_of_section {
+                sec.headers
+                    .iter()
+                    .find(|h| h.hf_type == HeaderFooterType::First)
+                    .or_else(|| {
+                        sec.headers
+                            .iter()
+                            .find(|h| h.hf_type == HeaderFooterType::Default)
+                    })
+            } else {
+                sec.headers
+                    .iter()
+                    .find(|h| h.hf_type == HeaderFooterType::Default)
+                    .or_else(|| sec.headers.first())
+            };
+            if let Some(hf) = header_ref {
+                html.push_str(&format!(
+                    "<header data-section-index=\"{}\" style=\"border-bottom:1px solid #dadce0;padding:8px 0;margin-bottom:16px;color:#5f6368;font-size:9pt;\">",
+                    page.section_index
+                ));
+                render_children(model, hf.node_id, &mut html);
+                html.push_str("</header>");
+            }
+        }
+
+        // ── Main content blocks ─────────────────────────────────
+        // Track accumulated char offsets for paragraphs split across pages.
+        let mut para_char_offsets: std::collections::HashMap<NodeId, usize> =
+            std::collections::HashMap::new();
+        // Also scan previous pages to set correct char offsets for
+        // continuation paragraphs that started on an earlier page.
+        for prev_page in &layout.pages[..page_index] {
+            for block in &prev_page.blocks {
+                if let s1_layout::LayoutBlockKind::Paragraph {
+                    lines,
+                    split_at_line,
+                    is_continuation,
+                    ..
+                } = &block.kind
+                {
+                    if *split_at_line > 0 || *is_continuation {
+                        let char_count: usize = lines
+                            .iter()
+                            .map(|l| l.runs.iter().map(|r| r.text.chars().count()).sum::<usize>())
+                            .sum();
+                        let prev = para_char_offsets
+                            .get(&block.source_id)
+                            .copied()
+                            .unwrap_or(0);
+                        para_char_offsets.insert(block.source_id, prev + char_count);
+                    }
+                }
+            }
+        }
+
+        for block in &page.blocks {
+            render_page_content_block(model, block, &mut html, &mut para_char_offsets);
+        }
+
+        // ── Footnotes ───────────────────────────────────────────
+        if !page.footnotes.is_empty() {
+            html.push_str(
+                "<div class=\"footnotes-section\" data-footnotes=\"true\" contenteditable=\"false\">",
+            );
+            html.push_str(
+                "<hr class=\"footnote-separator\" style=\"border:none;border-top:1px solid #dadce0;width:33%;margin:12px 0 8px 0\" />",
+            );
+            for fn_block in &page.footnotes {
+                render_node(model, fn_block.source_id, &mut html);
+            }
+            html.push_str("</div>");
+        }
+
+        // ── Floating images ─────────────────────────────────────
+        for float_block in &page.floating_images {
+            render_node(model, float_block.source_id, &mut html);
+        }
+
+        // ── Footer ──────────────────────────────────────────────
+        if let Some(sec) = sec {
+            use s1_model::section::HeaderFooterType;
+            let is_first_page_of_section = page_index == 0
+                || layout
+                    .pages
+                    .get(page_index.wrapping_sub(1))
+                    .is_none_or(|prev| prev.section_index != page.section_index);
+            let footer_ref = if sec.title_page && is_first_page_of_section {
+                sec.footers
+                    .iter()
+                    .find(|f| f.hf_type == HeaderFooterType::First)
+                    .or_else(|| {
+                        sec.footers
+                            .iter()
+                            .find(|f| f.hf_type == HeaderFooterType::Default)
+                    })
+            } else {
+                sec.footers
+                    .iter()
+                    .find(|f| f.hf_type == HeaderFooterType::Default)
+                    .or_else(|| sec.footers.first())
+            };
+            if let Some(hf) = footer_ref {
+                html.push_str(&format!(
+                    "<footer data-section-index=\"{}\" style=\"border-top:1px solid #dadce0;padding:8px 0;margin-top:16px;color:#5f6368;font-size:9pt;\">",
+                    page.section_index
+                ));
+                render_children(model, hf.node_id, &mut html);
+                html.push_str("</footer>");
+            }
+        }
+
+        Ok(html)
     }
 
     /// Get footnotes or endnotes as JSON array.
@@ -6220,6 +6667,7 @@ impl WasmDocumentBuilder {
             batch_label: None,
             batch_count: 0,
             inner: Some(doc),
+            layout_cache: std::cell::RefCell::new(None),
         })
     }
 }
@@ -6880,16 +7328,21 @@ fn extract_paragraph_text(model: &DocumentModel, para_id: NodeId) -> String {
     let mut text = String::new();
     for &child_id in &para.children {
         if let Some(child) = model.node(child_id) {
-            if child.node_type == NodeType::Run {
-                for &sub_id in &child.children {
-                    if let Some(sub) = model.node(sub_id) {
-                        if sub.node_type == NodeType::Text {
-                            if let Some(t) = &sub.text_content {
-                                text.push_str(t);
+            match child.node_type {
+                NodeType::Run => {
+                    for &sub_id in &child.children {
+                        if let Some(sub) = model.node(sub_id) {
+                            if sub.node_type == NodeType::Text {
+                                if let Some(t) = &sub.text_content {
+                                    text.push_str(t);
+                                }
                             }
                         }
                     }
                 }
+                NodeType::LineBreak => text.push('\n'),
+                NodeType::Tab => text.push('\t'),
+                _ => {}
             }
         }
     }
@@ -6919,26 +7372,32 @@ fn find_text_node_at_char_offset(
     let mut last_len = 0usize;
     for &child_id in &para.children {
         if let Some(child) = model.node(child_id) {
-            if child.node_type == NodeType::Run {
-                for &sub_id in &child.children {
-                    if let Some(sub) = model.node(sub_id) {
-                        if sub.node_type == NodeType::Text {
-                            let len = sub
-                                .text_content
-                                .as_ref()
-                                .map(|t| t.chars().count())
-                                .unwrap_or(0);
-                            // Use < for intermediate text nodes (boundary goes to next node),
-                            // but <= for the last (nowhere else to go)
-                            if char_offset < accumulated + len {
-                                return Ok((sub_id, char_offset - accumulated, len));
+            match child.node_type {
+                NodeType::Run => {
+                    for &sub_id in &child.children {
+                        if let Some(sub) = model.node(sub_id) {
+                            if sub.node_type == NodeType::Text {
+                                let len = sub
+                                    .text_content
+                                    .as_ref()
+                                    .map(|t| t.chars().count())
+                                    .unwrap_or(0);
+                                // Use < for intermediate text nodes (boundary goes to next node),
+                                // but <= for the last (nowhere else to go)
+                                if char_offset < accumulated + len {
+                                    return Ok((sub_id, char_offset - accumulated, len));
+                                }
+                                accumulated += len;
+                                last_text_id = Some(sub_id);
+                                last_len = len;
                             }
-                            accumulated += len;
-                            last_text_id = Some(sub_id);
-                            last_len = len;
                         }
                     }
                 }
+                NodeType::LineBreak | NodeType::Tab => {
+                    accumulated += 1;
+                }
+                _ => {}
             }
         }
     }
@@ -6948,6 +7407,39 @@ fn find_text_node_at_char_offset(
     } else {
         Err(JsError::new("No text node found in paragraph"))
     }
+}
+
+fn paragraph_range_contains_inline_nodes(
+    model: &DocumentModel,
+    para_id: NodeId,
+    start_offset: usize,
+    end_offset: usize,
+) -> bool {
+    if start_offset >= end_offset {
+        return false;
+    }
+
+    let Some(para) = model.node(para_id) else {
+        return false;
+    };
+
+    let mut offset = 0usize;
+    for &child_id in &para.children {
+        if let Some(child) = model.node(child_id) {
+            match child.node_type {
+                NodeType::Run => offset += run_char_len(model, child_id),
+                NodeType::LineBreak | NodeType::Tab => {
+                    if offset < end_offset && offset + 1 > start_offset {
+                        return true;
+                    }
+                    offset += 1;
+                }
+                _ => {}
+            }
+        }
+    }
+
+    false
 }
 
 /// Delete a character range within a single paragraph, handling multi-run correctly.
@@ -6968,43 +7460,89 @@ fn delete_text_range_in_paragraph(
         .node(para_id)
         .ok_or_else(|| JsError::new("Paragraph not found"))?;
 
-    // Collect run info: (run_id, text_node_id, run_start_char, run_end_char)
-    let mut runs_info: Vec<(NodeId, NodeId, usize, usize)> = Vec::new();
+    enum ParagraphRangeEntry {
+        Run {
+            run_id: NodeId,
+            text_id: NodeId,
+            start: usize,
+            end: usize,
+        },
+        InlineNode {
+            node_id: NodeId,
+            start: usize,
+            end: usize,
+        },
+    }
+
+    let mut entries: Vec<ParagraphRangeEntry> = Vec::new();
     let mut offset = 0usize;
     for &child_id in &para.children {
         if let Some(child) = doc.node(child_id) {
-            if child.node_type == NodeType::Run {
-                if let Ok((text_id, _, _)) =
-                    find_text_node_at_char_offset_in_run(doc.model(), child_id, 0)
-                {
-                    let len = run_char_len(doc.model(), child_id);
-                    runs_info.push((child_id, text_id, offset, offset + len));
-                    offset += len;
+            match child.node_type {
+                NodeType::Run => {
+                    if let Ok((text_id, _, _)) =
+                        find_text_node_at_char_offset_in_run(doc.model(), child_id, 0)
+                    {
+                        let len = run_char_len(doc.model(), child_id);
+                        entries.push(ParagraphRangeEntry::Run {
+                            run_id: child_id,
+                            text_id,
+                            start: offset,
+                            end: offset + len,
+                        });
+                        offset += len;
+                    }
                 }
+                NodeType::LineBreak | NodeType::Tab => {
+                    entries.push(ParagraphRangeEntry::InlineNode {
+                        node_id: child_id,
+                        start: offset,
+                        end: offset + 1,
+                    });
+                    offset += 1;
+                }
+                _ => {}
             }
         }
     }
 
     let mut txn = Transaction::with_label("Delete text range");
 
-    for &(run_id, text_id, run_start, run_end) in &runs_info {
-        if run_end <= start_offset || run_start >= end_offset {
-            continue; // No overlap
-        }
+    for entry in &entries {
+        match *entry {
+            ParagraphRangeEntry::Run {
+                run_id,
+                text_id,
+                start: run_start,
+                end: run_end,
+            } => {
+                if run_end <= start_offset || run_start >= end_offset {
+                    continue;
+                }
 
-        let del_start = start_offset.saturating_sub(run_start);
-        let del_end = if end_offset < run_end {
-            end_offset - run_start
-        } else {
-            run_end - run_start
-        };
-        let del_len = del_end - del_start;
+                let del_start = start_offset.saturating_sub(run_start);
+                let del_end = if end_offset < run_end {
+                    end_offset - run_start
+                } else {
+                    run_end - run_start
+                };
+                let del_len = del_end - del_start;
 
-        if del_start == 0 && del_end == run_end - run_start {
-            // Entire run is deleted — remove the whole run node
-            txn.push(Operation::delete_node(run_id));
-        } else if del_len > 0 {
-            txn.push(Operation::delete_text(text_id, del_start, del_len));
+                if del_start == 0 && del_end == run_end - run_start {
+                    txn.push(Operation::delete_node(run_id));
+                } else if del_len > 0 {
+                    txn.push(Operation::delete_text(text_id, del_start, del_len));
+                }
+            }
+            ParagraphRangeEntry::InlineNode {
+                node_id,
+                start,
+                end,
+            } => {
+                if !(end <= start_offset || start >= end_offset) {
+                    txn.push(Operation::delete_node(node_id));
+                }
+            }
         }
     }
 
@@ -7389,10 +7927,16 @@ fn format_range_in_paragraph(
     let mut offset = 0usize;
     for &child_id in &para.children {
         if let Some(child) = doc.node(child_id) {
-            if child.node_type == NodeType::Run {
-                let len = run_char_len(doc.model(), child_id);
-                runs_info.push((child_id, offset, offset + len));
-                offset += len;
+            match child.node_type {
+                NodeType::Run => {
+                    let len = run_char_len(doc.model(), child_id);
+                    runs_info.push((child_id, offset, offset + len));
+                    offset += len;
+                }
+                NodeType::LineBreak | NodeType::Tab => {
+                    offset += 1;
+                }
+                _ => {}
             }
         }
     }
@@ -7534,15 +8078,20 @@ fn collect_runs_in_range(
     let mut offset = 0usize;
     for &child_id in &para.children {
         if let Some(child) = model.node(child_id) {
-            if child.node_type == NodeType::Run {
-                let len = run_char_len(model, child_id);
-                let run_start = offset;
-                let run_end = offset + len;
-                // Check overlap with [start_offset, end_offset)
-                if run_end > start_offset && run_start < end_offset {
-                    out.push(child_id);
+            match child.node_type {
+                NodeType::Run => {
+                    let len = run_char_len(model, child_id);
+                    let run_start = offset;
+                    let run_end = offset + len;
+                    if run_end > start_offset && run_start < end_offset {
+                        out.push(child_id);
+                    }
+                    offset += len;
                 }
-                offset += len;
+                NodeType::LineBreak | NodeType::Tab => {
+                    offset += 1;
+                }
+                _ => {}
             }
         }
     }
@@ -7838,6 +8387,124 @@ fn compute_list_ordinal(model: &DocumentModel, para_id: NodeId) -> Option<u32> {
         }
     }
     Some(count)
+}
+
+// ── Page-level block rendering ──────────────────────────────────────
+
+/// Render a single layout block as document-model HTML for page rendering.
+///
+/// For non-split paragraphs, delegates to the existing `render_paragraph`.
+/// For split paragraphs, renders the appropriate char range with
+/// `render_paragraph_clean_partial` and injects `data-node-id` and
+/// `data-split` attributes.
+fn render_page_content_block(
+    model: &DocumentModel,
+    block: &s1_layout::LayoutBlock,
+    html: &mut String,
+    para_char_offsets: &mut std::collections::HashMap<NodeId, usize>,
+) {
+    match &block.kind {
+        s1_layout::LayoutBlockKind::Paragraph {
+            is_continuation,
+            split_at_line,
+            lines,
+            ..
+        } => {
+            let char_count: usize = lines
+                .iter()
+                .map(|l| l.runs.iter().map(|r| r.text.chars().count()).sum::<usize>())
+                .sum();
+            let is_split = *split_at_line > 0 || *is_continuation;
+
+            if is_split {
+                let char_start = para_char_offsets
+                    .get(&block.source_id)
+                    .copied()
+                    .unwrap_or(0);
+                let char_end = char_start + char_count;
+                para_char_offsets.insert(block.source_id, char_end);
+
+                // Render the char range via render_paragraph_clean_partial
+                // then inject data-node-id and data-split attributes.
+                let mut frag = String::new();
+                render_paragraph_clean_partial(
+                    model,
+                    block.source_id,
+                    Some(char_start),
+                    Some(char_end),
+                    &mut frag,
+                );
+                let nid = format!("{}:{}", block.source_id.replica, block.source_id.counter);
+                let split_val = if *is_continuation {
+                    "continuation"
+                } else {
+                    "first"
+                };
+                // Inject attributes into the first opening tag
+                if let Some(pos) = frag.find('>') {
+                    html.push_str(&frag[..pos]);
+                    html.push_str(&format!(
+                        " data-node-id=\"{}\" data-split=\"{}\"",
+                        nid, split_val
+                    ));
+                    html.push_str(&frag[pos..]);
+                } else {
+                    html.push_str(&frag);
+                }
+            } else {
+                // Full paragraph — use the existing renderer
+                render_paragraph(model, block.source_id, html, None);
+            }
+        }
+        s1_layout::LayoutBlockKind::Table {
+            rows,
+            is_continuation,
+        } => {
+            render_page_table(model, block.source_id, rows, *is_continuation, html);
+        }
+        s1_layout::LayoutBlockKind::Image { .. } => {
+            render_node(model, block.source_id, html);
+        }
+        _ => {
+            // Future block kinds — fall back to the generic node renderer
+            render_node(model, block.source_id, html);
+        }
+    }
+}
+
+/// Render a table for a specific page, including only the rows present
+/// on that page (from the layout engine's row assignment).
+fn render_page_table(
+    model: &DocumentModel,
+    table_id: NodeId,
+    layout_rows: &[s1_layout::LayoutTableRow],
+    is_continuation: bool,
+    html: &mut String,
+) {
+    let cont_attr = if is_continuation {
+        " data-is-continuation=\"true\""
+    } else {
+        ""
+    };
+    html.push_str(&format!(
+        "<table data-node-id=\"{}:{}\" data-table-source=\"{}:{}\"{} \
+         style=\"border-collapse:collapse;margin:12px 0;width:100%\">",
+        table_id.replica, table_id.counter, table_id.replica, table_id.counter, cont_attr,
+    ));
+
+    // Build set of row source IDs present on this page
+    let row_ids: std::collections::HashSet<NodeId> =
+        layout_rows.iter().map(|r| r.source_id).collect();
+
+    if let Some(table_node) = model.node(table_id) {
+        for &row_id in &table_node.children {
+            if row_ids.contains(&row_id) {
+                render_node(model, row_id, html);
+            }
+        }
+    }
+
+    html.push_str("</table>");
 }
 
 fn render_children(model: &DocumentModel, parent_id: NodeId, html: &mut String) {
@@ -9019,6 +9686,31 @@ fn render_paragraph_clean_partial(
         _ => "p".to_string(),
     };
 
+    let list_marker = para
+        .attributes
+        .get(&AttributeKey::ListInfo)
+        .and_then(|attr| match attr {
+            AttributeValue::ListInfo(li) => {
+                let n = compute_list_ordinal(model, para_id).unwrap_or(li.start.unwrap_or(1));
+                Some(match li.num_format {
+                    ListFormat::Bullet => "\u{2022} ".to_string(),
+                    ListFormat::Decimal => format!("{}. ", n),
+                    ListFormat::LowerAlpha => {
+                        let ch = (b'a' + ((n.saturating_sub(1)) % 26) as u8) as char;
+                        format!("{}. ", ch)
+                    }
+                    ListFormat::UpperAlpha => {
+                        let ch = (b'A' + ((n.saturating_sub(1)) % 26) as u8) as char;
+                        format!("{}. ", ch)
+                    }
+                    ListFormat::LowerRoman => format!("{}. ", to_roman_lower(n)),
+                    ListFormat::UpperRoman => format!("{}. ", to_roman_upper(n)),
+                    _ => "\u{2022} ".to_string(),
+                })
+            }
+            _ => None,
+        });
+
     // FS-07: Add dir="rtl" if paragraph text starts with RTL characters
     let dir_attr = if paragraph_starts_rtl(model, para_id) {
         " dir=\"rtl\""
@@ -9027,6 +9719,12 @@ fn render_paragraph_clean_partial(
     };
 
     html.push_str(&format!("<{tag}{style_attr}{list_attrs}{dir_attr}>"));
+    if let Some(marker) = list_marker {
+        html.push_str(&format!(
+            "<span class=\"list-marker\" contenteditable=\"false\">{}</span>",
+            escape_html(&marker)
+        ));
+    }
 
     // Walk children (runs, images, etc.) with character offset tracking
     let sel_start = start_char.unwrap_or(0);
@@ -9064,6 +9762,16 @@ fn render_paragraph_clean_partial(
                     // Images count as 1 character for selection purposes
                     if char_offset >= sel_start && char_offset < sel_end {
                         render_image_clean(model, child_id, html);
+                    }
+                    char_offset += 1;
+                }
+                NodeType::LineBreak | NodeType::Tab => {
+                    if char_offset >= sel_start && char_offset < sel_end {
+                        match child.node_type {
+                            NodeType::LineBreak => html.push_str("<br/>"),
+                            NodeType::Tab => html.push('\u{2003}'),
+                            _ => {}
+                        }
                     }
                     char_offset += 1;
                 }
@@ -10580,6 +11288,7 @@ impl WasmCollabDocument {
             batch_label: None,
             batch_count: 0,
             inner: Some(temp),
+            layout_cache: std::cell::RefCell::new(None),
         };
         wasm_doc.get_formatting_json(node_id_str)
     }
@@ -10671,12 +11380,13 @@ impl WasmCollabDocument {
             .inner
             .take()
             .ok_or_else(|| JsError::new("Document freed"))?;
-        
+
         let model = collab.model().clone();
         let mut wasm_doc = WasmDocument {
             batch_label: None,
             batch_count: 0,
             inner: Some(s1engine::Document::from_model(model)),
+            layout_cache: std::cell::RefCell::new(None),
         };
 
         // Run the mutation (e.g. split_paragraph) on the temporary engine document
@@ -10692,7 +11402,7 @@ impl WasmCollabDocument {
             let crdt_ops = collab
                 .apply_local_transaction(txn.operations.clone())
                 .map_err(|e| JsError::new(&e.to_string()))?;
-            
+
             for op in crdt_ops {
                 crdt_ops_json.push(serialize_crdt_op_to_json(&op));
             }
@@ -10753,15 +11463,16 @@ impl WasmCollabDocument {
             new_id = doc.split_paragraph(&n, offset)?;
             Ok(())
         })?;
-        Ok(format!(
-            "{{\"newId\":\"{}\",\"ops\":{}}}",
-            new_id, ops_json
-        ))
+        Ok(format!("{{\"newId\":\"{}\",\"ops\":{}}}", new_id, ops_json))
     }
 
     /// Merge two paragraphs.
     /// Returns serialized CRDT operations.
-    pub fn merge_paragraphs(&mut self, node1_str: &str, node2_str: &str) -> Result<String, JsError> {
+    pub fn merge_paragraphs(
+        &mut self,
+        node1_str: &str,
+        node2_str: &str,
+    ) -> Result<String, JsError> {
         let n1 = node1_str.to_string();
         let n2 = node2_str.to_string();
         self.with_wasm_doc(|doc| doc.merge_paragraphs(&n1, &n2))
@@ -10817,10 +11528,7 @@ impl WasmCollabDocument {
             new_id = doc.insert_paragraph_after(&n, &t)?;
             Ok(())
         })?;
-        Ok(format!(
-            "{{\"newId\":\"{}\",\"ops\":{}}}",
-            new_id, ops_json
-        ))
+        Ok(format!("{{\"newId\":\"{}\",\"ops\":{}}}", new_id, ops_json))
     }
 
     /// Set line spacing for a paragraph.
@@ -10831,7 +11539,12 @@ impl WasmCollabDocument {
     }
 
     /// Set indent for a paragraph.
-    pub fn set_indent(&mut self, node_id_str: &str, side: &str, value: f64) -> Result<String, JsError> {
+    pub fn set_indent(
+        &mut self,
+        node_id_str: &str,
+        side: &str,
+        value: f64,
+    ) -> Result<String, JsError> {
         let n = node_id_str.to_string();
         let s = side.to_string();
         self.with_wasm_doc(|doc| doc.set_indent(&n, &s, value))
@@ -10851,75 +11564,26 @@ impl WasmCollabDocument {
             new_id = doc.append_paragraph(&t)?;
             Ok(())
         })?;
-        Ok(format!(
-            "{{\"newId\":\"{}\",\"ops\":{}}}",
-            new_id, ops_json
-        ))
+        Ok(format!("{{\"newId\":\"{}\",\"ops\":{}}}", new_id, ops_json))
     }
 
-    /// Sort a table by the content of a specific column.
+    /// Sort a table by column (delegates to WasmDocument.sort_table_by_column).
     pub fn sort_table_by_column(
         &mut self,
         table_id_str: &str,
         col_index: u32,
         ascending: bool,
-    ) -> Result<(), JsError> {
-        let doc = self.doc_mut()?;
-        let table_id = parse_node_id(table_id_str)?;
-        let model = doc.model();
-        let table = model.node(table_id).ok_or_else(|| JsError::new("Table not found"))?;
-        
-        let mut row_data = Vec::new();
-        for &row_id in &table.children {
-            let row = model.node(row_id).ok_or_else(|| JsError::new("Row not found"))?;
-            let cell_id = row.children.get(col_index as usize).cloned().ok_or_else(|| JsError::new("Column index out of bounds"))?;
-            let text = extract_node_text(model, cell_id);
-            row_data.push((row_id, text));
-        }
-
-        // Sort rows (skipping header if any - heuristic: first row is header if more than 1 row)
-        let has_header = row_data.len() > 1;
-        let start_idx = if has_header { 1 } else { 0 };
-        
-        let sort_slice = &mut row_data[start_idx..];
-        sort_slice.sort_by(|a, b| {
-            if ascending {
-                a.1.cmp(&b.1)
-            } else {
-                b.1.cmp(&a.1)
-            }
-        });
-
-        // Apply row reordering via move_node_after
-        let mut txn = Transaction::with_label("Sort table");
-        let mut last_id = if has_header { Some(row_data[0].0) } else { None };
-        
-        for i in start_idx..row_data.len() {
-            let row_id = row_data[i].0;
-            match last_id {
-                Some(prev_id) => {
-                    txn.push(Operation::move_node_after(row_id, prev_id));
-                }
-                None => {
-                    // Moving first row to start of table (already there, but ensures order)
-                    txn.push(Operation::move_node_before(row_id, table.children[0]));
-                }
-            }
-            last_id = Some(row_id);
-        }
-
-        doc.apply_transaction(&txn)
-            .map_err(|e| JsError::new(&e.to_string()))
-    }
-
-    /// Sort a table.
-    pub fn sort_table_by_column(&mut self, table_id_str: &str, col_index: u32, ascending: bool) -> Result<String, JsError> {
-        let n = table_id_str.to_string();
-        self.with_wasm_doc(|doc| doc.sort_table_by_column(&n, col_index, ascending))
+    ) -> Result<String, JsError> {
+        let t = table_id_str.to_string();
+        self.with_wasm_doc(|doc| doc.sort_table_by_column(&t, col_index, ascending))
     }
 
     /// Set column widths for a table.
-    pub fn set_table_column_widths(&mut self, table_id_str: &str, widths_csv: &str) -> Result<String, JsError> {
+    pub fn set_table_column_widths(
+        &mut self,
+        table_id_str: &str,
+        widths_csv: &str,
+    ) -> Result<String, JsError> {
         let n = table_id_str.to_string();
         let w = widths_csv.to_string();
         self.with_wasm_doc(|doc| doc.set_table_column_widths(&n, &w))
@@ -13340,6 +14004,328 @@ mod tests {
     }
 
     #[test]
+    fn test_render_node_slice_paragraph() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("Hello World").unwrap();
+        let html = doc.render_node_slice(&id, 6, 11).unwrap();
+        assert!(html.starts_with("<p"), "should still be a paragraph tag");
+        assert!(html.contains("World"), "should render only requested slice");
+        assert!(
+            !html.contains("Hello"),
+            "should not include text before slice"
+        );
+    }
+
+    #[test]
+    fn test_insert_line_break_splits_run_at_paragraph_level() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&id, 5).unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "Hello\nWorld");
+
+        let html = doc.render_node_html(&id).unwrap();
+        assert!(
+            html.contains("<br"),
+            "rendered HTML should include a line break"
+        );
+    }
+
+    #[test]
+    fn test_insert_tab_splits_run_at_paragraph_level() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "Hello\tWorld");
+
+        let html = doc.render_node_html(&id).unwrap();
+        assert!(
+            html.contains("&emsp;"),
+            "rendered HTML should include a tab entity"
+        );
+    }
+
+    #[test]
+    fn test_insert_text_after_paragraph_tab_uses_correct_offset() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+        doc.insert_text_in_paragraph(&id, 6, "X").unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "Hello\tXWorld");
+    }
+
+    #[test]
+    fn test_delete_text_range_across_paragraph_tab() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+        doc.delete_text_in_paragraph(&id, 4, 3).unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "Hellorld");
+    }
+
+    #[test]
+    fn test_delete_exact_paragraph_tab_uses_inline_range_path() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+        doc.delete_text_in_paragraph(&id, 5, 1).unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "HelloWorld");
+    }
+
+    #[test]
+    fn test_delete_exact_paragraph_line_break_uses_inline_range_path() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&id, 5).unwrap();
+        doc.delete_text_in_paragraph(&id, 5, 1).unwrap();
+
+        let text = doc.get_paragraph_text(&id).unwrap();
+        assert_eq!(text, "HelloWorld");
+    }
+
+    #[test]
+    fn test_format_selection_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+        doc.format_selection(&id, 6, &id, 11, "bold", "true")
+            .unwrap();
+
+        let runs_json = doc.get_run_ids(&id).unwrap();
+        let run_ids: Vec<String> = serde_json::from_str(&runs_json).unwrap();
+        assert!(run_ids.len() >= 2, "expected paragraph to have split runs");
+
+        let first_fmt = doc.get_run_formatting_json(&run_ids[0]).unwrap();
+        let last_fmt = doc
+            .get_run_formatting_json(run_ids.last().unwrap())
+            .unwrap();
+        assert!(
+            !first_fmt.contains("\"bold\":true"),
+            "text before tab should remain unformatted"
+        );
+        assert!(
+            last_fmt.contains("\"bold\":true"),
+            "text after tab should be bold"
+        );
+    }
+
+    #[test]
+    fn test_format_selection_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&id, 5).unwrap();
+        doc.format_selection(&id, 6, &id, 11, "bold", "true")
+            .unwrap();
+
+        let runs_json = doc.get_run_ids(&id).unwrap();
+        let run_ids: Vec<String> = serde_json::from_str(&runs_json).unwrap();
+        assert!(run_ids.len() >= 2, "expected paragraph to have split runs");
+
+        let first_fmt = doc.get_run_formatting_json(&run_ids[0]).unwrap();
+        let last_fmt = doc
+            .get_run_formatting_json(run_ids.last().unwrap())
+            .unwrap();
+        assert!(
+            !first_fmt.contains("\"bold\":true"),
+            "text before line break should remain unformatted"
+        );
+        assert!(
+            last_fmt.contains("\"bold\":true"),
+            "text after line break should be bold"
+        );
+    }
+
+    #[test]
+    fn test_page_map_para_splits_include_char_ranges() {
+        let mut engine_doc = s1engine::DocumentBuilder::new()
+            .paragraph(|p| p.text("aaaaabbbbbcccccddddd"))
+            .build();
+        let para_id = engine_doc
+            .model()
+            .body_id()
+            .and_then(|body_id| {
+                engine_doc
+                    .model()
+                    .node(body_id)
+                    .and_then(|body| body.children.first().copied())
+            })
+            .unwrap();
+        let id = format!("{}:{}", para_id.replica, para_id.counter);
+
+        let sections = engine_doc.model_mut().sections_mut();
+        if sections.is_empty() {
+            sections.push(s1engine::SectionProperties::default());
+        }
+        let sec = &mut sections[0];
+        sec.page_width = 72.0;
+        sec.page_height = 72.0;
+        sec.margin_top = 1.0;
+        sec.margin_bottom = 1.0;
+        sec.margin_left = 1.0;
+        sec.margin_right = 1.0;
+        let doc = WasmDocument {
+            inner: Some(engine_doc),
+            batch_label: None,
+            batch_count: 0,
+            layout_cache: std::cell::RefCell::new(None),
+        };
+        let real_layout = doc
+            .doc()
+            .unwrap()
+            .layout(&s1_text::FontDatabase::empty())
+            .unwrap();
+        let dummy_font_id = match &real_layout.pages[0].blocks[0].kind {
+            s1_layout::LayoutBlockKind::Paragraph { lines, .. } => lines[0].runs[0].font_id,
+            _ => panic!("expected a paragraph block"),
+        };
+
+        let make_line = |text: &str| s1_layout::LayoutLine {
+            baseline_y: 10.0,
+            height: 14.4,
+            runs: vec![s1_layout::GlyphRun {
+                source_id: para_id,
+                font_id: dummy_font_id,
+                font_family: String::new(),
+                font_size: 12.0,
+                color: s1_model::Color::new(0, 0, 0),
+                x_offset: 0.0,
+                glyphs: Vec::new(),
+                width: text.len() as f64 * 7.2,
+                hyperlink_url: None,
+                text: text.to_string(),
+                bold: false,
+                italic: false,
+                underline: false,
+                strikethrough: false,
+                superscript: false,
+                subscript: false,
+                highlight_color: None,
+                character_spacing: 0.0,
+                revision_type: None,
+                revision_author: None,
+                inline_image: None,
+            }],
+        };
+        let make_block = |lines: Vec<s1_layout::LayoutLine>,
+                          is_continuation: bool,
+                          split_at_line: usize,
+                          y: f64| s1_layout::LayoutBlock {
+            source_id: para_id,
+            bounds: s1_layout::Rect::new(1.0, y, 70.0, lines.iter().map(|l| l.height).sum()),
+            kind: s1_layout::LayoutBlockKind::Paragraph {
+                lines,
+                text_align: None,
+                background_color: None,
+                border: None,
+                list_marker: None,
+                list_level: 0,
+                space_before: 0.0,
+                space_after: 0.0,
+                indent_left: 0.0,
+                indent_right: 0.0,
+                indent_first_line: 0.0,
+                line_height: None,
+                bidi: false,
+                is_continuation,
+                split_at_line,
+            },
+        };
+        let layout = s1_layout::LayoutDocument {
+            pages: vec![
+                s1_layout::LayoutPage {
+                    index: 0,
+                    width: 72.0,
+                    height: 72.0,
+                    content_area: s1_layout::Rect::new(1.0, 1.0, 70.0, 70.0),
+                    blocks: vec![make_block(
+                        vec![make_line("aaaaa"), make_line("bbbbb")],
+                        false,
+                        2,
+                        1.0,
+                    )],
+                    header: None,
+                    footer: None,
+                    footnotes: vec![],
+                    floating_images: vec![],
+                    section_index: 0,
+                },
+                s1_layout::LayoutPage {
+                    index: 1,
+                    width: 72.0,
+                    height: 72.0,
+                    content_area: s1_layout::Rect::new(1.0, 1.0, 70.0, 70.0),
+                    blocks: vec![make_block(
+                        vec![make_line("ccccc"), make_line("ddddd")],
+                        true,
+                        2,
+                        1.0,
+                    )],
+                    header: None,
+                    footer: None,
+                    footnotes: vec![],
+                    floating_images: vec![],
+                    section_index: 0,
+                },
+            ],
+            bookmarks: Vec::new(),
+            annotations: Vec::new(),
+        };
+        let json = doc.serialize_page_map(&layout).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        let pages = value["pages"].as_array().unwrap();
+        let mut splits = Vec::new();
+        for page in pages {
+            if let Some(items) = page["paraSplits"].as_array() {
+                for item in items {
+                    if item["nodeId"].as_str() == Some(id.as_str()) {
+                        splits.push(item.clone());
+                    }
+                }
+            }
+        }
+
+        assert!(
+            pages.len() > 1,
+            "expected paragraph to span multiple pages: {json}"
+        );
+        assert!(
+            !splits.is_empty(),
+            "expected at least one paragraph split entry: {json}"
+        );
+        let mut previous_end = 0usize;
+        for split in &splits {
+            let start = split["charStart"].as_u64().unwrap() as usize;
+            let end = split["charEnd"].as_u64().unwrap() as usize;
+            assert!(end > start, "split range must be non-empty: {split}");
+            assert!(
+                start >= previous_end,
+                "split ranges must be monotonic: {split}"
+            );
+            let html = doc.render_node_slice(&id, start, end).unwrap();
+            assert!(!html.is_empty(), "slice HTML should not be empty");
+            previous_end = end;
+        }
+    }
+
+    #[test]
     fn test_render_node_html_nonexistent() {
         // render_node_html with a nonexistent node ID should fail.
         // JsError::new() panics on non-wasm targets, so we verify
@@ -13774,6 +14760,32 @@ mod tests {
     }
 
     #[test]
+    fn test_set_paragraph_text_typing_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+
+        doc.set_paragraph_text(&p, "Hello\tXWorld").unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\tXWorld");
+    }
+
+    #[test]
+    fn test_set_paragraph_text_typing_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+
+        doc.set_paragraph_text(&p, "Hello\nXWorld").unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\nXWorld");
+    }
+
+    #[test]
     fn test_format_selection_single_run() {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
@@ -13924,6 +14936,296 @@ mod tests {
             .get_selection_formatting_json(&para_id, 0, &para_id, 11)
             .unwrap();
         assert!(fmt.contains("\"mixed\""), "should have mixed bold: {}", fmt);
+    }
+
+    #[test]
+    fn test_get_selection_formatting_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let para_id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&para_id, 5).unwrap();
+        doc.format_selection(&para_id, 6, &para_id, 11, "bold", "true")
+            .unwrap();
+
+        let after_tab = doc
+            .get_selection_formatting_json(&para_id, 6, &para_id, 11)
+            .unwrap();
+        assert!(
+            after_tab.contains("\"bold\":true"),
+            "selection after tab should be bold: {}",
+            after_tab
+        );
+
+        let whole_para = doc
+            .get_selection_formatting_json(&para_id, 0, &para_id, 11)
+            .unwrap();
+        assert!(
+            whole_para.contains("\"bold\":\"mixed\""),
+            "whole paragraph should report mixed bold: {}",
+            whole_para
+        );
+    }
+
+    #[test]
+    fn test_get_selection_formatting_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let para_id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&para_id, 5).unwrap();
+        doc.format_selection(&para_id, 6, &para_id, 11, "bold", "true")
+            .unwrap();
+
+        let after_break = doc
+            .get_selection_formatting_json(&para_id, 6, &para_id, 11)
+            .unwrap();
+        assert!(
+            after_break.contains("\"bold\":true"),
+            "selection after line break should be bold: {}",
+            after_break
+        );
+
+        let whole_para = doc
+            .get_selection_formatting_json(&para_id, 0, &para_id, 11)
+            .unwrap();
+        assert!(
+            whole_para.contains("\"bold\":\"mixed\""),
+            "whole paragraph should report mixed bold: {}",
+            whole_para
+        );
+    }
+
+    #[test]
+    fn test_delete_selection_across_paragraphs_after_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&first, 5).unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+
+        doc.delete_selection(&first, 6, &second, 3).unwrap();
+
+        let first_text = doc.get_paragraph_text(&first).unwrap();
+        assert_eq!(first_text, "Hello\tond");
+    }
+
+    #[test]
+    fn test_delete_selection_across_paragraphs_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&first, 5).unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+
+        doc.delete_selection(&first, 6, &second, 3).unwrap();
+
+        let first_text = doc.get_paragraph_text(&first).unwrap();
+        assert_eq!(first_text, "Hello\nond");
+    }
+
+    #[test]
+    fn test_format_selection_across_paragraphs_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&first, 5).unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+
+        doc.format_selection(&first, 6, &second, 3, "bold", "true")
+            .unwrap();
+
+        let first_after_break = doc
+            .get_selection_formatting_json(&first, 6, &first, 11)
+            .unwrap();
+        assert!(
+            first_after_break.contains("\"bold\":true"),
+            "text after start-paragraph line break should be bold: {}",
+            first_after_break
+        );
+
+        let first_before_break = doc
+            .get_selection_formatting_json(&first, 0, &first, 5)
+            .unwrap();
+        assert!(
+            first_before_break.contains("\"bold\":false"),
+            "text before start-paragraph line break should remain unbolded: {}",
+            first_before_break
+        );
+    }
+
+    #[test]
+    fn test_get_selection_formatting_across_paragraphs_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&first, 5).unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+        doc.format_selection(&first, 6, &second, 3, "bold", "true")
+            .unwrap();
+
+        let full_selection = doc
+            .get_selection_formatting_json(&first, 6, &second, 3)
+            .unwrap();
+        assert!(
+            full_selection.contains("\"bold\":true"),
+            "selection should report bold when it covers only bolded runs: {}",
+            full_selection
+        );
+
+        let extended_selection = doc
+            .get_selection_formatting_json(&first, 0, &second, 3)
+            .unwrap();
+        assert!(
+            extended_selection.contains("\"bold\":\"mixed\""),
+            "extending before the line-break boundary should report mixed bold: {}",
+            extended_selection
+        );
+    }
+
+    #[test]
+    fn test_delete_selection_across_paragraphs_with_tab_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&second, 5).unwrap();
+
+        doc.delete_selection(&first, 2, &second, 6).unwrap();
+
+        let first_text = doc.get_paragraph_text(&first).unwrap();
+        assert_eq!(first_text, "AlWorld");
+    }
+
+    #[test]
+    fn test_delete_selection_across_paragraphs_with_line_break_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&second, 5).unwrap();
+
+        doc.delete_selection(&first, 2, &second, 6).unwrap();
+
+        let first_text = doc.get_paragraph_text(&first).unwrap();
+        assert_eq!(first_text, "AlWorld");
+    }
+
+    #[test]
+    fn test_format_selection_across_paragraphs_with_line_break_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&second, 5).unwrap();
+
+        doc.format_selection(&first, 2, &second, 6, "bold", "true")
+            .unwrap();
+
+        let first_fmt = doc
+            .get_selection_formatting_json(&first, 2, &first, 5)
+            .unwrap();
+        assert!(
+            first_fmt.contains("\"bold\":true"),
+            "tail of first paragraph should be bold: {}",
+            first_fmt
+        );
+
+        let second_after_break = doc
+            .get_selection_formatting_json(&second, 6, &second, 11)
+            .unwrap();
+        assert!(
+            second_after_break.contains("\"bold\":false"),
+            "text after end offset should remain unbolded: {}",
+            second_after_break
+        );
+    }
+
+    #[test]
+    fn test_get_selection_formatting_across_paragraphs_with_line_break_in_end_para_uses_correct_offsets(
+    ) {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&second, 5).unwrap();
+        doc.format_selection(&first, 2, &second, 6, "bold", "true")
+            .unwrap();
+
+        let full_selection = doc
+            .get_selection_formatting_json(&first, 2, &second, 6)
+            .unwrap();
+        assert!(
+            full_selection.contains("\"bold\":true"),
+            "selection should report bold when it covers only bolded runs: {}",
+            full_selection
+        );
+
+        let extended_selection = doc
+            .get_selection_formatting_json(&first, 2, &second, 11)
+            .unwrap();
+        assert!(
+            extended_selection.contains("\"bold\":\"mixed\""),
+            "extending past the line-break boundary should report mixed bold: {}",
+            extended_selection
+        );
+    }
+
+    #[test]
+    fn test_format_selection_across_paragraphs_with_tab_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&second, 5).unwrap();
+
+        doc.format_selection(&first, 2, &second, 6, "bold", "true")
+            .unwrap();
+
+        let first_fmt = doc
+            .get_selection_formatting_json(&first, 2, &first, 5)
+            .unwrap();
+        assert!(
+            first_fmt.contains("\"bold\":true"),
+            "tail of first paragraph should be bold: {}",
+            first_fmt
+        );
+
+        let second_after_tab = doc
+            .get_selection_formatting_json(&second, 6, &second, 11)
+            .unwrap();
+        assert!(
+            second_after_tab.contains("\"bold\":false"),
+            "text after end offset should remain unbolded: {}",
+            second_after_tab
+        );
+    }
+
+    #[test]
+    fn test_get_selection_formatting_across_paragraphs_with_tab_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&second, 5).unwrap();
+        doc.format_selection(&first, 2, &second, 6, "bold", "true")
+            .unwrap();
+
+        let full_selection = doc
+            .get_selection_formatting_json(&first, 2, &second, 6)
+            .unwrap();
+        assert!(
+            full_selection.contains("\"bold\":true"),
+            "selection should report bold when it covers only bolded runs: {}",
+            full_selection
+        );
+
+        let extended_selection = doc
+            .get_selection_formatting_json(&first, 2, &second, 11)
+            .unwrap();
+        assert!(
+            extended_selection.contains("\"bold\":\"mixed\""),
+            "extending past the tab boundary should report mixed bold: {}",
+            extended_selection
+        );
     }
 
     // ─── P.2: Table Operations Tests ────────────────────────────
@@ -14734,6 +16036,79 @@ mod tests {
     }
 
     #[test]
+    fn test_find_text_inside_table_cells_uses_multiple_node_ids() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Before table").unwrap();
+        let table_id = doc.insert_table(&first, 1, 2).unwrap();
+        let cell_a = doc.get_cell_id(&table_id, 0, 0).unwrap();
+        let cell_b = doc.get_cell_id(&table_id, 0, 1).unwrap();
+        doc.set_cell_text(&cell_a, "Table Alpha").unwrap();
+        doc.set_cell_text(&cell_b, "Table Beta").unwrap();
+
+        let results = doc.find_text("Table", true).unwrap();
+        let matches: Vec<serde_json::Value> = serde_json::from_str(&results).unwrap();
+        assert_eq!(
+            matches.len(),
+            2,
+            "should find Table in both cells: {}",
+            results
+        );
+        let node_ids: Vec<&str> = matches
+            .iter()
+            .map(|m| m["nodeId"].as_str().unwrap())
+            .collect();
+        assert_ne!(
+            node_ids[0], node_ids[1],
+            "matches should be in different paragraph IDs"
+        );
+        assert_eq!(matches[0]["length"].as_u64(), Some(5));
+        assert_eq!(matches[1]["length"].as_u64(), Some(5));
+        assert_eq!(matches[0]["offset"].as_u64(), Some(0));
+        assert_eq!(matches[1]["offset"].as_u64(), Some(0));
+    }
+
+    #[test]
+    fn test_find_text_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+
+        let results = doc.find_text("World", true).unwrap();
+        assert!(
+            results.contains("\"offset\":6"),
+            "first match after tab should start at offset 6: {}",
+            results
+        );
+        assert!(
+            results.contains("\"offset\":17"),
+            "second match should retain adjusted offset: {}",
+            results
+        );
+    }
+
+    #[test]
+    fn test_find_text_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+
+        let results = doc.find_text("World", true).unwrap();
+        assert!(
+            results.contains("\"offset\":6"),
+            "first match after line break should start at offset 6: {}",
+            results
+        );
+        assert!(
+            results.contains("\"offset\":17"),
+            "second match should retain adjusted offset: {}",
+            results
+        );
+    }
+
+    #[test]
     fn test_replace_text() {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
@@ -14741,6 +16116,30 @@ mod tests {
         doc.replace_text(&p, 6, 5, "Rust").unwrap();
         let text = doc.get_paragraph_text(&p).unwrap();
         assert_eq!(text, "Hello Rust");
+    }
+
+    #[test]
+    fn test_replace_exact_paragraph_tab_uses_inline_range_path() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+        doc.replace_text(&p, 5, 1, "X").unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "HelloXWorld");
+    }
+
+    #[test]
+    fn test_replace_exact_paragraph_line_break_uses_inline_range_path() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+        doc.replace_text(&p, 5, 1, "X").unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "HelloXWorld");
     }
 
     #[test]
@@ -14758,6 +16157,34 @@ mod tests {
     }
 
     #[test]
+    fn test_replace_all_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+
+        let count = doc.replace_all("World", "Rust", true).unwrap();
+        assert_eq!(count, 2);
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\tRust HelloRust");
+    }
+
+    #[test]
+    fn test_replace_all_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+
+        let count = doc.replace_all("World", "Rust", true).unwrap();
+        assert_eq!(count, 2);
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\nRust HelloRust");
+    }
+
+    #[test]
     fn test_paste_plain_text_multiline() {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
@@ -14771,6 +16198,40 @@ mod tests {
             "should have at least 3 paragraphs, got {}",
             count
         );
+    }
+
+    #[test]
+    fn test_paste_plain_text_multiline_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+        doc.paste_plain_text(&p, 6, "X\nY").unwrap();
+
+        let first_text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(first_text, "Hello\tX");
+
+        let ids: Vec<String> = serde_json::from_str(&doc.paragraph_ids_json().unwrap()).unwrap();
+        let second_id = ids.into_iter().find(|id| id != &p).unwrap();
+        let second_text = doc.get_paragraph_text(&second_id).unwrap();
+        assert_eq!(second_text, "YWorld");
+    }
+
+    #[test]
+    fn test_paste_plain_text_multiline_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+        doc.paste_plain_text(&p, 6, "X\nY").unwrap();
+
+        let first_text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(first_text, "Hello\nX");
+
+        let ids: Vec<String> = serde_json::from_str(&doc.paragraph_ids_json().unwrap()).unwrap();
+        let second_id = ids.into_iter().find(|id| id != &p).unwrap();
+        let second_text = doc.get_paragraph_text(&second_id).unwrap();
+        assert_eq!(second_text, "YWorld");
     }
 
     // ── Paste formatted runs tests ────────────────────────
@@ -14813,6 +16274,34 @@ mod tests {
     }
 
     #[test]
+    fn test_paste_formatted_runs_single_paragraph_after_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"X","bold":true}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 6, json).unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\tXWorld");
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_single_paragraph_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"X","italic":true}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 6, json).unwrap();
+
+        let text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(text, "Hello\nXWorld");
+    }
+
+    #[test]
     fn test_paste_formatted_runs_single_run_no_formatting() {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
@@ -14848,6 +16337,44 @@ mod tests {
             "expected 'secondBB' in: {}",
             text
         );
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_multi_paragraph_after_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&p, 5).unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"X"}]},{"runs":[{"text":"Y"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 6, json).unwrap();
+
+        let first_text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(first_text, "Hello\tX");
+
+        let ids: Vec<String> = serde_json::from_str(&doc.paragraph_ids_json().unwrap()).unwrap();
+        let second_id = ids.into_iter().find(|id| id != &p).unwrap();
+        let second_text = doc.get_paragraph_text(&second_id).unwrap();
+        assert_eq!(second_text, "YWorld");
+    }
+
+    #[test]
+    fn test_paste_formatted_runs_multi_paragraph_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let p = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&p, 5).unwrap();
+
+        let json = r#"{"paragraphs":[{"runs":[{"text":"X"}]},{"runs":[{"text":"Y"}]}]}"#;
+        doc.paste_formatted_runs_json(&p, 6, json).unwrap();
+
+        let first_text = doc.get_paragraph_text(&p).unwrap();
+        assert_eq!(first_text, "Hello\nX");
+
+        let ids: Vec<String> = serde_json::from_str(&doc.paragraph_ids_json().unwrap()).unwrap();
+        let second_id = ids.into_iter().find(|id| id != &p).unwrap();
+        let second_text = doc.get_paragraph_text(&second_id).unwrap();
+        assert_eq!(second_text, "YWorld");
     }
 
     #[test]
@@ -15295,6 +16822,135 @@ mod tests {
     }
 
     #[test]
+    fn test_export_selection_html_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+
+        let html = doc.export_selection_html(&id, 6, &id, 11).unwrap();
+        assert!(
+            html.contains("World"),
+            "should export text after tab: {html}"
+        );
+        assert!(
+            !html.contains("Hello"),
+            "should not include text before tab: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&id, 5).unwrap();
+
+        let html = doc.export_selection_html(&id, 6, &id, 11).unwrap();
+        assert!(
+            html.contains("World"),
+            "should export text after line break: {html}"
+        );
+        assert!(
+            !html.contains("Hello"),
+            "should not include text before line break: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_across_paragraphs_after_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+        doc.insert_tab(&first, 5).unwrap();
+
+        let html = doc.export_selection_html(&first, 6, &second, 3).unwrap();
+        assert!(
+            html.contains("World"),
+            "should include text after start-paragraph tab: {html}"
+        );
+        assert!(
+            html.contains("Sec"),
+            "should include end-paragraph prefix: {html}"
+        );
+        assert!(
+            !html.contains("Hello"),
+            "should not include text before the tab boundary: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_across_paragraphs_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("HelloWorld").unwrap();
+        let second = doc.append_paragraph("Second").unwrap();
+        doc.insert_line_break(&first, 5).unwrap();
+
+        let html = doc.export_selection_html(&first, 6, &second, 3).unwrap();
+        assert!(
+            html.contains("World"),
+            "should include text after start-paragraph line break: {html}"
+        );
+        assert!(
+            html.contains("Sec"),
+            "should include end-paragraph prefix: {html}"
+        );
+        assert!(
+            !html.contains("Hello"),
+            "should not include text before the line-break boundary: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_across_paragraphs_with_tab_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_tab(&second, 5).unwrap();
+
+        let html = doc.export_selection_html(&first, 2, &second, 6).unwrap();
+        assert!(
+            html.contains("pha"),
+            "should include selected tail of first paragraph: {html}"
+        );
+        assert!(
+            html.contains("Hello"),
+            "should include end-paragraph text before the tab: {html}"
+        );
+        assert!(
+            !html.contains("World"),
+            "should not include text after the tab boundary: {html}"
+        );
+    }
+
+    #[test]
+    fn test_export_selection_html_across_paragraphs_with_line_break_in_end_para_uses_correct_offsets(
+    ) {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha").unwrap();
+        let second = doc.append_paragraph("HelloWorld").unwrap();
+        doc.insert_line_break(&second, 5).unwrap();
+
+        let html = doc.export_selection_html(&first, 2, &second, 6).unwrap();
+        assert!(
+            html.contains("pha"),
+            "should include selected tail of first paragraph: {html}"
+        );
+        assert!(
+            html.contains("Hello"),
+            "should include end-paragraph text before the line break: {html}"
+        );
+        assert!(
+            !html.contains("World"),
+            "should not include text after the line-break boundary: {html}"
+        );
+    }
+
+    #[test]
     fn test_export_selection_html_with_font_style() {
         let engine = WasmEngine::new();
         let mut doc = engine.create();
@@ -15315,6 +16971,119 @@ mod tests {
             !html.contains("data-node-id"),
             "Clean HTML must not contain data-node-id. Got: {html}"
         );
+    }
+
+    #[test]
+    fn test_export_selection_html_spanning_table_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Before table").unwrap();
+        let table_id = doc.insert_table(&first, 1, 1).unwrap();
+        let cell_id = doc.get_cell_id(&table_id, 0, 0).unwrap();
+        doc.set_cell_text(&cell_id, "Inside table").unwrap();
+        let last = doc.append_paragraph("After").unwrap();
+
+        let html = doc.export_selection_html(&first, 3, &last, 5).unwrap();
+        assert!(
+            html.contains("<table"),
+            "selection should render the table: {html}"
+        );
+        assert!(
+            html.contains("Inside table"),
+            "should include table cell text: {html}"
+        );
+        assert!(
+            html.contains("After"),
+            "should include trailing paragraph text: {html}"
+        );
+    }
+
+    #[test]
+    fn test_get_selection_word_count_after_paragraph_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("Hello there world").unwrap();
+        doc.insert_tab(&id, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&id, 6, &id, 17).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_get_selection_word_count_after_paragraph_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let id = doc.append_paragraph("Hello there world").unwrap();
+        doc.insert_line_break(&id, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&id, 6, &id, 17).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_get_selection_word_count_across_table_cells_uses_correct_counts() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Before").unwrap();
+        let table_id = doc.insert_table(&first, 1, 1).unwrap();
+        let cell_id = doc.get_cell_id(&table_id, 0, 0).unwrap();
+        doc.set_cell_text(&cell_id, "Table cell").unwrap();
+        let last = doc.append_paragraph("After").unwrap();
+
+        let count = doc.get_selection_word_count(&first, 0, &last, 5).unwrap();
+        assert_eq!(
+            count, 4,
+            "Should count words from paragraph, cell, and last paragraph"
+        );
+    }
+
+    #[test]
+    fn test_get_selection_word_count_across_paragraphs_after_tab_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Hello there world").unwrap();
+        let second = doc.append_paragraph("second paragraph here").unwrap();
+        doc.insert_tab(&first, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&first, 6, &second, 6).unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_get_selection_word_count_across_paragraphs_after_line_break_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Hello there world").unwrap();
+        let second = doc.append_paragraph("second paragraph here").unwrap();
+        doc.insert_line_break(&first, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&first, 6, &second, 6).unwrap();
+        assert_eq!(count, 3);
+    }
+
+    #[test]
+    fn test_get_selection_word_count_across_paragraphs_with_tab_in_end_para_uses_correct_offsets() {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha beta").unwrap();
+        let second = doc.append_paragraph("Hello there world").unwrap();
+        doc.insert_tab(&second, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&first, 6, &second, 6).unwrap();
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn test_get_selection_word_count_across_paragraphs_with_line_break_in_end_para_uses_correct_offsets(
+    ) {
+        let engine = WasmEngine::new();
+        let mut doc = engine.create();
+        let first = doc.append_paragraph("Alpha beta").unwrap();
+        let second = doc.append_paragraph("Hello there world").unwrap();
+        doc.insert_line_break(&second, 5).unwrap();
+
+        let count = doc.get_selection_word_count(&first, 6, &second, 6).unwrap();
+        assert_eq!(count, 2);
     }
 
     // ─── Collaboration Tests ───────────────────────────
@@ -15411,5 +17180,286 @@ mod tests {
         // After freeing, inner is None — calling replica_id() would produce
         // a JsError which panics on non-wasm targets, so we just verify
         // free_doc itself doesn't panic and can be called.
+    }
+
+    fn insert_paragraph_ops(
+        doc: &mut s1_crdt::CollabDocument,
+        text: &str,
+    ) -> (String, Vec<s1_crdt::CrdtOperation>) {
+        let model = doc.model();
+        let body_id = model.body_id().unwrap();
+        let index = model.node(body_id).map(|n| n.children.len()).unwrap_or(0);
+        let para_id = doc.next_id();
+        let run_id = doc.next_id();
+        let text_id = doc.next_id();
+
+        let mut ops = Vec::new();
+        ops.push(
+            doc.apply_local(Operation::insert_node(
+                body_id,
+                index,
+                Node::new(para_id, NodeType::Paragraph),
+            ))
+            .unwrap(),
+        );
+        ops.push(
+            doc.apply_local(Operation::insert_node(
+                para_id,
+                0,
+                Node::new(run_id, NodeType::Run),
+            ))
+            .unwrap(),
+        );
+        ops.push(
+            doc.apply_local(Operation::insert_node(run_id, 0, Node::text(text_id, text)))
+                .unwrap(),
+        );
+
+        (format!("{}:{}", para_id.replica, para_id.counter), ops)
+    }
+
+    #[test]
+    fn test_collab_concurrent_inserts_survive_brutal_suite() {
+        let mut alice = s1_crdt::CollabDocument::new(1);
+        let mut bob = s1_crdt::CollabDocument::new(2);
+
+        let (paragraph, ops) = insert_paragraph_ops(&mut alice, "Start");
+        for op in &ops {
+            bob.apply_remote(op.clone()).unwrap();
+        }
+
+        let node_id = parse_node_id(&paragraph).unwrap();
+        let (text_node_a, _) = find_first_text_node(alice.model(), node_id).unwrap();
+        let alice_op = alice
+            .apply_local(Operation::insert_text(text_node_a, 5, "A".to_string()))
+            .unwrap();
+
+        let (text_node_b, _) = find_first_text_node(bob.model(), node_id).unwrap();
+        let bob_op = bob
+            .apply_local(Operation::insert_text(text_node_b, 5, "B".to_string()))
+            .unwrap();
+
+        alice.apply_remote(bob_op.clone()).unwrap();
+        bob.apply_remote(alice_op.clone()).unwrap();
+
+        let text_a = alice.to_plain_text();
+        let text_b = bob.to_plain_text();
+        assert_eq!(text_a.chars().count(), 7);
+        assert_eq!(text_b.chars().count(), 7);
+        assert!(text_a.contains('A'));
+        assert!(text_a.contains('B'));
+        assert!(text_b.contains('A'));
+        assert!(text_b.contains('B'));
+    }
+
+    #[test]
+    fn test_collab_offline_peer_replays_brutal_operations() {
+        let mut alice = s1_crdt::CollabDocument::new(1);
+        let mut bob = s1_crdt::CollabDocument::new(2);
+        let mut carol = s1_crdt::CollabDocument::new(3);
+
+        let (paragraph, ops) = insert_paragraph_ops(&mut alice, "Truss");
+        for op in &ops {
+            bob.apply_remote(op.clone()).unwrap();
+            carol.apply_remote(op.clone()).unwrap();
+        }
+
+        let carol_sv = carol.state_vector().clone();
+
+        let node_id = parse_node_id(&paragraph).unwrap();
+        let (text_node_a, _) = find_first_text_node(alice.model(), node_id).unwrap();
+        let alice_op = alice
+            .apply_local(Operation::insert_text(text_node_a, 0, "Alice ".to_string()))
+            .unwrap();
+
+        let (text_node_b, _) = find_first_text_node(bob.model(), node_id).unwrap();
+        let bob_op = bob
+            .apply_local(Operation::insert_text(text_node_b, 0, "Bob ".to_string()))
+            .unwrap();
+
+        bob.apply_remote(alice_op.clone()).unwrap();
+        alice.apply_remote(bob_op.clone()).unwrap();
+
+        let expected = alice.to_plain_text();
+        let changes = alice.changes_since(&carol_sv);
+        for change in changes {
+            carol.apply_remote(change).unwrap();
+        }
+
+        assert_eq!(carol.to_plain_text(), expected);
+    }
+
+    // ── Stage A: Page-level rendering API tests ─────────────────────
+
+    /// Helper: build a WasmDocument from a `s1engine::Document`.
+    fn wrap(doc: s1engine::Document) -> WasmDocument {
+        WasmDocument {
+            inner: Some(doc),
+            batch_label: None,
+            batch_count: 0,
+            layout_cache: std::cell::RefCell::new(None),
+        }
+    }
+
+    /// Helper: build a document with N paragraphs via the builder API.
+    fn doc_with_paragraphs(texts: &[&str]) -> WasmDocument {
+        let mut builder = s1engine::DocumentBuilder::new();
+        for text in texts {
+            builder = builder.paragraph(|p| p.text(text));
+        }
+        wrap(builder.build())
+    }
+
+    #[test]
+    fn test_get_page_count_empty_doc() {
+        let doc = wrap(s1engine::Engine::new().create());
+        let count = doc.get_page_count().unwrap();
+        assert!(count >= 1, "empty doc should have at least 1 page");
+    }
+
+    #[test]
+    fn test_get_page_count_with_content() {
+        let texts: Vec<&str> = (0..80)
+            .map(|_| "Paragraph line for multi-page test")
+            .collect();
+        let doc = doc_with_paragraphs(&texts);
+        let count = doc.get_page_count().unwrap();
+        assert!(count >= 1, "doc with 80 paragraphs should have pages");
+    }
+
+    #[test]
+    fn test_get_page_html_basic() {
+        let doc = doc_with_paragraphs(&["Hello World"]);
+        let count = doc.get_page_count().unwrap();
+        assert!(count >= 1);
+
+        let html = doc.get_page_html(0).unwrap();
+        assert!(
+            html.contains("Hello World"),
+            "page HTML should contain paragraph text, got: {}",
+            &html[..html.len().min(200)]
+        );
+        assert!(
+            html.contains("data-node-id="),
+            "page HTML should contain data-node-id attributes"
+        );
+    }
+
+    #[test]
+    fn test_get_page_count_returns_positive() {
+        let doc = wrap(s1engine::Engine::new().create());
+        let count = doc.get_page_count().unwrap();
+        assert!(count >= 1, "even an empty doc should have 1 page");
+    }
+
+    #[test]
+    fn test_get_affected_pages() {
+        let doc = doc_with_paragraphs(&["Test para"]);
+        let _count = doc.get_page_count().unwrap();
+
+        // Find a paragraph node ID from the HTML
+        let html = doc.get_page_html(0).unwrap();
+        let nid = extract_first_node_id(&html);
+        assert!(!nid.is_empty(), "should find a node ID in HTML");
+
+        let json = doc.get_affected_pages(&nid).unwrap();
+        assert!(json.starts_with('['));
+        assert!(json.ends_with(']'));
+        assert!(
+            json.contains('0'),
+            "affected pages should include page 0 for first paragraph"
+        );
+    }
+
+    /// Extract first data-node-id value from HTML
+    fn extract_first_node_id(html: &str) -> String {
+        if let Some(start) = html.find("data-node-id=\"") {
+            let after = &html[start + 14..];
+            if let Some(end) = after.find('"') {
+                return after[..end].to_string();
+            }
+        }
+        String::new()
+    }
+
+    #[test]
+    fn test_layout_cache_invalidation() {
+        let mut doc = doc_with_paragraphs(&["First"]);
+        let _count1 = doc.get_page_count().unwrap();
+        assert!(
+            doc.layout_cache.borrow().is_some(),
+            "cache should be populated"
+        );
+
+        // Simulate mutation via doc_mut
+        let _ = doc.doc_mut();
+        assert!(
+            doc.layout_cache.borrow().is_none(),
+            "cache should be invalidated after doc_mut()"
+        );
+
+        // Re-compute layout
+        let count2 = doc.get_page_count().unwrap();
+        assert!(count2 >= 1);
+        assert!(
+            doc.layout_cache.borrow().is_some(),
+            "cache should be repopulated"
+        );
+    }
+
+    #[test]
+    fn test_get_page_html_multi_page() {
+        let texts: Vec<&str> = (0..120)
+            .map(|_| "Line of text for multi-page rendering test document")
+            .collect();
+        let doc = doc_with_paragraphs(&texts);
+
+        let count = doc.get_page_count().unwrap();
+        assert!(
+            count >= 2,
+            "120 paragraphs should span multiple pages, got {}",
+            count
+        );
+
+        for i in 0..count {
+            let html = doc.get_page_html(i).unwrap();
+            assert!(!html.is_empty(), "page {} should have non-empty HTML", i);
+        }
+
+        let first = doc.get_page_html(0).unwrap();
+        let last = doc.get_page_html(count - 1).unwrap();
+        assert_ne!(first, last, "first and last pages should differ");
+    }
+
+    #[test]
+    fn test_get_page_html_table() {
+        let builder = s1engine::DocumentBuilder::new()
+            .paragraph(|p| p.text("Before table"))
+            .table(|t| {
+                t.row(|r| r.cell("A1").cell("B1").cell("C1"))
+                    .row(|r| r.cell("A2").cell("B2").cell("C2"))
+                    .row(|r| r.cell("A3").cell("B3").cell("C3"))
+            });
+        let doc = wrap(builder.build());
+
+        let _count = doc.get_page_count().unwrap();
+        let html = doc.get_page_html(0).unwrap();
+        assert!(
+            html.contains("<table"),
+            "page HTML should contain table element"
+        );
+        assert!(
+            html.contains("data-node-id="),
+            "table should have data-node-id"
+        );
+    }
+
+    #[test]
+    fn test_layout_cache_starts_empty() {
+        let doc = doc_with_paragraphs(&["test"]);
+        assert!(
+            doc.layout_cache.borrow().is_none(),
+            "layout cache should start empty before any layout call"
+        );
     }
 }

@@ -11,7 +11,7 @@
 //   - format_selection  → broadcastOp
 //   - delete_selection  → broadcastOp
 import { state, $ } from './state.js';
-import { renderDocument, renderNodeById } from './render.js';
+import { renderDocument, renderNodeById, renderAffectedPages } from './render.js';
 import { countCharsToPoint, setCursorAtOffset } from './selection.js';
 import { refreshComments } from './toolbar-handlers.js';
 
@@ -945,14 +945,67 @@ function _quickDocHash() {
 }
 let _lastAppliedDocHash = 0;
 
+function _checksumBytes(bytes) {
+  // FNV-1a 32-bit over raw bytes for cheap fullSync integrity checks.
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < bytes.length; i++) {
+    hash ^= bytes[i];
+    hash = Math.imul(hash, 0x01000193) >>> 0;
+  }
+  return hash.toString(16).padStart(8, '0');
+}
+
 function sendFullSync() {
   if (!state.doc) return;
   try {
     const bytes = state.doc.export('docx');
-    const base64 = btoa(String.fromCharCode(...new Uint8Array(bytes)));
+    const rawBytes = new Uint8Array(bytes);
+    const checksum = _checksumBytes(rawBytes);
     // D17: Only increment version after successful send
     const pendingVersion = localVersion + 1;
-    sendOp({ action: 'fullSync', docBase64: base64, version: pendingVersion, replicaId: peerId });
+
+    // S-01: Try Binary WebSocket frame first (no base64 overhead).
+    // Format: JSON header + NUL separator + raw DOCX bytes.
+    if (connected && ws && ws.readyState === 1 && typeof ws.send === 'function') {
+      try {
+        const header = JSON.stringify({
+          type: 'op', room: roomId,
+          data: JSON.stringify({
+            action: 'fullSync',
+            version: pendingVersion,
+            replicaId: peerId,
+            checksum,
+            checksumAlg: 'fnv1a32',
+            byteLength: rawBytes.length,
+            binary: true,
+          }),
+        });
+        const headerBytes = new TextEncoder().encode(header);
+        // Frame: [header UTF-8] [NUL byte] [raw DOCX bytes]
+        const frame = new Uint8Array(headerBytes.length + 1 + rawBytes.length);
+        frame.set(headerBytes, 0);
+        frame[headerBytes.length] = 0; // NUL separator
+        frame.set(rawBytes, headerBytes.length + 1);
+        ws.send(frame);
+        localVersion = pendingVersion;
+        return;
+      } catch (binErr) {
+        // Binary send failed — fall back to base64
+        tracing('Binary fullSync failed, falling back to base64:', binErr.message);
+      }
+    }
+
+    // Fallback: base64-encoded JSON (works with all relay servers)
+    const base64 = btoa(String.fromCharCode(...rawBytes));
+    sendOp({
+      action: 'fullSync',
+      docBase64: base64,
+      version: pendingVersion,
+      replicaId: peerId,
+      checksum,
+      checksumAlg: 'fnv1a32',
+      byteLength: rawBytes.length,
+    });
     localVersion = pendingVersion;
   } catch (_) {}
 }
@@ -1158,7 +1211,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderDocument(); break; }
         try {
           state.doc.split_paragraph(op.nodeId, op.offset);
-          renderDocument();
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):split:', e); }
         break;
       }
@@ -1203,7 +1256,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderNodeById(op.nodeId); break; }
         try {
           state.doc.set_heading_level(op.nodeId, op.level);
-          renderNodeById(op.nodeId);
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):heading:', e); }
         break;
       }
@@ -1212,7 +1265,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderNodeById(op.nodeId); break; }
         try {
           state.doc.set_alignment(op.nodeId, op.alignment);
-          renderNodeById(op.nodeId);
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):align:', e); }
         break;
       }
@@ -1239,7 +1292,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderDocument(); break; }
         try {
           state.doc.set_list_format(op.nodeId, op.format, op.level || 0);
-          renderDocument();
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):list:', e); }
         break;
       }
@@ -1248,7 +1301,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderNodeById(op.nodeId); break; }
         try {
           state.doc.set_indent(op.nodeId, op.side, op.value);
-          renderNodeById(op.nodeId);
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):indent:', e); }
         break;
       }
@@ -1257,7 +1310,7 @@ function applyRemoteOp(dataStr, fromPeerId) {
         if (op.crdtOps && _applyRemoteCrdtOps(op.crdtOps)) { renderNodeById(op.nodeId); break; }
         try {
           state.doc.set_line_spacing(op.nodeId, op.value);
-          renderNodeById(op.nodeId);
+          if (!renderAffectedPages(op.nodeId)) renderDocument();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):lineSpacing:', e); }
         break;
       }
@@ -1385,7 +1438,17 @@ function applyRemoteOp(dataStr, fromPeerId) {
       case 'insertCommentReply': {
         try {
           state.doc.insert_comment_reply(op.parentId, op.author, op.text);
+          if (!state.commentReplies) state.commentReplies = [];
+          state.commentReplies.push({
+            id: op.replyId || ('reply-remote-' + Date.now() + '-' + Math.random().toString(36).slice(2, 8)),
+            parentId: op.parentId,
+            author: op.author || 'User',
+            text: op.text || '',
+            timestamp: op.timestamp || Date.now(),
+          });
+          try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch (_) {}
           renderDocument();
+          refreshComments();
         } catch (e) { requestImmediateFullSync(); console.debug('[collab] remote op skipped (node ID mismatch, fullSync will correct):insertCommentReply:', e); }
         break;
       }
@@ -1401,8 +1464,29 @@ function applyRemoteOp(dataStr, fromPeerId) {
       case 'editCommentReply': {
         try {
           state.commentReplies = (state.commentReplies || []).map(r => r.id === op.replyId ? { ...r, text: op.text } : r);
+          try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch (_) {}
           refreshComments();
         } catch (e) { console.debug('[collab] remote editCommentReply failed:', e); }
+        break;
+      }
+
+      case 'deleteCommentReply': {
+        try {
+          state.commentReplies = (state.commentReplies || []).filter(r => r.id !== op.replyId);
+          try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch (_) {}
+          refreshComments();
+        } catch (e) { console.debug('[collab] remote deleteCommentReply failed:', e); }
+        break;
+      }
+
+      case 'resolveComment': {
+        try {
+          if (!state.resolvedComments) state.resolvedComments = new Set();
+          if (op.resolved) state.resolvedComments.add(op.commentId);
+          else state.resolvedComments.delete(op.commentId);
+          try { localStorage.setItem('s1_resolvedComments', JSON.stringify(Array.from(state.resolvedComments))); } catch (_) {}
+          refreshComments();
+        } catch (e) { console.debug('[collab] remote resolveComment failed:', e); }
         break;
       }
 
@@ -1693,6 +1777,16 @@ function applyRemoteOp(dataStr, fromPeerId) {
             const bytes = new Uint8Array(binary.length);
             for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
             if (bytes.length > 0) {
+              if (typeof op.byteLength === 'number' && op.byteLength !== bytes.length) {
+                console.warn('[collab] Rejecting fullSync: byteLength mismatch');
+                requestImmediateFullSync();
+                break;
+              }
+              if (op.checksum && _checksumBytes(bytes) !== op.checksum) {
+                console.warn('[collab] Rejecting fullSync: checksum mismatch');
+                requestImmediateFullSync();
+                break;
+              }
               // Skip replacement if incoming doc matches current state (no-op optimization).
               // This avoids unnecessary re-renders, cursor resets, and scroll jumps
               // when the fullSync contains the same document we already have.

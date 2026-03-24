@@ -6,7 +6,7 @@ import {
   getEditableText,
   addSecondaryCursor, clearSecondarySelections,
 } from './selection.js';
-import { renderDocument, renderNodeById, renderSmart, renderSingleParagraphIfPossible, syncParagraphText, syncAllText, syncAllTextFull, debouncedSync, markLayoutDirty } from './render.js';
+import { renderDocument, renderNodeById, renderSmart, renderSingleParagraphIfPossible, syncParagraphText, syncAllText, syncAllTextFull, debouncedSync, markLayoutDirty, renderAffectedPages } from './render.js';
 import { toggleFormat, applyFormat, updateToolbarState, updateUndoRedo, recordUndoAction, renderUndoHistory } from './toolbar.js';
 import { deleteSelectedImage, setupImages } from './images.js';
 import { deleteSelectedShape, hasSelectedShape } from './shapes.js';
@@ -341,6 +341,71 @@ export function initInput() {
         }
       }
     }
+    // ── Stage D: Direct Input → WASM (non-CRDT, non-IME, single cursor) ──
+    // Intercept text insert/delete, apply directly to WASM, and re-render
+    // only affected pages. Skip if composing (IME) or in CRDT mode.
+    if (!state.collabDoc && !state._composing && state.doc
+        && typeof state.doc.insert_text_in_paragraph === 'function'
+        && typeof state.doc.get_affected_pages === 'function'
+        && state.multiSelections.length === 0) {
+      const info = getSelectionInfo();
+      if (info && info.startNodeId && info.collapsed) {
+        if (e.inputType === 'insertText' && e.data) {
+          e.preventDefault();
+          try {
+            state.doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, e.data);
+            markDirty();
+            const ok = renderAffectedPages(info.startNodeId);
+            if (ok) {
+              // Restore cursor after the inserted text
+              const el = document.querySelector(`[data-node-id="${info.startNodeId}"]`);
+              if (el) setCursorAtOffset(el, info.startOffset + e.data.length);
+            } else {
+              renderSmart(info.startNodeId);
+            }
+          } catch (err) {
+            console.warn('Direct input insert failed:', err);
+            // Let the browser handle it on next keystroke
+          }
+          return;
+        }
+        if (e.inputType === 'deleteContentBackward' && info.startOffset > 0) {
+          e.preventDefault();
+          try {
+            state.doc.replace_text(info.startNodeId, info.startOffset - 1, 1, '');
+            markDirty();
+            const ok = renderAffectedPages(info.startNodeId);
+            if (ok) {
+              const el = document.querySelector(`[data-node-id="${info.startNodeId}"]`);
+              if (el) setCursorAtOffset(el, info.startOffset - 1);
+            } else {
+              renderSmart(info.startNodeId);
+            }
+          } catch (err) {
+            console.warn('Direct input backspace failed:', err);
+          }
+          return;
+        }
+        if (e.inputType === 'deleteContentForward') {
+          e.preventDefault();
+          try {
+            state.doc.replace_text(info.startNodeId, info.startOffset, 1, '');
+            markDirty();
+            const ok = renderAffectedPages(info.startNodeId);
+            if (ok) {
+              const el = document.querySelector(`[data-node-id="${info.startNodeId}"]`);
+              if (el) setCursorAtOffset(el, info.startOffset);
+            } else {
+              renderSmart(info.startNodeId);
+            }
+          } catch (err) {
+            console.warn('Direct input delete failed:', err);
+          }
+          return;
+        }
+      }
+    }
+
     // FS-39: Multi-cursor typing — insert at all cursor positions
     if (e.inputType === 'insertText' && e.data && state.multiSelections.length > 0 && state.doc) {
       e.preventDefault();
@@ -1369,28 +1434,38 @@ export function initInput() {
 
       try {
         const newId = doc.split_paragraph(nodeId, offset);
-        renderNodeById(nodeId);
-        const newHtml = doc.render_node_html(newId);
-        const tmp = document.createElement('div'); tmp.innerHTML = newHtml;
-        const newEl = tmp.firstElementChild;
-        if (newEl) {
-          if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
-          const orig = page.querySelector(`[data-node-id="${nodeId}"]`);
-          if (orig) orig.after(newEl);
-          // Register new element in nodeIdToElement map
-          state.nodeIdToElement.set(newId, newEl);
-          newEl.querySelectorAll('[data-node-id]').forEach(child => {
-            state.nodeIdToElement.set(child.dataset.nodeId, child);
-          });
-          setupImages(newEl);
-          // Ensure the contenteditable parent has focus before setting cursor
-          const content = newEl.closest('.page-content');
-          if (content) content.focus();
-          setCursorAtStart(newEl);
-        }
-        recordUndoAction('Split paragraph');
-        state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
         broadcastOp({ action: 'splitParagraph', nodeId, offset });
+        recordUndoAction('Split paragraph');
+        markDirty();
+
+        // Try WASM-authority page render; fall back to manual DOM manipulation
+        if (renderAffectedPages(nodeId)) {
+          const newEl = document.querySelector(`[data-node-id="${newId}"]`);
+          if (newEl) {
+            const content = newEl.closest('.page-content');
+            if (content) content.focus();
+            setCursorAtStart(newEl);
+          }
+        } else {
+          renderNodeById(nodeId);
+          const newHtml = doc.render_node_html(newId);
+          const tmp = document.createElement('div'); tmp.innerHTML = newHtml;
+          const newEl = tmp.firstElementChild;
+          if (newEl) {
+            if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
+            const orig = page.querySelector(`[data-node-id="${nodeId}"]`);
+            if (orig) orig.after(newEl);
+            state.nodeIdToElement.set(newId, newEl);
+            newEl.querySelectorAll('[data-node-id]').forEach(child => {
+              state.nodeIdToElement.set(child.dataset.nodeId, child);
+            });
+            setupImages(newEl);
+            const content = newEl.closest('.page-content');
+            if (content) content.focus();
+            setCursorAtStart(newEl);
+          }
+          state.pagesRendered = false; updatePageBreaks(); updateUndoRedo();
+        }
       } catch (err) { console.error('split:', err); }
       return;
     }
@@ -1458,11 +1533,17 @@ export function initInput() {
         const isCrossPage = prev.closest('.page-content') !== el.closest('.page-content');
         try {
           doc.merge_paragraphs(nodeId1, nodeId2);
-          if (isCrossPage) {
-            // Cross-page merge: full re-render to rebuild page map
+          broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
+          recordUndoAction('Merge paragraphs');
+          markDirty();
+
+          // Try WASM-authority page render
+          if (renderAffectedPages(nodeId1)) {
+            const merged = document.querySelector(`[data-node-id="${nodeId1}"]`);
+            if (merged) setCursorAtOffset(merged, cursorPos);
+          } else if (isCrossPage) {
             state._layoutDirty = true;
             state.pagesRendered = false;
-            // D9: Clear stale page map so pagination rebuilds correctly
             state.nodeToPage.clear();
             state.pageMap = null;
             state._lastPageMapHash = null;
@@ -1471,15 +1552,12 @@ export function initInput() {
             if (merged) setCursorAtOffset(merged, cursorPos);
           } else {
             const updated = renderNodeById(nodeId1);
-            // Only remove source element after confirming render succeeded
             if (updated) {
               el.remove();
               setCursorAtOffset(updated, cursorPos);
             }
+            state.pagesRendered = false; updatePageBreaks(); updateUndoRedo();
           }
-          recordUndoAction('Merge paragraphs');
-          state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
-          broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
         } catch (err) { console.error('merge:', err); }
       }
       return;
@@ -1516,11 +1594,17 @@ export function initInput() {
         const isCrossPage = el.closest('.page-content') !== next.closest('.page-content');
         try {
           doc.merge_paragraphs(nodeId1, nodeId2);
-          if (isCrossPage) {
-            // Cross-page merge: full re-render to rebuild page map
+          broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
+          recordUndoAction('Merge paragraphs');
+          markDirty();
+
+          // Try WASM-authority page render
+          if (renderAffectedPages(nodeId1)) {
+            const merged = document.querySelector(`[data-node-id="${nodeId1}"]`);
+            if (merged) setCursorAtOffset(merged, cursorPos);
+          } else if (isCrossPage) {
             state._layoutDirty = true;
             state.pagesRendered = false;
-            // D9: Clear stale page map so pagination rebuilds correctly
             state.nodeToPage.clear();
             state.pageMap = null;
             state._lastPageMapHash = null;
@@ -1529,15 +1613,12 @@ export function initInput() {
             if (merged) setCursorAtOffset(merged, cursorPos);
           } else {
             const updated = renderNodeById(nodeId1);
-            // Only remove source element after confirming render succeeded
             if (updated) {
               next.remove();
               setCursorAtOffset(updated, cursorPos);
             }
+            state.pagesRendered = false; updatePageBreaks(); updateUndoRedo();
           }
-          recordUndoAction('Merge paragraphs');
-          state.pagesRendered = false; updatePageBreaks(); updateUndoRedo(); markDirty();
-          broadcastOp({ action: 'mergeParagraphs', nodeId1, nodeId2 });
         } catch (err) { console.error('merge:', err); }
       }
       return;
@@ -1735,7 +1816,7 @@ function _doRichPaste(html, text, info) {
     recordUndoAction('Paste formatted content');
     const ok = pasteStructuredContent(doc, info, parsed, page);
     if (ok) {
-      renderDocument();
+      if (!renderAffectedPages(info.startNodeId)) renderDocument();
       placeCursorAfterPaste(page, text || '', info.startNodeId, info.startOffset);
       updateUndoRedo();
       markDirty();
@@ -1760,8 +1841,10 @@ function _doPlainTextPaste(text, info) {
       doc.insert_text_in_paragraph(info.startNodeId, info.startOffset, text);
       broadcastOp({ action: 'insertText', nodeId: info.startNodeId, offset: info.startOffset, text });
     }
-    syncAllText();
-    renderDocument();
+    if (!renderAffectedPages(info.startNodeId)) {
+      syncAllText();
+      renderDocument();
+    }
     placeCursorAfterPaste(page, text, info.startNodeId, info.startOffset);
     updateUndoRedo();
     markDirty();
@@ -4532,4 +4615,118 @@ export function initTableCellAnnouncements() {
 
     import('./toolbar-handlers.js').then(({ announce: ann }) => { ann(label); });
   });
+
+  // ─── UXP-12: Table Column Resize Drag Handles ───────────────
+  setupTableColumnResize(page, _inputSignal);
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// UXP-12: Table Column Resize — drag handles on cell borders
+// ═══════════════════════════════════════════════════════════════════════
+
+const COL_RESIZE_ZONE = 6; // px from cell edge to trigger resize cursor
+
+function setupTableColumnResize(container, signalOpts) {
+  let resizing = null; // { table, colIndex, startX, startWidths, tableWidth }
+
+  container.addEventListener('mousemove', (e) => {
+    if (resizing) return; // during drag, handled by document-level handler
+    const cell = e.target.closest('td, th');
+    if (!cell) return;
+    const rect = cell.getBoundingClientRect();
+    const nearRight = Math.abs(e.clientX - rect.right) < COL_RESIZE_ZONE;
+    const nearLeft = Math.abs(e.clientX - rect.left) < COL_RESIZE_ZONE && cell.cellIndex > 0;
+    cell.style.cursor = (nearRight || nearLeft) ? 'col-resize' : '';
+  }, signalOpts);
+
+  container.addEventListener('mousedown', (e) => {
+    const cell = e.target.closest('td, th');
+    if (!cell) return;
+    const table = cell.closest('table[data-node-id]');
+    if (!table) return;
+
+    const rect = cell.getBoundingClientRect();
+    const nearRight = Math.abs(e.clientX - rect.right) < COL_RESIZE_ZONE;
+    const nearLeft = Math.abs(e.clientX - rect.left) < COL_RESIZE_ZONE && cell.cellIndex > 0;
+    if (!nearRight && !nearLeft) return;
+
+    e.preventDefault();
+    e.stopPropagation();
+
+    const colIndex = nearLeft ? cell.cellIndex - 1 : cell.cellIndex;
+
+    // Compute current column widths from first row
+    const firstRow = table.querySelector('tr');
+    if (!firstRow) return;
+    const cells = Array.from(firstRow.children);
+    const startWidths = cells.map(c => c.getBoundingClientRect().width);
+    const tableWidth = table.getBoundingClientRect().width;
+
+    resizing = { table, colIndex, startX: e.clientX, startWidths, tableWidth };
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev) => {
+      if (!resizing) return;
+      const dx = ev.clientX - resizing.startX;
+      const newWidths = [...resizing.startWidths];
+      const minW = 30; // minimum column width in px
+
+      // Adjust the dragged column and its neighbor
+      const ci = resizing.colIndex;
+      const nextCi = ci + 1;
+      if (nextCi < newWidths.length) {
+        newWidths[ci] = Math.max(minW, resizing.startWidths[ci] + dx);
+        newWidths[nextCi] = Math.max(minW, resizing.startWidths[nextCi] - dx);
+      } else {
+        newWidths[ci] = Math.max(minW, resizing.startWidths[ci] + dx);
+      }
+
+      // Apply widths to all rows
+      const rows = resizing.table.querySelectorAll('tr');
+      rows.forEach(row => {
+        Array.from(row.children).forEach((c, i) => {
+          if (i < newWidths.length) {
+            c.style.width = newWidths[i] + 'px';
+          }
+        });
+      });
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+
+      if (!resizing) return;
+      const { table: tbl, startWidths: sw } = resizing;
+      resizing = null;
+
+      // Commit widths to WASM
+      const tableId = (tbl.dataset.tableSource || tbl.dataset.nodeId || '').split('-p')[0];
+      if (!tableId || !state.doc) return;
+
+      // Read final widths from DOM
+      const fRow = tbl.querySelector('tr');
+      if (!fRow) return;
+      const finalWidths = Array.from(fRow.children).map(c => {
+        const w = c.getBoundingClientRect().width;
+        // Convert px to points (px * 72/96)
+        return Math.round(w * 72 / 96 * 10) / 10;
+      });
+
+      const widthsCsv = finalWidths.join(',');
+      try {
+        state.doc.set_table_column_widths(tableId, widthsCsv);
+        broadcastOp({ action: 'setTableColumnWidths', tableId, widths: widthsCsv });
+        markDirty();
+      } catch (err) {
+        console.error('Column resize commit failed:', err);
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }, signalOpts);
 }

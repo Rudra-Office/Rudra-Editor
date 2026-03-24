@@ -1,44 +1,45 @@
 # Phase 1: Hardening (Stability & Fidelity)
 
+## Status: Mostly Complete — remaining gaps: concurrent E2E tests, checksum enforcement
+
 ## Goal
-Eliminate data loss, prevent formatting collapse during typing, and stabilize the collaboration handshake. Move the editor from "coarse sync" to "atomic sync."
+Eliminate data loss, prevent formatting collapse during typing, and stabilize the collaboration handshake.
 
-## Key Objectives
+## Completed Items
 
-### 1. Range-Aware Editing (CRDT Integration)
-The current editor uses a "read-all, write-all" approach for paragraphs. This is the #1 cause of lost formatting (bold/italic/links) and cursor jumps.
-- **Action:** Rewrite the `input.js` and `render.js` sync path to use `doc.insert_text_in_paragraph(nodeId, offset, text)` and `doc.delete_text_in_paragraph(nodeId, offset, length)`.
-- **Validation:** Type inside a paragraph with mixed bold and italic text; verify no formatting is lost.
+| ID | Task | Evidence |
+|---|---|---|
+| H-01 | `replace_text` diff-based sync in `syncParagraphText` | render.js:867 — prefix/suffix diff → `replace_text()` |
+| H-02 | `requestCatchup` on reconnect (not `sync-req`) | collab.js:698 |
+| H-03 | Targeted unicast for catch-up ops (`_target` field) | collab.rs:621, filtering at line 369 |
+| H-04 | Unified `access`/`mode` semantics | collab.js:371 sends both from single `accessLevel` |
+| H-06 | Cursor position saved/restored across re-renders | render.js:131-175 |
+| H-07 | `renderNodeById` as default for paragraph edits | input.js: 13 call sites |
+| H-08 | `applySplitParagraphClipping` wired into repaginate | pagination.js:441 |
+| H-09 | 15 missing co-editing op handlers added | collab.js:1240-1750 |
+| H-10 | `normalizeRemoteOp` for field name mismatches | collab.js:1001 |
+| S6-05 | AI/Autocorrect use `replace_text` | ai-inline.js:453, ai-panel.js:640, input.js:2342 |
 
-### 2. Protocol Alignment
-The client and server currently speak slightly different languages for reconnection.
-- **Action:** Standardize on `requestCatchup` for all recovery.
-- **Action:** Ensure the server responds with a version-aware `joined` message that includes the latest `serverVersion`.
+## Remaining Gaps
 
-### 3. Collaboration Resiliency
-- **Unicast Recovery:** Ensure that when a peer requests missed ops, only that peer receives the replay.
-- **Profile Validation:** Ensure `userName` and `userColor` are persisted correctly on the server to prevent "ghost" cursors or color flickering.
+### 1. First-Edit Cache Miss (H-01) — FIXED
+`syncedTextCache` is now pre-populated during `renderPageFromWasm()` using `getEditableText()`. Every paragraph has a cache entry before the user types.
 
-### 4. Cursor & Re-render Stability (H-06, H-07)
-The editor currently re-renders the full document on many operations, which resets cursor position and scroll.
-- **Action:** Save cursor position (nodeId + offset) and scroll position before every re-render, restore after.
-- **Action:** For single-paragraph edits, use `renderNodeById()` instead of `renderDocument()`. Only fall through to full re-render when structural changes affect page layout.
-- **Validation:** Type in a 50-page document — cursor should never jump, scroll should never shift.
+### 2. ~109 `renderDocument()` Calls (S5-03) — MITIGATED
+`renderDocument()` now delegates to `renderDocumentFromWasm()` which uses per-page WASM HTML — no full DOM rebuild. 6 collab op handlers and paste/split/merge in input.js use `renderAffectedPages()` for incremental updates. The remaining callers still invoke `renderDocument()` but it's now a fast WASM-authority path.
 
-### 5. Pagination Fragment Wiring (H-08)
-`applySplitParagraphClipping()` exists in `pagination.js` but is never called from the active render path.
-- **Action:** Call it at the end of `repaginate()` so split paragraphs are visually clipped to their page slice.
-- **Validation:** Long paragraph spanning two pages renders correctly without duplicate text.
+### 3. No Concurrent Editing E2E Tests (H-05 incomplete)
+90 Playwright tests exist but all are single-user. No tests for:
+- Two users typing in the same paragraph
+- Reconnect during active editing
+- Offline buffer replay ordering
+- Page-boundary typing with remote edits
 
-### 6. Missing Co-editing Op Handlers (H-09, H-10)
-15+ operations are broadcast by the editor but have no handler on the receiving side, causing silent failures.
-- **Action:** Add remote op handlers for: `insertColumnBreak`, `insertCommentReply`, `setImageWrapMode`, `insertFootnote`, `insertEndnote`, `mergeCells`, `splitCell`, `setParagraphSpacing`, `setParagraphKeep`, `setPageSetup`, `setSectionColumns`, `setTabStops`, `insertEquation`.
-- **Action:** Add `normalizeRemoteOp()` to translate field name mismatches between peers (`removeNode`→`deleteNode`, `tableNodeId`→`tableId`, `rowIndex`→`index`).
-- **Note:** The `codex/identify-issues-in-co-editing-experience` branch already implements all of these.
+**Impact:** Collab regressions go undetected.
+**Fix needed:** Add multi-tab or multi-browser Playwright tests using the relay server.
 
-### 7. Regression Suite (H-05)
-- Create Playwright tests that simulate high-latency connections.
-- Test "Concurrent Typing" where two users type in the same paragraph simultaneously.
-- Test typing at the last line of a page (page carry behavior).
-- Test backspace at the top of a continuation page (merge across boundary).
-- Test reconnect while other peers continue editing.
+### 4. Checksum Validation Warns But Doesn't Reject (S7-07 incomplete)
+Checksum is computed and sent during fullSync (collab.js:964) but the receive side only logs a warning at line 1753 and still applies the sync.
+
+**Impact:** Corrupt snapshots can still propagate.
+**Fix needed:** Change warning to rejection + request retransmission.

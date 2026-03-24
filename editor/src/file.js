@@ -668,6 +668,21 @@ async function _openFileImpl(bytes, name) {
       }
     } catch (_) {}
 
+    // U-11: Import fidelity reporting — notify user about unsupported objects
+    try {
+      if (typeof state.doc.fidelity_report_json === 'function') {
+        const report = JSON.parse(state.doc.fidelity_report_json());
+        if (report.total > 0) {
+          const parts = [];
+          if (report.charts > 0) parts.push(`${report.charts} chart${report.charts > 1 ? 's' : ''}`);
+          if (report.smartart > 0) parts.push(`${report.smartart} SmartArt diagram${report.smartart > 1 ? 's' : ''}`);
+          if (report.ole > 0) parts.push(`${report.ole} embedded object${report.ole > 1 ? 's' : ''}`);
+          if (report.missingImages > 0) parts.push(`${report.missingImages} missing image${report.missingImages > 1 ? 's' : ''}`);
+          showToast(`${report.total} object${report.total > 1 ? 's' : ''} shown as placeholder${report.total > 1 ? 's' : ''}: ${parts.join(', ')}`, 'info', 8000);
+        }
+      }
+    } catch (_) {}
+
     state.dirty = false;
     updateDirtyIndicator();
     startAutosave();

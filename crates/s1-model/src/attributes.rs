@@ -383,6 +383,8 @@ pub enum AttributeKey {
     CommentDate,
     /// Parent comment ID for threaded replies.
     CommentParentId,
+    /// Whether the comment is resolved (true/false).
+    CommentResolved,
 
     // Revision / track changes attributes
     /// Revision type: "Insert", "Delete", or "FormatChange".

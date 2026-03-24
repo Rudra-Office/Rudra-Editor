@@ -14,7 +14,7 @@ export { exitFormatPainter, applyFormatPainter } from './features/document/toolb
 export { enterHeaderFooterEditMode, exitHeaderFooterEditMode } from './features/document/toolbar/header-footer.js';
 export { getAutoCorrectMap, isAutoCorrectEnabled } from './features/document/toolbar/autocorrect.js';
 export { setZoomLevel } from './features/document/toolbar/zoom.js';
-import { renderDocument, renderNodeById, renderSmart, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty } from './render.js';
+import { renderDocument, renderNodeById, renderSmart, syncParagraphText, syncAllText, applyPageDimensions, isCanvasMode, setCanvasMode, initCanvasRenderer, markLayoutDirty, renderAffectedPages } from './render.js';
 import { getSelectionInfo, setCursorAtOffset, setSelectionRange, getActiveNodeId, saveSelection } from './selection.js';
 import { insertImage } from './images.js';
 import { updatePageBreaks } from './pagination.js';
@@ -1758,14 +1758,25 @@ function initAppMenubar() {
   });
 }
 
-// ─── Comment Replies (in-memory store) ────────────
-// Replies stored in-memory keyed by parent comment ID.
-// Each reply: { id, parentId, author, text, timestamp }
+// ─── Comment Replies / Resolve State ──────────────
+// Replies are still maintained in JS state for immediate threaded UI rendering.
+// Resolve state is persisted locally and mirrored over collab so reviewers see
+// the same open/resolved status during a session.
 try { state.commentReplies = JSON.parse(localStorage.getItem('s1_commentReplies') || '[]'); } catch(_) { state.commentReplies = []; }
 if (!state.commentReplies) state.commentReplies = [];
+try { state.resolvedComments = new Set(JSON.parse(localStorage.getItem('s1_resolvedComments') || '[]')); } catch(_) { state.resolvedComments = new Set(); }
+if (!state.resolvedComments) state.resolvedComments = new Set();
 let _replyCounter = 0;
 
-function refreshComments() {
+function persistCommentReplies() {
+  try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies || [])); } catch (_) {}
+}
+
+function persistResolvedComments() {
+  try { localStorage.setItem('s1_resolvedComments', JSON.stringify(Array.from(state.resolvedComments || []))); } catch (_) {}
+}
+
+export function refreshComments() {
   const list = $('commentsList');
   if (!list || !state.doc) return;
   try {
@@ -1827,9 +1838,10 @@ function refreshComments() {
           broadcastOp({ action: 'deleteComment', commentId: id });
           // Also remove any replies to this comment
           state.commentReplies = (state.commentReplies || []).filter(r => r.parentId !== id);
-          try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch(_) {}
+          persistCommentReplies();
           // Also remove from resolved set
           if (state.resolvedComments) state.resolvedComments.delete(id);
+          persistResolvedComments();
           renderDocument();
           updateUndoRedo();
           refreshComments();
@@ -1846,11 +1858,14 @@ function refreshComments() {
         const wasResolved = state.resolvedComments.has(id);
         if (wasResolved) {
           state.resolvedComments.delete(id);
+          broadcastOp({ action: 'resolveComment', commentId: id, resolved: false });
           announce('Comment reopened');
         } else {
           state.resolvedComments.add(id);
+          broadcastOp({ action: 'resolveComment', commentId: id, resolved: true });
           announce('Comment resolved');
         }
+        persistResolvedComments();
         refreshComments();
       });
     });
@@ -1886,7 +1901,8 @@ function refreshComments() {
       btn.addEventListener('click', () => {
         const replyId = btn.dataset.replyId;
         state.commentReplies = (state.commentReplies || []).filter(r => r.id !== replyId);
-        try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch(_) {}
+        persistCommentReplies();
+        broadcastOp({ action: 'deleteCommentReply', replyId });
         refreshComments();
       });
     });
@@ -2061,7 +2077,7 @@ function showEditReplyForm(replyId) {
     const newText = input.value.trim();
     if (newText && newText !== oldText) {
       state.commentReplies = (state.commentReplies || []).map(r => r.id === replyId ? { ...r, text: newText } : r);
-      try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch(_) {}
+      persistCommentReplies();
       broadcastOp({ action: 'editCommentReply', replyId, text: newText });
       refreshComments();
     } else {
@@ -2114,19 +2130,6 @@ function submitReply(parentId, text) {
   if (!text || !text.trim()) return;
   const author = 'User';
   const trimmed = text.trim();
-
-  // Persist the reply via the WASM document model if available
-  if (state.doc && parentId) {
-    try {
-      state.doc.insert_comment_reply(parentId, author, trimmed);
-      broadcastOp({ action: 'insertCommentReply', parentId, author, text: trimmed });
-    } catch (e) {
-      // WASM method may not exist in all builds — fall through to local storage
-      console.warn('insert_comment_reply not available, storing locally:', e);
-    }
-  }
-
-  // Store in local state for immediate UI rendering
   const reply = {
     id: 'reply-' + (++_replyCounter) + '-' + Date.now(),
     parentId,
@@ -2134,9 +2137,22 @@ function submitReply(parentId, text) {
     text: trimmed,
     timestamp: Date.now(),
   };
+
+  // Persist the reply via the WASM document model if available
+  if (state.doc && parentId) {
+    try {
+      state.doc.insert_comment_reply(parentId, author, trimmed);
+      broadcastOp({ action: 'insertCommentReply', replyId: reply.id, parentId, author, text: trimmed, timestamp: reply.timestamp });
+    } catch (e) {
+      // WASM method may not exist in all builds — fall through to local storage
+      console.warn('insert_comment_reply not available, storing locally:', e);
+    }
+  }
+
+  // Store in local state for immediate UI rendering
   if (!state.commentReplies) state.commentReplies = [];
   state.commentReplies.push(reply);
-  try { localStorage.setItem('s1_commentReplies', JSON.stringify(state.commentReplies)); } catch(_) {}
+  persistCommentReplies();
   refreshComments();
 }
 
@@ -7759,4 +7775,3 @@ function initSignDocumentModal() {
     }
   });
 }
-

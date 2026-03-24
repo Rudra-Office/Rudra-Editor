@@ -1,135 +1,86 @@
 # Phase 4: Editor UX & Feature Parity
 
+## Status: Not Started
+
 ## Goal
-Close the gap between Rudra Office and production document editors (Google Docs, OnlyOffice, Collabora Online). Move from 65% → 90% by implementing the features and polish that professional users expect.
+Close the gap between Rudra Office and production editors (Google Docs, OnlyOffice, Collabora). These are the features users expect from a document editor and will evaluate against.
 
-## Current Gap Assessment
+## Current vs Target
 
-| Area | Current | Target | Key Missing Pieces |
-|------|---------|--------|-------------------|
-| Comments & Review | 20% | 85% | No threading UI, no resolve, no inline edit |
-| Track Changes | 25% | 85% | Accept/reject UI incomplete, no sidebar workflow |
-| Tables (doc) | 30% | 80% | No Tab nav, no resize handles, no sort |
-| Page Layout | 40% | 85% | No per-section H/F, section breaks stub-only |
-| Paste Fidelity | 45% | 80% | No Paste Special, formatting lossy |
-| PDF Editing | 40% | 75% | Features exist in WASM but not wired to UI |
-| Conflict Awareness | 10% | 70% | No "X is editing here" indicators |
-| Mobile Polish | 20% | 60% | No selection handles, no cursor blink |
+| Area | Current | Target | Gap |
+|------|---------|--------|-----|
+| Comments & Review | Insert-only, no threading | Reply, resolve, sidebar | Large |
+| Track Changes | Toggle exists, accept/reject stubbed | Full sidebar workflow | Large |
+| Tables (doc) | Basic insert/delete, no Tab nav | Tab nav, resize, sort | Medium |
+| Page Layout | Single header/footer, section breaks stubbed | Per-section H/F, full section breaks | Medium |
+| Footnotes | Insert-only | Edit, delete, renumber | Medium |
+| Paste | Works but no options | Paste Special dialog | Small |
+| PDF | Viewer works, editing unwired | Page ops, forms, signing | Medium |
+| Conflict UX | None | "X is editing here" indicators | Small |
+| Offline | Buffer exists | Proper merge strategy | Medium |
 
----
+## Tasks
 
-## Key Objectives
+### Critical (blocks professional use)
 
-### 1. Comments & Track Changes (U-01, U-02) — Critical
+**U-01: Comment Threading**
+- Reply button on each comment
+- Resolve/unresolve toggle
+- Sidebar panel with filter (all / open / resolved)
+- Click comment to scroll to anchor
+- Files: `input.js` (handlers), `toolbar-handlers.js` (panel), `styles.css`
+- WASM: `insert_comment_reply()`, `resolve_comment()` needed
 
-**Comments threading:**
-- Reply button on each comment → opens inline reply input
-- Resolve/unresolve toggle (checkbox or button)
-- Click comment to scroll to anchored text
-- Comment count badge in status bar
-- Sidebar panel showing all comments with filter (all / open / resolved)
-- **Files:** `input.js` (comment handlers), `toolbar-handlers.js` (comment panel), `styles.css`
-- **WASM:** `insert_comment_reply()`, `resolve_comment()` already exist or need adding
+**U-02: Track Changes Accept/Reject**
+- Sidebar showing all pending changes
+- Accept/Reject per change + bulk actions
+- Visual diff in document (green insertions, red deletions)
+- Navigate between changes
+- Files: `toolbar-handlers.js:5604-5885` (existing handlers)
+- WASM: `accept_change()`, `reject_change()`, `get_tracked_changes_json()` exist
 
-**Track changes:**
-- Sidebar showing all pending changes with accept/reject buttons per change
-- Accept All / Reject All bulk actions
-- Visual diff highlighting in document (insertions green, deletions red strikethrough)
-- Navigate between changes (previous/next buttons)
-- **Files:** `toolbar-handlers.js:5604-5885` (existing track changes handlers), `file.js:1059-1071`
-- **WASM:** `accept_change()`, `reject_change()`, `get_tracked_changes_json()` exist
+### High Priority
 
-### 2. Document Tables (U-04, U-07, U-08) — High
+**U-03: Per-Section Headers/Footers**
+- Different first page
+- Odd/even pages
+- Section-level editing
+- WASM section model supports this; editor rendering doesn't use it
 
-**Tab navigation:**
-- Tab key moves to next cell, Shift+Tab to previous
+**U-04: Tab Navigation in Document Tables**
+- Tab → next cell, Shift+Tab → previous
 - Tab at last cell creates new row
-- Arrow keys move between cells when cursor is at cell boundary
-- **File:** `input.js` — intercept Tab in `keydown` handler when cursor is inside a `<td>`
+- File: `input.js` keydown handler, intercept Tab when inside `<td>`
 
-**Column resize:**
-- Drag handles on column borders (visible on hover)
-- Visual resize indicator line during drag
-- Minimum column width constraint
-- **File:** new handler in `input.js` or separate `table-resize.js`
+**U-05: Footnote/Endnote Editing**
+- Click reference → scroll to footnote area
+- Click text → editable region
+- Delete reference → removes footnote
+- WASM: needs `edit_footnote()`, `delete_footnote()`
 
-**Sort:**
-- Right-click context menu → Sort Ascending / Sort Descending
-- Operates on selected column
-- **WASM:** needs `sort_table_column(tableId, colIndex, ascending)` or JS-side sort + reorder ops
+**U-06: Paste Special**
+- Ctrl+Shift+V opens modal
+- Options: Keep formatting, Match destination, Plain text, Values only
 
-### 3. Page Layout (U-03, U-05, U-09) — High
+**U-13: PDF Editor Wiring**
+- Initialize `_wasmPdfEditor = wasm.WasmPdfEditor.open(bytes)` during PDF open
+- Gate page ops UI on editor availability
+- Free on close
 
-**Per-section headers/footers:**
-- Different first page header/footer
-- Odd/even page headers/footers
-- Section-level header/footer editing
-- **WASM:** Section model already supports this, editor rendering doesn't use it
-- **Files:** `render.js` (header/footer rendering), `input.js:130-157` (edit mode)
+### Medium Priority
 
-**Footnote/endnote editing:**
-- Click footnote reference → scroll to footnote area
-- Click footnote text → editable contenteditable region
-- Delete footnote reference → removes footnote
-- Renumbering on insert/delete
-- **WASM:** `insert_footnote()`, `insert_endnote()` exist; need `edit_footnote()`, `delete_footnote()`
-
-**Section breaks:**
-- Insert → Section Break submenu (Next Page, Continuous, Even Page, Odd Page)
-- Visual indicator in document flow
-- **WASM:** `insert_section_break()` exists, editor UI stubs need wiring
-
-### 4. Paste & Clipboard (U-06) — High
-
-**Paste Special dialog:**
-- Ctrl+Shift+V opens modal with options:
-  - Keep Source Formatting
-  - Match Destination Formatting
-  - Plain Text Only
-  - Values Only (for spreadsheet paste)
-- **Files:** `input.js` paste handler, new modal in HTML
-
-### 5. Collaboration UX (U-11) — Medium
-
-**Conflict indicators:**
-- When remote user is editing a paragraph, show subtle colored border/badge
-- "Alice is typing..." indicator near the affected paragraph
-- Fade out after 3 seconds of inactivity
-- **Files:** `collab.js` awareness handler, `styles.css` for indicator styles
-
-### 6. PDF Integration (U-15) — High
-
-**Wire `_wasmPdfEditor` on PDF open:**
-- Initialize in `file.js` PDF open path
-- Gate page operations UI on editor availability
-- Free on document switch/close
-- **Files:** `file.js:513-573`, `pdf-pages.js`
-
-### 7. Production Polish (U-13, U-14, U-16) — Medium/Low
-
-**Cursor blinking:** CSS animation on primary cursor element
-**Import fidelity:** Call `fidelity_report_json()` after open, show toast if placeholders > 0
-**Self-host fonts:** Bundle NotoSans + MaterialSymbols, remove Google Fonts/jsDelivr CDN links
-
----
+**U-07: Table Column Resize** — Drag handles on column borders
+**U-08: Table Sort** — Right-click → Sort Ascending/Descending
+**U-09: Section Breaks** — Full implementation (next page, continuous, odd/even)
+**U-10: Conflict Indicators** — "Alice is typing..." near affected paragraph
+**U-11: Import Fidelity Reporting** — "3 charts shown as placeholders" toast
+**U-12: Self-Host Fonts** — Bundle NotoSans + MaterialSymbols, remove CDN
 
 ## Dependencies
 
 | Task | Depends On |
 |------|-----------|
-| U-01 (Comments) | Phase 1 complete (stable typing) |
-| U-02 (Track Changes) | Phase 1 complete |
-| U-03 (Per-section H/F) | Phase 2 W-01 (page fragment API) |
-| U-04 (Tab nav tables) | None — can start immediately |
-| U-05 (Footnote editing) | WASM API additions needed |
-| U-11 (Conflict indicators) | Phase 1 H-01 (range-aware ops) |
-| U-15 (PDF wiring) | None — can start immediately |
-
-## Estimated Effort
-
-| Priority | Tasks | Estimate |
-|----------|-------|----------|
-| Critical | U-01, U-02 | 2-3 weeks |
-| High | U-03, U-04, U-05, U-06, U-15 | 2-3 weeks |
-| Medium | U-07, U-08, U-09, U-11, U-14, U-16 | 2-3 weeks |
-| Low | U-10, U-12, U-13, U-17 | 1-2 weeks |
+| U-01, U-02 | Phase 1 complete (stable typing) |
+| U-03 | Phase 2 S5-01 (WASM fragments for per-section rendering) |
+| U-04, U-06, U-13 | None — can start now |
+| U-10 | Phase 1 H-01 (range-aware ops for tracking who edits where) |

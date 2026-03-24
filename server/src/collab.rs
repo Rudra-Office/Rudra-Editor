@@ -23,7 +23,7 @@ use futures_util::{SinkExt, StreamExt};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{broadcast, Mutex};
+use tokio::sync::{broadcast, mpsc, Mutex};
 
 use crate::routes::AppState;
 use crate::storage::StorageBackend;
@@ -684,6 +684,105 @@ async fn handle_socket(socket: WebSocket, file_id: String, params: WsParams, sta
                         _ => {
                             // Unknown type — still broadcast for extensibility
                             let _ = tx_clone.send(text_str);
+                        }
+                    }
+                }
+                // S-01: Binary WebSocket frames for fullSync.
+                // Format: [JSON header UTF-8] [NUL byte] [raw DOCX bytes]
+                // The header contains the op metadata; the bytes after NUL
+                // are the document payload (no base64 encoding needed).
+                Message::Binary(data) => {
+                    let bytes: &[u8] = &data;
+                    // Find NUL separator between header and payload
+                    if let Some(nul_pos) = bytes.iter().position(|&b| b == 0) {
+                        let header_bytes = &bytes[..nul_pos];
+                        let payload_bytes = &bytes[nul_pos + 1..];
+
+                        if let Ok(header_str) = std::str::from_utf8(header_bytes) {
+                            // Size check
+                            if header_str.len() + payload_bytes.len() > MAX_WS_MESSAGE_SIZE {
+                                tracing::warn!(
+                                    "Dropping oversized binary WS message ({} bytes) from {}",
+                                    bytes.len(),
+                                    sender_peer_id
+                                );
+                                continue;
+                            }
+
+                            // Rate limit
+                            let now = std::time::Instant::now();
+                            if now.duration_since(rate.window_start).as_secs() >= 1 {
+                                rate.count = 0;
+                                rate.window_start = now;
+                            }
+                            rate.count += 1;
+                            if rate.count > MAX_MESSAGES_PER_SECOND {
+                                continue;
+                            }
+
+                            sessions_for_recv
+                                .update_activity(&file_id_recv, &sender_peer_id)
+                                .await;
+
+                            // Parse header to extract op data
+                            if let Ok(parsed) =
+                                serde_json::from_str::<serde_json::Value>(header_str)
+                            {
+                                if parsed.get("type").and_then(|t| t.as_str()) == Some("op") {
+                                    let data_str =
+                                        parsed.get("data").and_then(|d| d.as_str()).unwrap_or("");
+
+                                    // Record op and get version
+                                    let room_version =
+                                        rooms.record_op(&file_id_recv, data_str).await;
+
+                                    // If this is a fullSync with binary payload, update snapshot
+                                    if let Ok(inner) =
+                                        serde_json::from_str::<serde_json::Value>(data_str)
+                                    {
+                                        if inner.get("action").and_then(|a| a.as_str())
+                                            == Some("fullSync")
+                                            && inner.get("binary").and_then(|b| b.as_bool())
+                                                == Some(true)
+                                        {
+                                            sessions_for_recv
+                                                .update_snapshot(
+                                                    &file_id_recv,
+                                                    payload_bytes.to_vec(),
+                                                )
+                                                .await;
+                                            tracing::debug!(
+                                                "Updated snapshot for {} from binary fullSync ({} bytes)",
+                                                file_id_recv,
+                                                payload_bytes.len()
+                                            );
+                                        }
+                                    }
+
+                                    // Re-encode as base64 JSON for Text-only peers
+                                    use base64::Engine as _;
+                                    let b64 = base64::engine::general_purpose::STANDARD
+                                        .encode(payload_bytes);
+                                    let mut inner_val: serde_json::Value =
+                                        serde_json::from_str(data_str).unwrap_or_default();
+                                    if let Some(obj) = inner_val.as_object_mut() {
+                                        obj.insert(
+                                            "docBase64".to_string(),
+                                            serde_json::Value::String(b64),
+                                        );
+                                        obj.remove("binary");
+                                    }
+
+                                    let forwarded = serde_json::json!({
+                                        "type": "op",
+                                        "peerId": sender_peer_id,
+                                        "data": inner_val.to_string(),
+                                        "serverVersion": room_version,
+                                        "_sender": sender_peer_id,
+                                    });
+                                    let _ = tx_clone.send(forwarded.to_string());
+                                }
+                            }
                         }
                     }
                 }

@@ -105,7 +105,7 @@ export function repaginate() {
 const newNodeToPage = new Map();
 // tableChunkMap: Map<pageNum, Map<tableId, {rowIds, isContinuation, chunkId}>>
 const tableChunkMap = new Map();
-// paraSplitMap: Map<pageNum, Map<nodeId, {isContinuation, splitAtLine, lineCount, blockHeight, splitId}>>
+// paraSplitMap: Map<pageNum, Map<nodeId, {isContinuation, splitAtLine, lineCount, blockHeight, offsetHeight, charStart, charEnd, splitId}>>
 const paraSplitMap = new Map();
 
 // S3-15: Load section properties for per-section headers/footers
@@ -145,6 +145,9 @@ for (const pg of pages) {
           splitAtLine: split.splitAtLine,
           lineCount: split.lineCount,
           blockHeight: split.blockHeight,
+          offsetHeight: split.offsetHeight,
+          charStart: split.charStart,
+          charEnd: split.charEnd,
           splitId,
         });
       }
@@ -181,17 +184,10 @@ for (const pg of pages) {
   const existingPages = container.querySelectorAll('.doc-page');
   const existingCount = existingPages.length;
 
-  // Create missing pages
-  for (let i = existingCount; i < numPages; i++) {
-    const pg = pages[i];
-    const pageNum = i + 1;
-    
-    // S3-15: Section-aware header/footer rendering
-    let hdr = '', ftr = '';
-    const section = sections[pg.sectionIndex];
+  function resolvePageHeaderFooter(pageNum, pg) {
+    const isFirstPage = pageNum === 1;
+    const section = sections[pg?.sectionIndex];
     if (section) {
-      // Determine type based on page number within section
-      // For simplicity, we use global page number for First/Even logic
       let hfType = 'default';
       if (pageNum === 1) hfType = 'first';
       else if (pageNum % 2 === 0) hfType = 'even';
@@ -199,18 +195,28 @@ for (const pg of pages) {
       const hRef = section.headers.find(h => h.type === hfType) || section.headers.find(h => h.type === 'default');
       const fRef = section.footers.find(f => f.type === hfType) || section.footers.find(f => f.type === 'default');
 
+      let hdr = '';
+      let ftr = '';
       if (hRef) {
-        try { hdr = state.doc.render_node_html(hRef.nodeId); } catch(_) {}
+        try { hdr = state.doc.render_node_html(hRef.nodeId); } catch (_) {}
       }
       if (fRef) {
-        try { ftr = state.doc.render_node_html(fRef.nodeId); } catch(_) {}
+        try { ftr = state.doc.render_node_html(fRef.nodeId); } catch (_) {}
       }
-    } else {
-      // Fallback to legacy global headers if section info missing
-      const isFirstPage = pageNum === 1;
-      hdr = (isFirstPage && hasDifferentFirst) ? firstPageHeaderHtml : defaultHeaderHtml;
-      ftr = (isFirstPage && hasDifferentFirst) ? firstPageFooterHtml : defaultFooterHtml;
+      return { hdr, ftr };
     }
+
+    return {
+      hdr: (isFirstPage && hasDifferentFirst) ? firstPageHeaderHtml : defaultHeaderHtml,
+      ftr: (isFirstPage && hasDifferentFirst) ? firstPageFooterHtml : defaultFooterHtml,
+    };
+  }
+
+  // Create missing pages
+  for (let i = existingCount; i < numPages; i++) {
+    const pg = pages[i];
+    const pageNum = i + 1;
+    const { hdr, ftr } = resolvePageHeaderFooter(pageNum, pg);
 
     const pageEl = createPageElement(pageNum, pg, dims, hdr, ftr, numPages);
     container.appendChild(pageEl);
@@ -234,11 +240,9 @@ for (const pg of pages) {
     // Update page dimensions
     applyPageStyle(pageEl, pg, dims);
 
-    // Update header/footer — use sequential index (i+1), NOT pg.pageNum from WASM
+    // Update header/footer using the same section-aware logic as page creation.
     const pageNum = i + 1;
-    const isFirstPage = pageNum === 1;
-    const hdr = (isFirstPage && hasDifferentFirst) ? firstPageHeaderHtml : defaultHeaderHtml;
-    const ftr = (isFirstPage && hasDifferentFirst) ? firstPageFooterHtml : defaultFooterHtml;
+    const { hdr, ftr } = resolvePageHeaderFooter(pageNum, pg);
     updatePageHeaderFooter(pageEl, pageNum, numPages, hdr, ftr);
 
     // Build the effective node ID list for this page (replacing table/split IDs with chunk/split IDs)
@@ -310,25 +314,29 @@ for (const pg of pages) {
       // Check if this is a split paragraph
       const split = pageSplits?.get(originalId);
       if (split) {
-        // Split paragraph: render from WASM, then apply CSS clipping
+        // Split paragraph: prefer a page-specific WASM slice. CSS clipping stays
+        // as a fallback for builds that don't expose slice rendering yet.
         try {
-          const html = doc.render_node_html(originalId);
+          const html = typeof doc.render_node_slice === 'function'
+            ? doc.render_node_slice(originalId, split.charStart || 0, split.charEnd || 0)
+            : doc.render_node_html(originalId);
           const temp = document.createElement('div');
           temp.innerHTML = html;
           const newEl = temp.firstElementChild;
           if (newEl) {
             if (!newEl.innerHTML.trim()) newEl.innerHTML = '<br>';
             newEl.dataset.nodeId = effectiveId;
+            if (typeof doc.render_node_slice === 'function') {
+              newEl.dataset.sliceRendered = 'true';
+            }
             if (split.isContinuation) {
-              // Continuation: wrap in a clipping container that hides the first N lines.
-              // We use a wrapper div with overflow:hidden and a negative margin-top
-              // on the inner paragraph to scroll the content up, hiding the already-shown lines.
               newEl.dataset.splitContinuation = 'true';
               newEl.dataset.splitAtLine = String(split.splitAtLine);
               newEl.dataset.splitOffsetHeight = String(split.offsetHeight);
-              newEl.style.listStyleType = 'none'; // Don't repeat list markers
+              if (!newEl.dataset.sliceRendered) {
+                newEl.style.listStyleType = 'none'; // Don't repeat list markers in fallback mode
+              }
             } else {
-              // First part of split: mark it so we can apply height clipping after layout
               newEl.dataset.splitFirst = 'true';
               newEl.dataset.splitAtLine = String(split.splitAtLine);
               newEl.dataset.splitBlockHeight = String(split.blockHeight);
@@ -665,6 +673,9 @@ function ensureSinglePage(container) {
 /**
  * Sync all text content to WASM (inline to avoid circular import with render.js).
  */
+// DEPRECATED: Legacy DOM→WASM sync. Only used in the repaginate() fallback path.
+// With WASM-authority rendering (get_page_html), this sync is unnecessary because
+// the editor never reads DOM text — WASM is the source of truth.
 function syncAllTextInline() {
   const { doc } = state;
   if (!doc) return;
@@ -708,6 +719,9 @@ function substitutePageNumbers(container, pageNum, totalPages) {
  * and visually split them by cloning to the next page with CSS clipping.
  * This works regardless of whether WASM provides font-accurate line heights.
  */
+// DEPRECATED: Legacy DOM-measurement overflow detection. Only used in repaginate()
+// fallback path. With WASM-authority rendering (get_page_html), the layout engine
+// determines page breaks — no DOM measurement needed.
 function domBasedOverflowSplit() {
   const pageEls = state.pageElements;
   if (!pageEls || pageEls.length < 1) return;
@@ -809,6 +823,9 @@ function domBasedOverflowSplit() {
  *   is also marked non-editable to prevent duplicate editing issues (editing
  *   should happen on the first-half element; changes propagate via WASM sync).
  */
+// DEPRECATED: Legacy CSS-clipping for split paragraphs. Only used in repaginate()
+// fallback path. With WASM-authority rendering (get_page_html), split paragraphs
+// are rendered as separate fragments with data-split attributes — no CSS clipping.
 function applySplitParagraphClipping() {
   const pageEls = state.pageElements;
   if (!pageEls || pageEls.length === 0) return;
@@ -819,6 +836,11 @@ function applySplitParagraphClipping() {
 
     // Handle first-half split paragraphs: clip to blockHeight
     contentEl.querySelectorAll('[data-split-first]').forEach(el => {
+      if (el.dataset.sliceRendered === 'true') {
+        el.style.maxHeight = '';
+        el.style.overflow = '';
+        return;
+      }
       const heightPt = parseFloat(el.dataset.splitBlockHeight);
       if (heightPt && heightPt > 0) {
         const heightPx = Math.ceil(heightPt * PT_TO_PX);
@@ -830,6 +852,11 @@ function applySplitParagraphClipping() {
     // Handle continuation split paragraphs: hide already-shown lines
     contentEl.querySelectorAll('[data-split-continuation]').forEach(el => {
       try {
+        if (el.dataset.sliceRendered === 'true') {
+          el.style.marginTop = '';
+          el.contentEditable = 'false';
+          return;
+        }
         const splitAtLine = parseInt(el.dataset.splitAtLine, 10) || 0;
         if (splitAtLine <= 0) return;
 

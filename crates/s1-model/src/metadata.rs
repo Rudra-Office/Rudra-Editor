@@ -19,6 +19,8 @@ pub struct DocumentMetadata {
     pub language: Option<String>,
     /// Application-specific custom properties.
     pub custom_properties: HashMap<String, String>,
+    /// Whether track changes mode is active.
+    pub track_changes: bool,
 }
 
 impl DocumentMetadata {
