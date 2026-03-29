@@ -408,29 +408,59 @@ fn write_paragraph_children(
 
         match child.node_type {
             NodeType::Run => {
-                let child_url = child
-                    .attributes
-                    .get_string(&AttributeKey::HyperlinkUrl)
-                    .map(|s| s.to_string());
-
-                // Close hyperlink if URL changed
-                if current_hyperlink_url.is_some() && current_hyperlink_url != child_url {
-                    xml.push_str("</text:a>");
-                    current_hyperlink_url = None;
-                }
-
-                // Open hyperlink if needed
-                if let Some(ref url) = child_url {
-                    if current_hyperlink_url.is_none() {
-                        xml.push_str(&format!(
-                            r#"<text:a xlink:href="{}" xlink:type="simple">"#,
-                            escape_xml(url)
-                        ));
-                        current_hyperlink_url = Some(url.clone());
+                // Check if this is a change tracking marker (not a real text run)
+                if let Some(rev_type) = child.attributes.get_string(&AttributeKey::RevisionType) {
+                    close_hyperlink(&mut current_hyperlink_url, xml);
+                    if let Some(change_id) = child.attributes.get_string(&AttributeKey::RevisionId)
+                    {
+                        let cid = escape_xml(change_id);
+                        match rev_type {
+                            "ChangeStart" => {
+                                xml.push_str(&format!(
+                                    r#"<text:change-start text:change-id="{cid}"/>"#
+                                ));
+                            }
+                            "ChangeEnd" => {
+                                xml.push_str(&format!(
+                                    r#"<text:change-end text:change-id="{cid}"/>"#
+                                ));
+                            }
+                            "Change" => {
+                                xml.push_str(&format!(
+                                    r#"<text:change text:change-id="{cid}"/>"#
+                                ));
+                            }
+                            _ => {
+                                // Regular revision-marked run — write as normal
+                                write_run(doc, child_id, xml, auto_styles, counter);
+                            }
+                        }
                     }
-                }
+                } else {
+                    let child_url = child
+                        .attributes
+                        .get_string(&AttributeKey::HyperlinkUrl)
+                        .map(|s| s.to_string());
 
-                write_run(doc, child_id, xml, auto_styles, counter);
+                    // Close hyperlink if URL changed
+                    if current_hyperlink_url.is_some() && current_hyperlink_url != child_url {
+                        xml.push_str("</text:a>");
+                        current_hyperlink_url = None;
+                    }
+
+                    // Open hyperlink if needed
+                    if let Some(ref url) = child_url {
+                        if current_hyperlink_url.is_none() {
+                            xml.push_str(&format!(
+                                r#"<text:a xlink:href="{}" xlink:type="simple">"#,
+                                escape_xml(url)
+                            ));
+                            current_hyperlink_url = Some(url.clone());
+                        }
+                    }
+
+                    write_run(doc, child_id, xml, auto_styles, counter);
+                }
             }
             NodeType::LineBreak => {
                 close_hyperlink(&mut current_hyperlink_url, xml);

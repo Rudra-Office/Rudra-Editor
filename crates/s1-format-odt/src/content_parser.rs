@@ -457,6 +457,59 @@ fn parse_paragraph_into(
                             child_index += 1;
                         }
                     }
+                    // ODF change tracking inline markers
+                    b"change-start" => {
+                        if let Some(change_id) = get_attr(e, b"change-id") {
+                            let run_id = doc.next_id();
+                            let mut run = Node::new(run_id, NodeType::Run);
+                            run.attributes.set(
+                                AttributeKey::RevisionType,
+                                AttributeValue::String("ChangeStart".into()),
+                            );
+                            run.attributes.set(
+                                AttributeKey::RevisionId,
+                                AttributeValue::String(change_id),
+                            );
+                            doc.insert_node(para_id, child_index, run)
+                                .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+                            child_index += 1;
+                        }
+                    }
+                    b"change-end" => {
+                        if let Some(change_id) = get_attr(e, b"change-id") {
+                            let run_id = doc.next_id();
+                            let mut run = Node::new(run_id, NodeType::Run);
+                            run.attributes.set(
+                                AttributeKey::RevisionType,
+                                AttributeValue::String("ChangeEnd".into()),
+                            );
+                            run.attributes.set(
+                                AttributeKey::RevisionId,
+                                AttributeValue::String(change_id),
+                            );
+                            doc.insert_node(para_id, child_index, run)
+                                .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+                            child_index += 1;
+                        }
+                    }
+                    b"change" => {
+                        // Point change (collapsed — e.g. deletion point)
+                        if let Some(change_id) = get_attr(e, b"change-id") {
+                            let run_id = doc.next_id();
+                            let mut run = Node::new(run_id, NodeType::Run);
+                            run.attributes.set(
+                                AttributeKey::RevisionType,
+                                AttributeValue::String("Change".into()),
+                            );
+                            run.attributes.set(
+                                AttributeKey::RevisionId,
+                                AttributeValue::String(change_id),
+                            );
+                            doc.insert_node(para_id, child_index, run)
+                                .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+                            child_index += 1;
+                        }
+                    }
                     _ => {}
                 }
             }

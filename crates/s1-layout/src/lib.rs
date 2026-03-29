@@ -15,6 +15,8 @@
 pub mod engine;
 pub mod error;
 pub mod html;
+mod layout_helpers;
+mod line_breaking;
 pub mod style_resolver;
 pub mod types;
 

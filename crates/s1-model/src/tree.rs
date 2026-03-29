@@ -4,6 +4,7 @@
 //! relationships encoded via [`NodeId`] references. This design allows O(1) node
 //! lookup and is compatible with CRDT node addressing.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use crate::attributes::{AttributeKey, AttributeMap};
@@ -118,7 +119,8 @@ pub struct DocumentModel {
     /// Avoids repeated walks of the style inheritance chain for the same style.
     /// Invalidated whenever styles are added, modified, or removed via
     /// [`set_style`](Self::set_style) or [`remove_style`](Self::remove_style).
-    style_cache: HashMap<String, AttributeMap>,
+    #[cfg_attr(feature = "serde", serde(skip))]
+    style_cache: RefCell<HashMap<String, AttributeMap>>,
     /// Preserved ZIP entries for round-trip fidelity (path → bytes).
     /// Stores entries like `_xmlsignatures/`, `customXml/`, `word/diagrams/`,
     /// `word/charts/`, `word/embeddings/` that the engine doesn't semantically
@@ -160,7 +162,7 @@ impl DocumentModel {
             numbering: NumberingDefinitions::default(),
             sections: Vec::new(),
             doc_defaults: DocumentDefaults::default(),
-            style_cache: HashMap::new(),
+            style_cache: RefCell::new(HashMap::new()),
             preserved_parts: HashMap::new(),
         }
     }
@@ -601,7 +603,7 @@ impl DocumentModel {
         } else {
             self.styles.push(style);
         }
-        self.style_cache.clear();
+        self.style_cache.borrow_mut().clear();
     }
 
     /// Remove a style by ID.
@@ -614,7 +616,7 @@ impl DocumentModel {
             None
         };
         if result.is_some() {
-            self.style_cache.clear();
+            self.style_cache.borrow_mut().clear();
         }
         result
     }
@@ -663,17 +665,13 @@ impl DocumentModel {
     /// stores the result. Uses interior mutability via the cache field — callers
     /// see an `&self` interface while the cache is updated transparently.
     fn resolve_style_chain_cached(&self, style_id: &str) -> AttributeMap {
-        if let Some(cached) = self.style_cache.get(style_id) {
+        if let Some(cached) = self.style_cache.borrow().get(style_id) {
             return cached.clone();
         }
         let resolved = resolve_style_chain(style_id, &self.styles);
-        // SAFETY: We use a shared-reference caching pattern here. The cache is
-        // purely a performance optimisation and does not affect observable
-        // semantics. We cast away const to insert into the cache.
-        #[allow(invalid_reference_casting)]
-        let cache =
-            unsafe { &mut *(&self.style_cache as *const _ as *mut HashMap<String, AttributeMap>) };
-        cache.insert(style_id.to_string(), resolved.clone());
+        self.style_cache
+            .borrow_mut()
+            .insert(style_id.to_string(), resolved.clone());
         resolved
     }
 
