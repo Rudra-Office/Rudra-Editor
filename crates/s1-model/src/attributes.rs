@@ -581,7 +581,9 @@ pub enum AttributeKey {
     RevisionOriginalFormatting,
 
     // Shape / drawing attributes
-    /// Shape type identifier (e.g., "rect", "roundRect", "ellipse", "line", "textBox").
+    /// Shape preset geometry type (e.g., "rect", "roundRect", "ellipse", "line", "textBox",
+    /// "triangle", "diamond", "hexagon", "star5", "arrow", "callout1").
+    /// Maps to OOXML `a:prstGeom/@prst` or ODF `draw:type`.
     ShapeType,
     /// Shape width in points.
     ShapeWidth,
@@ -593,6 +595,16 @@ pub enum AttributeKey {
     ShapeStrokeColor,
     /// Shape outline width in points.
     ShapeStrokeWidth,
+    /// Shape rotation in degrees (clockwise). 0 = no rotation.
+    ShapeRotation,
+    /// Shape horizontal flip.
+    ShapeFlipH,
+    /// Shape vertical flip.
+    ShapeFlipV,
+    /// Internal margins for text inside a shape/text box (top, bottom, left, right) in points.
+    ShapeTextMargins,
+    /// Vertical alignment of text inside a shape/text box: "top", "center", "bottom".
+    ShapeTextVerticalAlign,
     /// Raw VML/DrawingML XML for preserving shapes that can't be fully modeled.
     ShapeRawXml,
 

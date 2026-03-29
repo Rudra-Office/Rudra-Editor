@@ -52,8 +52,10 @@ pub enum NodeType {
     // Objects
     /// An inline or floating image.
     Image,
-    /// A vector drawing or shape.
+    /// A vector drawing or shape. Can contain Paragraph children (text box content).
     Drawing,
+    /// A text box inside a drawing frame. Contains paragraphs.
+    TextBox,
 
     // Headers/Footers
     /// A page header.
@@ -107,6 +109,8 @@ impl NodeType {
                 | NodeType::TableOfContents
                 | NodeType::FootnoteBody
                 | NodeType::EndnoteBody
+                | NodeType::Drawing
+                | NodeType::TextBox
         )
     }
 
@@ -162,6 +166,7 @@ impl NodeType {
                 NodeType::Paragraph,
                 NodeType::Table,
                 NodeType::Image,
+                NodeType::Drawing,
                 NodeType::TableOfContents,
                 NodeType::PageBreak,
                 NodeType::ColumnBreak,
@@ -198,6 +203,8 @@ impl NodeType {
             NodeType::CommentBody | NodeType::FootnoteBody | NodeType::EndnoteBody => {
                 &[NodeType::Paragraph]
             }
+            NodeType::Drawing => &[NodeType::Paragraph, NodeType::TextBox],
+            NodeType::TextBox => &[NodeType::Paragraph, NodeType::Table],
             // Leaf nodes
             _ => &[],
         }

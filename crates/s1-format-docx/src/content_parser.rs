@@ -1068,6 +1068,9 @@ struct ShapeInfo {
     stroke_color: Option<String>,
     /// The raw XML of the entire <w:pict> element for round-trip fidelity
     raw_xml: String,
+    /// Raw XML of the `<w:txbxContent>` element (if a VML text box was found).
+    /// Contains `<w:p>` children that should be parsed into the document model.
+    txbx_content_xml: Option<String>,
 }
 
 /// State machine for tracking complex field parsing (fldChar begin/separate/end)
@@ -1317,11 +1320,11 @@ fn parse_run(
             }
             RunContent::Shape(info) => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
-                insert_shape_node(doc, para_id, child_index, &info)?;
+                insert_shape_node(doc, para_id, child_index, &info, ctx)?;
             }
             RunContent::DrawingXml(raw_xml) => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
-                insert_drawing_xml_node(doc, para_id, child_index, &raw_xml)?;
+                insert_drawing_xml_node(doc, para_id, child_index, &raw_xml, ctx)?;
             }
             RunContent::FootnoteRef(id) => {
                 flush_texts_to_run(&mut texts, &run_attrs, doc, para_id, child_index)?;
@@ -1466,7 +1469,7 @@ fn parse_alternate_content_into_paragraph(
                                 insert_image_node(doc, para_id, child_index, &info, ctx)?;
                             }
                             Some(DrawingResult::RawXml(xml)) => {
-                                insert_drawing_xml_node(doc, para_id, child_index, &xml)?;
+                                insert_drawing_xml_node(doc, para_id, child_index, &xml, ctx)?;
                             }
                             None => {}
                         }
@@ -1859,8 +1862,12 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
     let mut height_pts: Option<f64> = None;
     let mut fill_color: Option<String> = None;
     let mut stroke_color: Option<String> = None;
+    let mut txbx_content_xml: Option<String> = None;
     let mut raw_parts: Vec<String> = Vec::new();
     let mut depth = 1u32;
+    // Track whether we are inside a <v:textbox> element to detect <w:txbxContent>.
+    let mut in_textbox = false;
+    let mut textbox_depth = 0u32;
 
     raw_parts.push("<w:pict>".to_string());
 
@@ -1869,7 +1876,11 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
             Ok(Event::Start(ref e)) => {
                 depth += 1;
                 // Capture raw XML for round-trip
-                raw_parts.push(format!("<{}>", String::from_utf8_lossy(e.name().as_ref())));
+                raw_parts.push(format!("<{}>", String::from_utf8_lossy(e.as_ref())));
+
+                if in_textbox {
+                    textbox_depth += 1;
+                }
 
                 match e.local_name().as_ref() {
                     b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" | b"polyline"
@@ -1890,11 +1901,27 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
                             stroke_color = Some(sc.trim_start_matches('#').to_string());
                         }
                     }
+                    b"textbox" => {
+                        in_textbox = true;
+                        textbox_depth = 0;
+                    }
+                    b"txbxContent" if in_textbox => {
+                        // Capture the inner XML of <w:txbxContent> for paragraph parsing.
+                        // We use capture_txbx_content_inner to get just the children XML.
+                        let inner = capture_txbx_content_inner(reader)?;
+                        txbx_content_xml = Some(inner);
+                        // The closing </w:txbxContent> has been consumed by the helper,
+                        // so we need to add it to raw_parts and adjust depth.
+                        raw_parts
+                            .push(format!("</{}>", String::from_utf8_lossy(e.name().as_ref())));
+                        depth -= 1;
+                        continue;
+                    }
                     _ => {}
                 }
             }
             Ok(Event::Empty(ref e)) => {
-                raw_parts.push(format!("<{}/>", String::from_utf8_lossy(e.name().as_ref())));
+                raw_parts.push(format!("<{}/>", String::from_utf8_lossy(e.as_ref())));
                 match e.local_name().as_ref() {
                     b"shape" | b"rect" | b"roundrect" | b"oval" | b"line" => {
                         shape_type =
@@ -1919,6 +1946,14 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
             }
             Ok(Event::End(ref e)) => {
                 raw_parts.push(format!("</{}>", String::from_utf8_lossy(e.name().as_ref())));
+                if in_textbox {
+                    if textbox_depth == 0 {
+                        // Closing the <v:textbox> itself
+                        in_textbox = false;
+                    } else {
+                        textbox_depth -= 1;
+                    }
+                }
                 depth -= 1;
                 if depth == 0 {
                     break;
@@ -1939,9 +1974,54 @@ fn parse_pict(reader: &mut Reader<&[u8]>) -> Result<Option<ShapeInfo>, DocxError
             fill_color,
             stroke_color,
             raw_xml: raw_parts.join(""),
+            txbx_content_xml,
         })),
         None => Ok(None),
     }
+}
+
+/// Capture the inner XML of a `<w:txbxContent>` element, consuming through its
+/// closing tag. Returns the raw inner XML string containing `<w:p>` elements.
+fn capture_txbx_content_inner(reader: &mut Reader<&[u8]>) -> Result<String, DocxError> {
+    let mut xml = String::new();
+    let mut depth = 1u32;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                xml.push('<');
+                xml.push_str(&String::from_utf8_lossy(e));
+                xml.push('>');
+            }
+            Ok(Event::Empty(ref e)) => {
+                xml.push('<');
+                xml.push_str(&String::from_utf8_lossy(e));
+                xml.push_str("/>");
+            }
+            Ok(Event::Text(ref t)) => {
+                xml.push_str(&String::from_utf8_lossy(t.as_ref()));
+            }
+            Ok(Event::End(ref e)) => {
+                depth -= 1;
+                if depth == 0 {
+                    // This is the closing </w:txbxContent> — stop
+                    break;
+                }
+                xml.push_str("</");
+                xml.push_str(&String::from_utf8_lossy(e.name().as_ref()));
+                xml.push('>');
+            }
+            Ok(Event::CData(ref cd)) => {
+                xml.push_str("<![CDATA[");
+                xml.push_str(&String::from_utf8_lossy(cd.as_ref()));
+                xml.push_str("]]>");
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+    Ok(xml)
 }
 
 /// Parse VML style string for width/height.
@@ -1982,6 +2062,7 @@ fn insert_shape_node(
     para_id: NodeId,
     child_index: &mut usize,
     info: &ShapeInfo,
+    ctx: &ParseContext,
 ) -> Result<(), DocxError> {
     let shape_id = doc.next_id();
     let mut shape_node = Node::new(shape_id, NodeType::Drawing);
@@ -2027,6 +2108,82 @@ fn insert_shape_node(
         })?;
     *child_index += 1;
 
+    // If there is text box content, create a TextBox child and parse paragraphs into it.
+    if let Some(ref txbx_xml) = info.txbx_content_xml {
+        parse_txbx_content_into_drawing(doc, shape_id, txbx_xml, ctx)?;
+    }
+
+    Ok(())
+}
+
+/// Parse `<w:txbxContent>` inner XML and add TextBox → Paragraphs under a Drawing node.
+///
+/// The `inner_xml` is the raw XML between `<w:txbxContent>` and `</w:txbxContent>`,
+/// containing `<w:p>` elements which are parsed using the standard paragraph parser.
+fn parse_txbx_content_into_drawing(
+    doc: &mut DocumentModel,
+    drawing_id: NodeId,
+    inner_xml: &str,
+    ctx: &ParseContext,
+) -> Result<(), DocxError> {
+    // Create a TextBox child node inside the Drawing
+    let textbox_id = doc.next_id();
+    let textbox_node = Node::new(textbox_id, NodeType::TextBox);
+    let drawing_children_count = doc.node(drawing_id).map(|n| n.children.len()).unwrap_or(0);
+    doc.insert_node(drawing_id, drawing_children_count, textbox_node)
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert TextBox under Drawing {drawing_id:?}: {e}"
+            ))
+        })?;
+
+    // Wrap the inner XML in a root element so we can parse it
+    let wrapper_xml = format!(
+        r#"<w:txbxContent xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"
+                          xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"
+                          xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing"
+                          xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+                          xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">{inner_xml}</w:txbxContent>"#
+    );
+
+    let mut txbx_reader = Reader::from_str(&wrapper_xml);
+    txbx_reader.config_mut().trim_text(false);
+    let mut para_index = 0usize;
+
+    // Skip the wrapper <w:txbxContent> opening tag
+    loop {
+        match txbx_reader.read_event() {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == b"txbxContent" => break,
+            Ok(Event::Eof) => return Ok(()),
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    // Parse child elements (mainly w:p paragraphs, possibly w:tbl tables)
+    loop {
+        match txbx_reader.read_event() {
+            Ok(Event::Start(e)) => match e.local_name().as_ref() {
+                b"p" => {
+                    let _sect =
+                        parse_paragraph(&mut txbx_reader, doc, textbox_id, para_index, ctx)?;
+                    para_index += 1;
+                }
+                b"tbl" => {
+                    parse_table(&mut txbx_reader, doc, textbox_id, para_index, ctx)?;
+                    para_index += 1;
+                }
+                _ => {
+                    skip_element(&mut txbx_reader)?;
+                }
+            },
+            Ok(Event::End(_)) => break, // closing </w:txbxContent>
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -2039,6 +2196,7 @@ fn insert_drawing_xml_node(
     para_id: NodeId,
     child_index: &mut usize,
     raw_xml: &str,
+    _ctx: &ParseContext,
 ) -> Result<(), DocxError> {
     let drawing_id = doc.next_id();
     let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
@@ -2063,7 +2221,261 @@ fn insert_drawing_xml_node(
         })?;
     *child_index += 1;
 
+    // Extract text body content from DrawingML shapes (wps:txBody / a:txBody).
+    if let Some(txbody_xml) = extract_drawingml_txbody(raw_xml) {
+        parse_drawingml_txbody_into_drawing(doc, drawing_id, &txbody_xml)?;
+    }
+
     Ok(())
+}
+
+/// Extract the inner XML of `<wps:txBody>` or `<a:txBody>` from DrawingML raw XML.
+///
+/// Scans the raw XML for a text body element and returns its inner content if found.
+fn extract_drawingml_txbody(raw_xml: &str) -> Option<String> {
+    // Look for txBody element (could be wps:txBody or a:txBody)
+    let mut reader = Reader::from_str(raw_xml);
+    reader.config_mut().trim_text(false);
+    let mut depth = 0u32;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                if e.local_name().as_ref() == b"txBody" {
+                    // Found a txBody — capture its inner XML
+                    let mut inner = String::new();
+                    let mut body_depth = 1u32;
+                    loop {
+                        match reader.read_event() {
+                            Ok(Event::Start(ref e2)) => {
+                                body_depth += 1;
+                                inner.push('<');
+                                inner.push_str(&String::from_utf8_lossy(e2));
+                                inner.push('>');
+                            }
+                            Ok(Event::Empty(ref e2)) => {
+                                inner.push('<');
+                                inner.push_str(&String::from_utf8_lossy(e2));
+                                inner.push_str("/>");
+                            }
+                            Ok(Event::Text(ref t)) => {
+                                inner.push_str(&String::from_utf8_lossy(t.as_ref()));
+                            }
+                            Ok(Event::End(ref e2)) => {
+                                body_depth -= 1;
+                                if body_depth == 0 {
+                                    break;
+                                }
+                                inner.push_str("</");
+                                inner.push_str(&String::from_utf8_lossy(e2.name().as_ref()));
+                                inner.push('>');
+                            }
+                            Ok(Event::Eof) => break,
+                            Err(_) => return None,
+                            _ => {}
+                        }
+                    }
+                    if !inner.is_empty() {
+                        return Some(inner);
+                    }
+                    return None;
+                }
+            }
+            Ok(Event::End(_)) => {
+                if depth == 0 {
+                    break;
+                }
+                depth -= 1;
+            }
+            Ok(Event::Eof) => break,
+            Err(_) => return None,
+            _ => {}
+        }
+    }
+    None
+}
+
+/// Parse DrawingML text body (`a:txBody`) content and create TextBox → Paragraphs
+/// under a Drawing node.
+///
+/// DrawingML text bodies contain `<a:p>` (not `<w:p>`) elements with `<a:r>/<a:t>`
+/// runs. This function extracts the text content and builds simplified
+/// Paragraph → Run → Text node chains.
+fn parse_drawingml_txbody_into_drawing(
+    doc: &mut DocumentModel,
+    drawing_id: NodeId,
+    inner_xml: &str,
+) -> Result<(), DocxError> {
+    // Create a TextBox child node inside the Drawing
+    let textbox_id = doc.next_id();
+    let textbox_node = Node::new(textbox_id, NodeType::TextBox);
+    let drawing_children_count = doc.node(drawing_id).map(|n| n.children.len()).unwrap_or(0);
+    doc.insert_node(drawing_id, drawing_children_count, textbox_node)
+        .map_err(|e| {
+            DocxError::InvalidStructure(format!(
+                "failed to insert TextBox under Drawing {drawing_id:?}: {e}"
+            ))
+        })?;
+
+    // Parse the inner XML to find a:p elements
+    let wrapper_xml = format!(
+        r#"<root xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"
+               xmlns:wps="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">{inner_xml}</root>"#
+    );
+    let mut reader = Reader::from_str(&wrapper_xml);
+    reader.config_mut().trim_text(false);
+
+    let mut para_index = 0usize;
+
+    // Skip the wrapper root element
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(e)) if e.local_name().as_ref() == b"root" => break,
+            Ok(Event::Eof) => return Ok(()),
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    // Parse a:p elements
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"p" => {
+                // Parse a DrawingML paragraph: extract text from a:r/a:t
+                let texts = parse_drawingml_paragraph(&mut reader)?;
+                if !texts.is_empty() {
+                    let para_id = doc.next_id();
+                    doc.insert_node(
+                        textbox_id,
+                        para_index,
+                        Node::new(para_id, NodeType::Paragraph),
+                    )
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!(
+                            "failed to insert Paragraph under TextBox {textbox_id:?}: {e}"
+                        ))
+                    })?;
+
+                    // Create a single run with all the text
+                    let run_id = doc.next_id();
+                    doc.insert_node(para_id, 0, Node::new(run_id, NodeType::Run))
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "failed to insert Run under Paragraph {para_id:?}: {e}"
+                            ))
+                        })?;
+
+                    let text_content = texts.join("");
+                    let text_id = doc.next_id();
+                    doc.insert_node(run_id, 0, Node::text(text_id, text_content))
+                        .map_err(|e| {
+                            DocxError::InvalidStructure(format!(
+                                "failed to insert Text under Run {run_id:?}: {e}"
+                            ))
+                        })?;
+
+                    para_index += 1;
+                } else {
+                    // Empty paragraph (e.g., blank line)
+                    let para_id = doc.next_id();
+                    doc.insert_node(
+                        textbox_id,
+                        para_index,
+                        Node::new(para_id, NodeType::Paragraph),
+                    )
+                    .map_err(|e| {
+                        DocxError::InvalidStructure(format!(
+                            "failed to insert empty Paragraph under TextBox {textbox_id:?}: {e}"
+                        ))
+                    })?;
+                    para_index += 1;
+                }
+            }
+            Ok(Event::Start(_)) => {
+                // Skip non-paragraph elements (a:bodyPr, a:lstStyle, etc.)
+                skip_element(&mut reader)?;
+            }
+            Ok(Event::Empty(ref e)) if e.local_name().as_ref() == b"p" => {
+                // Self-closing <a:p/> — empty paragraph
+                let para_id = doc.next_id();
+                doc.insert_node(
+                    textbox_id,
+                    para_index,
+                    Node::new(para_id, NodeType::Paragraph),
+                )
+                .map_err(|e| {
+                    DocxError::InvalidStructure(format!(
+                        "failed to insert empty Paragraph under TextBox {textbox_id:?}: {e}"
+                    ))
+                })?;
+                para_index += 1;
+            }
+            Ok(Event::Empty(_)) => {}
+            Ok(Event::End(_)) => break, // closing </root>
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(())
+}
+
+/// Parse a single DrawingML paragraph (`<a:p>`) and return its text content.
+///
+/// Extracts text from `<a:r>/<a:t>` elements. Skips run properties (`<a:rPr>`)
+/// and paragraph properties (`<a:pPr>`).
+fn parse_drawingml_paragraph(reader: &mut Reader<&[u8]>) -> Result<Vec<String>, DocxError> {
+    let mut texts = Vec::new();
+    let mut depth = 1u32;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                depth += 1;
+                if e.local_name().as_ref() == b"t" {
+                    // Read text content
+                    if let Ok(text) = read_drawingml_text_content(reader) {
+                        if !text.is_empty() {
+                            texts.push(text);
+                        }
+                    }
+                    depth -= 1; // read_drawingml_text_content consumed the end tag
+                }
+            }
+            Ok(Event::End(_)) => {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+
+    Ok(texts)
+}
+
+/// Read text content from a `<a:t>` element (DrawingML text).
+fn read_drawingml_text_content(reader: &mut Reader<&[u8]>) -> Result<String, DocxError> {
+    let mut text = String::new();
+    loop {
+        match reader.read_event() {
+            Ok(Event::Text(ref t)) => {
+                if let Ok(s) = t.unescape() {
+                    text.push_str(&s);
+                }
+            }
+            Ok(Event::End(_)) => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(DocxError::Xml(format!("{e}"))),
+            _ => {}
+        }
+    }
+    Ok(text)
 }
 
 /// Classify a drawing's type by inspecting its raw XML content.
@@ -5208,5 +5620,419 @@ mod tests {
             1,
             "MediaStore should deduplicate identical content"
         );
+    }
+
+    // ─── VML text box content parsing ────────────────────────────────────
+
+    #[test]
+    fn parse_vml_textbox_with_txbx_content() {
+        // VML shape with v:textbox containing w:txbxContent with paragraphs
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:pict>
+                <v:shape style="width:200pt;height:100pt">
+                    <v:textbox>
+                        <w:txbxContent>
+                            <w:p><w:r><w:t>Hello from text box</w:t></w:r></w:p>
+                        </w:txbxContent>
+                    </v:textbox>
+                </v:shape>
+            </w:pict></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        assert!(
+            !para.children.is_empty(),
+            "paragraph should have a Drawing child"
+        );
+
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("shape")
+        );
+
+        // Drawing should have a TextBox child
+        assert_eq!(
+            drawing.children.len(),
+            1,
+            "Drawing should have one TextBox child"
+        );
+        let textbox = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(textbox.node_type, NodeType::TextBox);
+
+        // TextBox should have one paragraph
+        assert_eq!(
+            textbox.children.len(),
+            1,
+            "TextBox should have one paragraph"
+        );
+        let tb_para = doc.node(textbox.children[0]).unwrap();
+        assert_eq!(tb_para.node_type, NodeType::Paragraph);
+
+        // Paragraph should have a run with text
+        assert!(
+            !tb_para.children.is_empty(),
+            "TextBox paragraph should have children"
+        );
+        let run = doc.node(tb_para.children[0]).unwrap();
+        assert_eq!(run.node_type, NodeType::Run);
+        let text_node = doc.node(run.children[0]).unwrap();
+        assert_eq!(text_node.node_type, NodeType::Text);
+        assert_eq!(
+            text_node.text_content.as_deref(),
+            Some("Hello from text box")
+        );
+    }
+
+    #[test]
+    fn parse_vml_textbox_multiple_paragraphs() {
+        // VML text box with multiple paragraphs
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:pict>
+                <v:shape style="width:300pt;height:200pt">
+                    <v:textbox>
+                        <w:txbxContent>
+                            <w:p><w:r><w:t>First paragraph</w:t></w:r></w:p>
+                            <w:p><w:r><w:t>Second paragraph</w:t></w:r></w:p>
+                        </w:txbxContent>
+                    </v:textbox>
+                </v:shape>
+            </w:pict></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        let textbox = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(textbox.node_type, NodeType::TextBox);
+        assert_eq!(
+            textbox.children.len(),
+            2,
+            "TextBox should have two paragraphs"
+        );
+
+        // Verify paragraph content
+        let p1 = doc.node(textbox.children[0]).unwrap();
+        let r1 = doc.node(p1.children[0]).unwrap();
+        let t1 = doc.node(r1.children[0]).unwrap();
+        assert_eq!(t1.text_content.as_deref(), Some("First paragraph"));
+
+        let p2 = doc.node(textbox.children[1]).unwrap();
+        let r2 = doc.node(p2.children[0]).unwrap();
+        let t2 = doc.node(r2.children[0]).unwrap();
+        assert_eq!(t2.text_content.as_deref(), Some("Second paragraph"));
+    }
+
+    #[test]
+    fn parse_vml_textbox_preserves_raw_xml() {
+        // Verify that raw XML is still preserved when text box content is parsed
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:pict>
+                <v:shape style="width:100pt;height:50pt">
+                    <v:textbox>
+                        <w:txbxContent>
+                            <w:p><w:r><w:t>Content</w:t></w:r></w:p>
+                        </w:txbxContent>
+                    </v:textbox>
+                </v:shape>
+            </w:pict></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+
+        // Should still have raw XML for round-trip
+        let raw = drawing
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .expect("should have raw XML");
+        assert!(
+            raw.contains("w:pict"),
+            "raw XML should contain w:pict wrapper"
+        );
+        assert!(
+            raw.contains("v:shape"),
+            "raw XML should contain shape element"
+        );
+    }
+
+    #[test]
+    fn parse_vml_textbox_without_txbx_content() {
+        // VML textbox without w:txbxContent (just text directly in textbox)
+        // should not create a TextBox child — no paragraphs to parse
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:pict>
+                <v:shape style="width:2in;height:1in">
+                    <v:textbox>Some text</v:textbox>
+                </v:shape>
+            </w:pict></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        // No TextBox child — no w:txbxContent was present
+        assert_eq!(
+            drawing.children.len(),
+            0,
+            "Drawing should have no children when there's no w:txbxContent"
+        );
+    }
+
+    #[test]
+    fn parse_vml_rect_with_textbox() {
+        // VML rect shape with text box
+        let xml = wrap_doc(
+            r##"<w:p><w:r><w:pict>
+                <v:rect style="width:150pt;height:80pt" fillcolor="#EEEEEE">
+                    <v:textbox>
+                        <w:txbxContent>
+                            <w:p><w:r><w:t>Rect text</w:t></w:r></w:p>
+                        </w:txbxContent>
+                    </v:textbox>
+                </v:rect>
+            </w:pict></w:r></w:p>"##,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("rect")
+        );
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeFillColor),
+            Some("EEEEEE")
+        );
+
+        // Should have TextBox child with paragraph
+        assert_eq!(drawing.children.len(), 1);
+        let textbox = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(textbox.node_type, NodeType::TextBox);
+        assert_eq!(textbox.children.len(), 1);
+
+        let tb_para = doc.node(textbox.children[0]).unwrap();
+        let run = doc.node(tb_para.children[0]).unwrap();
+        let text = doc.node(run.children[0]).unwrap();
+        assert_eq!(text.text_content.as_deref(), Some("Rect text"));
+    }
+
+    // ─── DrawingML text body parsing ─────────────────────────────────────
+
+    #[test]
+    fn parse_drawingml_shape_with_txbody() {
+        // DrawingML shape (wps:wsp) with text body content
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300">
+                <wp:extent cx="1828800" cy="914400"/>
+                <wp:docPr id="2" name="TextBox 1"/>
+                <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                    <wps:wsp>
+                        <wps:spPr><a:prstGeom prst="rect"/></wps:spPr>
+                        <wps:txBody>
+                            <a:bodyPr/>
+                            <a:lstStyle/>
+                            <a:p><a:r><a:t>DrawingML text</a:t></a:r></a:p>
+                        </wps:txBody>
+                    </wps:wsp>
+                </a:graphicData></a:graphic>
+            </wp:anchor></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+
+        assert_eq!(
+            para.children.len(),
+            1,
+            "paragraph should have one Drawing child"
+        );
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        // Should still have raw XML
+        assert!(drawing
+            .attributes
+            .get_string(&AttributeKey::ShapeRawXml)
+            .is_some());
+
+        // Drawing should have a TextBox child with parsed text
+        assert_eq!(
+            drawing.children.len(),
+            1,
+            "Drawing should have one TextBox child"
+        );
+        let textbox = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(textbox.node_type, NodeType::TextBox);
+
+        assert_eq!(
+            textbox.children.len(),
+            1,
+            "TextBox should have one paragraph"
+        );
+        let tb_para = doc.node(textbox.children[0]).unwrap();
+        assert_eq!(tb_para.node_type, NodeType::Paragraph);
+
+        let run = doc.node(tb_para.children[0]).unwrap();
+        assert_eq!(run.node_type, NodeType::Run);
+        let text = doc.node(run.children[0]).unwrap();
+        assert_eq!(text.text_content.as_deref(), Some("DrawingML text"));
+    }
+
+    #[test]
+    fn parse_drawingml_txbody_multiple_paragraphs() {
+        // DrawingML shape with multiple paragraphs in text body
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:inline>
+                <wp:extent cx="1828800" cy="914400"/>
+                <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                    <wps:wsp>
+                        <wps:spPr><a:prstGeom prst="rect"/></wps:spPr>
+                        <wps:txBody>
+                            <a:bodyPr/>
+                            <a:p><a:r><a:t>Line one</a:t></a:r></a:p>
+                            <a:p><a:r><a:t>Line two</a:t></a:r></a:p>
+                            <a:p><a:r><a:t>Line three</a:t></a:r></a:p>
+                        </wps:txBody>
+                    </wps:wsp>
+                </a:graphicData></a:graphic>
+            </wp:inline></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+
+        let textbox = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(textbox.node_type, NodeType::TextBox);
+        assert_eq!(
+            textbox.children.len(),
+            3,
+            "TextBox should have three paragraphs"
+        );
+
+        // Verify content of each paragraph
+        let texts: Vec<&str> = textbox
+            .children
+            .iter()
+            .filter_map(|&pid| {
+                let p = doc.node(pid)?;
+                let r = doc.node(*p.children.first()?)?;
+                let t = doc.node(*r.children.first()?)?;
+                t.text_content.as_deref()
+            })
+            .collect();
+        assert_eq!(texts, vec!["Line one", "Line two", "Line three"]);
+    }
+
+    #[test]
+    fn parse_drawingml_shape_without_txbody_no_textbox() {
+        // DrawingML shape with no txBody — should not create TextBox child
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:anchor distT="0" distB="0" distL="114300" distR="114300">
+                <wp:extent cx="1828800" cy="914400"/>
+                <wp:docPr id="2" name="Rectangle 1"/>
+                <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                    <wps:wsp><wps:spPr><a:prstGeom prst="rect"/></wps:spPr></wps:wsp>
+                </a:graphicData></a:graphic>
+            </wp:anchor></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+
+        // No TextBox should be created
+        assert_eq!(
+            drawing.children.len(),
+            0,
+            "Drawing without txBody should have no children"
+        );
+    }
+
+    #[test]
+    fn parse_drawingml_txbody_empty_paragraph() {
+        // DrawingML text body with an empty paragraph (no text runs)
+        let xml = wrap_doc(
+            r#"<w:p><w:r><w:drawing><wp:inline>
+                <wp:extent cx="1828800" cy="914400"/>
+                <a:graphic><a:graphicData uri="http://schemas.microsoft.com/office/word/2010/wordprocessingShape">
+                    <wps:wsp>
+                        <wps:spPr><a:prstGeom prst="rect"/></wps:spPr>
+                        <wps:txBody>
+                            <a:bodyPr/>
+                            <a:p><a:r><a:t>Before</a:t></a:r></a:p>
+                            <a:p/>
+                            <a:p><a:r><a:t>After</a:t></a:r></a:p>
+                        </wps:txBody>
+                    </wps:wsp>
+                </a:graphicData></a:graphic>
+            </wp:inline></w:drawing></w:r></w:p>"#,
+        );
+        let mut doc = DocumentModel::new();
+        parse_doc(&xml, &mut doc);
+
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let para = doc.node(body.children[0]).unwrap();
+        let drawing = doc.node(para.children[0]).unwrap();
+        let textbox = doc.node(drawing.children[0]).unwrap();
+
+        // Should have 3 paragraphs (including the empty one)
+        assert_eq!(
+            textbox.children.len(),
+            3,
+            "TextBox should have three paragraphs including empty"
+        );
+
+        // First paragraph has text
+        let p1 = doc.node(textbox.children[0]).unwrap();
+        assert!(!p1.children.is_empty());
+
+        // Middle paragraph is empty
+        let p2 = doc.node(textbox.children[1]).unwrap();
+        assert_eq!(
+            p2.children.len(),
+            0,
+            "Empty a:p should produce empty paragraph"
+        );
+
+        // Third paragraph has text
+        let p3 = doc.node(textbox.children[2]).unwrap();
+        assert!(!p3.children.is_empty());
     }
 }

@@ -67,8 +67,14 @@ fn first_para_attrs(model: &DocumentModel) -> &AttributeMap {
 fn odt_roundtrip_bold_italic() {
     let attrs = AttributeMap::new().bold(true).italic(true);
     let rt = roundtrip_odt(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::Bold), Some(true));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::Italic), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::Bold),
+        Some(true)
+    );
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::Italic),
+        Some(true)
+    );
 }
 
 #[test]

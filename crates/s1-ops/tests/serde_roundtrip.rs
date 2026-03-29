@@ -43,8 +43,10 @@ fn operation_set_attributes_serde_roundtrip() {
 #[test]
 fn operation_insert_node_serde_roundtrip() {
     let mut node = Node::new(NodeId::new(0, 42), NodeType::Paragraph);
-    node.attributes
-        .set(AttributeKey::Alignment, AttributeValue::Alignment(Alignment::Center));
+    node.attributes.set(
+        AttributeKey::Alignment,
+        AttributeValue::Alignment(Alignment::Center),
+    );
 
     let op = Operation::InsertNode {
         parent_id: NodeId::new(0, 1),

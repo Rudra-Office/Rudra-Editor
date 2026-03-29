@@ -69,8 +69,7 @@ pub fn parse_content_body(
                         body_child_index += 1;
                     }
                     b"list" => {
-                        let count =
-                            parse_list(reader, doc, e, ctx, body_id, body_child_index, 0)?;
+                        let count = parse_list(reader, doc, e, ctx, body_id, body_child_index, 0)?;
                         body_child_index += count;
                     }
                     b"table" => {
@@ -81,18 +80,53 @@ pub fn parse_content_body(
                         parse_toc_into(reader, doc, ctx, body_id, body_child_index, e)?;
                         body_child_index += 1;
                     }
-                    // ODT-11 (WONTFIX): Non-image draw elements (SVG shapes, text boxes,
-                    // connectors, etc.) are silently dropped during parsing. The s1-model
-                    // supports Image and Drawing node types, but full shape/SVG support
-                    // (geometry, transforms, grouped objects) is a separate feature that
-                    // would require significant model extensions. These elements are skipped
-                    // with a debug-mode warning.
-                    b"custom-shape" | b"rect" | b"circle" | b"ellipse" | b"line" | b"polygon"
-                    | b"polyline" | b"path" | b"text-box" | b"g" | b"connector" => {
+                    // Basic geometric shapes — parse into Drawing nodes
+                    b"rect" => {
+                        parse_draw_shape_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            body_id,
+                            body_child_index,
+                            "rect",
+                        )?;
+                        body_child_index += 1;
+                    }
+                    b"circle" | b"ellipse" => {
+                        parse_draw_shape_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            body_id,
+                            body_child_index,
+                            "ellipse",
+                        )?;
+                        body_child_index += 1;
+                    }
+                    b"custom-shape" => {
+                        parse_custom_shape_into(reader, doc, e, ctx, body_id, body_child_index)?;
+                        body_child_index += 1;
+                    }
+                    b"text-box" => {
+                        // Standalone text-box (not inside draw:frame)
+                        parse_draw_shape_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            body_id,
+                            body_child_index,
+                            "textBox",
+                        )?;
+                        body_child_index += 1;
+                    }
+                    // Complex geometry shapes — skip for now
+                    b"line" | b"polygon" | b"polyline" | b"path" | b"g" | b"connector" => {
                         #[cfg(debug_assertions)]
                         eprintln!(
-                            "[s1-format-odt] Note: non-image draw element <draw:{}> skipped \
-                             (ODT-11 / WONTFIX — shape/SVG support is a separate feature)",
+                            "[s1-format-odt] Note: complex draw element <draw:{}> skipped",
                             String::from_utf8_lossy(local.as_ref())
                         );
                         skip_element_odt(reader)?;
@@ -466,10 +500,8 @@ fn parse_paragraph_into(
                                 AttributeKey::RevisionType,
                                 AttributeValue::String("ChangeStart".into()),
                             );
-                            run.attributes.set(
-                                AttributeKey::RevisionId,
-                                AttributeValue::String(change_id),
-                            );
+                            run.attributes
+                                .set(AttributeKey::RevisionId, AttributeValue::String(change_id));
                             doc.insert_node(para_id, child_index, run)
                                 .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
                             child_index += 1;
@@ -483,10 +515,8 @@ fn parse_paragraph_into(
                                 AttributeKey::RevisionType,
                                 AttributeValue::String("ChangeEnd".into()),
                             );
-                            run.attributes.set(
-                                AttributeKey::RevisionId,
-                                AttributeValue::String(change_id),
-                            );
+                            run.attributes
+                                .set(AttributeKey::RevisionId, AttributeValue::String(change_id));
                             doc.insert_node(para_id, child_index, run)
                                 .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
                             child_index += 1;
@@ -501,10 +531,8 @@ fn parse_paragraph_into(
                                 AttributeKey::RevisionType,
                                 AttributeValue::String("Change".into()),
                             );
-                            run.attributes.set(
-                                AttributeKey::RevisionId,
-                                AttributeValue::String(change_id),
-                            );
+                            run.attributes
+                                .set(AttributeKey::RevisionId, AttributeValue::String(change_id));
                             doc.insert_node(para_id, child_index, run)
                                 .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
                             child_index += 1;
@@ -596,14 +624,10 @@ fn parse_span_into(
                                     AttributeValue::FieldType(FieldType::Custom),
                                 );
                                 doc.insert_node(parent_id, start_index + count, run_node)
-                                    .map_err(|er| {
-                                        OdtError::InvalidStructure(format!("{er:?}"))
-                                    })?;
+                                    .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
                                 let text_id = doc.next_id();
                                 doc.insert_node(run_id, 0, Node::text(text_id, displayed))
-                                    .map_err(|er| {
-                                        OdtError::InvalidStructure(format!("{er:?}"))
-                                    })?;
+                                    .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
                                 count += 1;
                             }
                         }
@@ -1038,8 +1062,56 @@ fn parse_frame_into(
 
     let mut href: Option<String> = None;
 
+    // Parse frame children: detect image vs text-box content.
     loop {
         match reader.read_event() {
+            Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"text-box" => {
+                // Parse the text box content: create Drawing -> TextBox -> Paragraphs
+                let drawing_id = doc.next_id();
+                let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+                drawing_node.attributes.set(
+                    AttributeKey::ShapeType,
+                    AttributeValue::String("textBox".to_string()),
+                );
+                if let Some(w) = width {
+                    drawing_node
+                        .attributes
+                        .set(AttributeKey::ShapeWidth, AttributeValue::Float(w));
+                }
+                if let Some(h) = height {
+                    drawing_node
+                        .attributes
+                        .set(AttributeKey::ShapeHeight, AttributeValue::Float(h));
+                }
+                if !alt_text.is_empty() {
+                    drawing_node.attributes.set(
+                        AttributeKey::ImageAltText,
+                        AttributeValue::String(alt_text.clone()),
+                    );
+                }
+                doc.insert_node(parent_id, index, drawing_node)
+                    .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+
+                // Create TextBox child
+                let tb_id = doc.next_id();
+                let tb_node = Node::new(tb_id, NodeType::TextBox);
+                doc.insert_node(drawing_id, 0, tb_node)
+                    .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+
+                // Parse paragraphs and tables inside the text-box
+                parse_text_box_children(reader, doc, ctx, tb_id)?;
+
+                // Continue reading until </draw:frame>
+                loop {
+                    match reader.read_event() {
+                        Ok(Event::End(ref e2)) if e2.local_name().as_ref() == b"frame" => break,
+                        Ok(Event::Eof) => break,
+                        Err(e2) => return Err(OdtError::Xml(e2.to_string())),
+                        _ => {}
+                    }
+                }
+                return Ok(true);
+            }
             Ok(Event::Start(ref e)) | Ok(Event::Empty(ref e))
                 if e.local_name().as_ref() == b"image" =>
             {
@@ -1053,12 +1125,11 @@ fn parse_frame_into(
     }
 
     if href.is_none() {
-        // ODT-11 (WONTFIX): Non-image content within <draw:frame> (e.g. text boxes,
-        // embedded objects) is skipped. See ODT-11 for rationale.
+        // Non-image, non-text-box content within <draw:frame> (e.g. embedded objects)
+        // is skipped.
         #[cfg(debug_assertions)]
         eprintln!(
-            "[s1-format-odt] Note: non-image draw element within <draw:frame> skipped \
-             (ODT-11 / WONTFIX)"
+            "[s1-format-odt] Note: non-image/non-text-box draw element within <draw:frame> skipped"
         );
         return Ok(false);
     }
@@ -1301,8 +1372,7 @@ fn parse_list(
 ) -> Result<usize, OdtError> {
     // Determine list format from the <text:list> element.
     // Check text:continue-numbering="true" as a hint for ordered lists.
-    let continue_num = get_attr(list_start, b"continue-numbering")
-        .is_some_and(|v| v == "true");
+    let continue_num = get_attr(list_start, b"continue-numbering").is_some_and(|v| v == "true");
     // Default format: Bullet (unordered). If continue-numbering is true,
     // this is likely an ordered list.
     let list_format = if continue_num {
@@ -1317,8 +1387,7 @@ fn parse_list(
         match reader.read_event() {
             Ok(Event::Start(ref e)) if e.local_name().as_ref() == b"list-item" => {
                 // Check text:start-value on the list-item as a hint for ordered lists.
-                let start_value = get_attr(e, b"start-value")
-                    .and_then(|v| v.parse::<u32>().ok());
+                let start_value = get_attr(e, b"start-value").and_then(|v| v.parse::<u32>().ok());
                 let item_format = if start_value.is_some() {
                     ListFormat::Decimal
                 } else {
@@ -1661,6 +1730,374 @@ fn capture_raw_xml(reader: &mut Reader<&[u8]>, tag_name: &str) -> Result<String,
     }
     let _ = tag_name; // used for documentation clarity at call-site
     Ok(buf)
+}
+
+/// Parse children of a `<draw:text-box>` element: paragraphs and tables.
+///
+/// The reader should be positioned just after the `<draw:text-box>` start tag.
+/// Reads until the matching `</draw:text-box>` end tag.
+fn parse_text_box_children(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    ctx: &ParseContext,
+    tb_id: s1_model::NodeId,
+) -> Result<(), OdtError> {
+    let mut child_index = 0;
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"p" => {
+                        parse_paragraph_into(reader, doc, e, ctx, tb_id, child_index, false, None)?;
+                        child_index += 1;
+                    }
+                    b"h" => {
+                        let level = get_attr(e, b"outline-level")
+                            .and_then(|v| v.parse::<u8>().ok())
+                            .unwrap_or(1);
+                        parse_paragraph_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            tb_id,
+                            child_index,
+                            true,
+                            Some(level),
+                        )?;
+                        child_index += 1;
+                    }
+                    b"table" => {
+                        parse_table_into(reader, doc, ctx, tb_id, child_index)?;
+                        child_index += 1;
+                    }
+                    b"list" => {
+                        let count = parse_list(reader, doc, e, ctx, tb_id, child_index, 0)?;
+                        child_index += count;
+                    }
+                    _ => {
+                        // Skip unknown child elements
+                        skip_element_odt(reader)?;
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"text-box" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(OdtError::Xml(e.to_string())),
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// Parse a basic draw shape (`draw:rect`, `draw:circle`, `draw:ellipse`, or standalone
+/// `draw:text-box`) into a `Drawing` node.
+///
+/// Reads `svg:width`, `svg:height`, `draw:style-name`, and `draw:name` from the start tag.
+/// If the shape contains `text:p` children, creates a `TextBox` child and parses paragraphs.
+#[allow(clippy::too_many_arguments)]
+fn parse_draw_shape_into(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    start: &quick_xml::events::BytesStart<'_>,
+    ctx: &ParseContext,
+    parent_id: s1_model::NodeId,
+    index: usize,
+    shape_type: &str,
+) -> Result<s1_model::NodeId, OdtError> {
+    let width = get_attr(start, b"width").and_then(|v| crate::xml_util::parse_length(&v));
+    let height = get_attr(start, b"height").and_then(|v| crate::xml_util::parse_length(&v));
+    let name = get_attr(start, b"name");
+    let style_name = get_attr(start, b"style-name");
+
+    let drawing_id = doc.next_id();
+    let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+    drawing_node.attributes.set(
+        AttributeKey::ShapeType,
+        AttributeValue::String(shape_type.to_string()),
+    );
+    if let Some(w) = width {
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeWidth, AttributeValue::Float(w));
+    }
+    if let Some(h) = height {
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeHeight, AttributeValue::Float(h));
+    }
+    if let Some(ref n) = name {
+        drawing_node.attributes.set(
+            AttributeKey::ImageAltText,
+            AttributeValue::String(n.clone()),
+        );
+    }
+
+    // Resolve fill/stroke colors from auto-style
+    if let Some(ref sn) = style_name {
+        if let Some(auto_attrs) = ctx.auto_styles.get(sn) {
+            if let Some(fill_val) = auto_attrs.get_string(&AttributeKey::ShapeFillColor) {
+                drawing_node.attributes.set(
+                    AttributeKey::ShapeFillColor,
+                    AttributeValue::String(fill_val.to_string()),
+                );
+            }
+            if let Some(stroke_val) = auto_attrs.get_string(&AttributeKey::ShapeStrokeColor) {
+                drawing_node.attributes.set(
+                    AttributeKey::ShapeStrokeColor,
+                    AttributeValue::String(stroke_val.to_string()),
+                );
+            }
+        }
+    }
+
+    doc.insert_node(parent_id, index, drawing_node)
+        .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+    // Determine the end tag based on the element type
+    let end_tag = start.local_name();
+    let end_tag_bytes = end_tag.as_ref().to_vec();
+
+    // Check if there are paragraph children — if so, create a TextBox child
+    let mut has_text_content = false;
+    let mut tb_id: Option<s1_model::NodeId> = None;
+    let mut tb_child_index = 0usize;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"p" => {
+                        // Create TextBox on first paragraph encountered
+                        if tb_id.is_none() {
+                            let id = doc.next_id();
+                            let tb_node = Node::new(id, NodeType::TextBox);
+                            doc.insert_node(drawing_id, 0, tb_node)
+                                .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+                            tb_id = Some(id);
+                            has_text_content = true;
+                        }
+                        let parent = tb_id.unwrap();
+                        parse_paragraph_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            parent,
+                            tb_child_index,
+                            false,
+                            None,
+                        )?;
+                        tb_child_index += 1;
+                    }
+                    b"h" => {
+                        if tb_id.is_none() {
+                            let id = doc.next_id();
+                            let tb_node = Node::new(id, NodeType::TextBox);
+                            doc.insert_node(drawing_id, 0, tb_node)
+                                .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+                            tb_id = Some(id);
+                            has_text_content = true;
+                        }
+                        let parent = tb_id.unwrap();
+                        let level = get_attr(e, b"outline-level")
+                            .and_then(|v| v.parse::<u8>().ok())
+                            .unwrap_or(1);
+                        parse_paragraph_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            parent,
+                            tb_child_index,
+                            true,
+                            Some(level),
+                        )?;
+                        tb_child_index += 1;
+                    }
+                    b"table" => {
+                        if tb_id.is_none() {
+                            let id = doc.next_id();
+                            let tb_node = Node::new(id, NodeType::TextBox);
+                            doc.insert_node(drawing_id, 0, tb_node)
+                                .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+                            tb_id = Some(id);
+                            has_text_content = true;
+                        }
+                        let parent = tb_id.unwrap();
+                        parse_table_into(reader, doc, ctx, parent, tb_child_index)?;
+                        tb_child_index += 1;
+                    }
+                    _ => {
+                        skip_element_odt(reader)?;
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == end_tag_bytes.as_slice() => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(OdtError::Xml(e.to_string())),
+            _ => {}
+        }
+    }
+
+    let _ = has_text_content;
+    Ok(drawing_id)
+}
+
+/// Parse a `<draw:custom-shape>` element.
+///
+/// Looks for a `<draw:enhanced-geometry>` child to extract the `draw:type` attribute
+/// and uses that as the `ShapeType`. Falls back to `"customShape"` if none found.
+fn parse_custom_shape_into(
+    reader: &mut Reader<&[u8]>,
+    doc: &mut DocumentModel,
+    start: &quick_xml::events::BytesStart<'_>,
+    ctx: &ParseContext,
+    parent_id: s1_model::NodeId,
+    index: usize,
+) -> Result<s1_model::NodeId, OdtError> {
+    let width = get_attr(start, b"width").and_then(|v| crate::xml_util::parse_length(&v));
+    let height = get_attr(start, b"height").and_then(|v| crate::xml_util::parse_length(&v));
+    let name = get_attr(start, b"name");
+    let style_name = get_attr(start, b"style-name");
+
+    let drawing_id = doc.next_id();
+    let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+    // Default shape type; may be overwritten if enhanced-geometry has draw:type
+    drawing_node.attributes.set(
+        AttributeKey::ShapeType,
+        AttributeValue::String("customShape".to_string()),
+    );
+    if let Some(w) = width {
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeWidth, AttributeValue::Float(w));
+    }
+    if let Some(h) = height {
+        drawing_node
+            .attributes
+            .set(AttributeKey::ShapeHeight, AttributeValue::Float(h));
+    }
+    if let Some(ref n) = name {
+        drawing_node.attributes.set(
+            AttributeKey::ImageAltText,
+            AttributeValue::String(n.clone()),
+        );
+    }
+
+    // Resolve fill/stroke from auto-style
+    if let Some(ref sn) = style_name {
+        if let Some(auto_attrs) = ctx.auto_styles.get(sn) {
+            if let Some(fill_val) = auto_attrs.get_string(&AttributeKey::ShapeFillColor) {
+                drawing_node.attributes.set(
+                    AttributeKey::ShapeFillColor,
+                    AttributeValue::String(fill_val.to_string()),
+                );
+            }
+            if let Some(stroke_val) = auto_attrs.get_string(&AttributeKey::ShapeStrokeColor) {
+                drawing_node.attributes.set(
+                    AttributeKey::ShapeStrokeColor,
+                    AttributeValue::String(stroke_val.to_string()),
+                );
+            }
+        }
+    }
+
+    doc.insert_node(parent_id, index, drawing_node)
+        .map_err(|e| OdtError::InvalidStructure(format!("{e:?}")))?;
+
+    // Parse children: look for enhanced-geometry and text:p
+    let mut tb_id: Option<s1_model::NodeId> = None;
+    let mut tb_child_index = 0usize;
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Start(ref e)) => {
+                let local = e.local_name();
+                match local.as_ref() {
+                    b"enhanced-geometry" => {
+                        // Extract draw:type from enhanced-geometry
+                        if let Some(shape_type) = get_attr(e, b"type") {
+                            if let Some(node) = doc.node_mut(drawing_id) {
+                                node.attributes.set(
+                                    AttributeKey::ShapeType,
+                                    AttributeValue::String(shape_type),
+                                );
+                            }
+                        }
+                        skip_element_odt(reader)?;
+                    }
+                    b"p" => {
+                        if tb_id.is_none() {
+                            let id = doc.next_id();
+                            let tb_node = Node::new(id, NodeType::TextBox);
+                            doc.insert_node(drawing_id, 0, tb_node)
+                                .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+                            tb_id = Some(id);
+                        }
+                        let parent = tb_id.unwrap();
+                        parse_paragraph_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            parent,
+                            tb_child_index,
+                            false,
+                            None,
+                        )?;
+                        tb_child_index += 1;
+                    }
+                    b"h" => {
+                        if tb_id.is_none() {
+                            let id = doc.next_id();
+                            let tb_node = Node::new(id, NodeType::TextBox);
+                            doc.insert_node(drawing_id, 0, tb_node)
+                                .map_err(|er| OdtError::InvalidStructure(format!("{er:?}")))?;
+                            tb_id = Some(id);
+                        }
+                        let parent = tb_id.unwrap();
+                        let level = get_attr(e, b"outline-level")
+                            .and_then(|v| v.parse::<u8>().ok())
+                            .unwrap_or(1);
+                        parse_paragraph_into(
+                            reader,
+                            doc,
+                            e,
+                            ctx,
+                            parent,
+                            tb_child_index,
+                            true,
+                            Some(level),
+                        )?;
+                        tb_child_index += 1;
+                    }
+                    _ => {
+                        skip_element_odt(reader)?;
+                    }
+                }
+            }
+            Ok(Event::Empty(ref e)) => {
+                let local = e.local_name();
+                if local.as_ref() == b"enhanced-geometry" {
+                    if let Some(shape_type) = get_attr(e, b"type") {
+                        if let Some(node) = doc.node_mut(drawing_id) {
+                            node.attributes
+                                .set(AttributeKey::ShapeType, AttributeValue::String(shape_type));
+                        }
+                    }
+                }
+            }
+            Ok(Event::End(ref e)) if e.local_name().as_ref() == b"custom-shape" => break,
+            Ok(Event::Eof) => break,
+            Err(e) => return Err(OdtError::Xml(e.to_string())),
+            _ => {}
+        }
+    }
+
+    Ok(drawing_id)
 }
 
 /// Skip an element and all its children (ODT version).
@@ -2744,5 +3181,201 @@ mod tests {
         let raw = "<text:some-other-element/>";
         let info = super::extract_change_tracking_info(raw);
         assert!(info.is_empty(), "should be empty for no regions: {info}");
+    }
+
+    #[test]
+    fn parse_text_box_in_frame() {
+        let doc = parse_body_xml(
+            r#"<text:p><draw:frame draw:name="TB1" svg:width="5cm" svg:height="3cm"><draw:text-box><text:p>Hello from text box</text:p><text:p>Second paragraph</text:p></draw:text-box></draw:frame></text:p>"#,
+        );
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1); // one paragraph
+
+        // The paragraph should contain a Drawing child
+        let para = doc.node(body.children[0]).unwrap();
+        assert_eq!(para.node_type, NodeType::Paragraph);
+
+        // Find Drawing child
+        let drawing_id = para
+            .children
+            .iter()
+            .find(|&&cid| doc.node(cid).unwrap().node_type == NodeType::Drawing);
+        assert!(drawing_id.is_some(), "Drawing node not found in paragraph");
+        let drawing = doc.node(*drawing_id.unwrap()).unwrap();
+
+        // Check shape type
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("textBox")
+        );
+
+        // Check dimensions (5cm and 3cm in points)
+        let w = drawing
+            .attributes
+            .get_f64(&AttributeKey::ShapeWidth)
+            .unwrap();
+        assert!((w - 141.732).abs() < 1.0, "width ~141.7pt, got {w}");
+
+        let h = drawing
+            .attributes
+            .get_f64(&AttributeKey::ShapeHeight)
+            .unwrap();
+        assert!((h - 85.039).abs() < 1.0, "height ~85pt, got {h}");
+
+        // Check TextBox child
+        assert_eq!(drawing.children.len(), 1);
+        let tb = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(tb.node_type, NodeType::TextBox);
+
+        // Check paragraphs inside TextBox
+        assert_eq!(tb.children.len(), 2);
+        let p1 = doc.node(tb.children[0]).unwrap();
+        assert_eq!(p1.node_type, NodeType::Paragraph);
+        let p2 = doc.node(tb.children[1]).unwrap();
+        assert_eq!(p2.node_type, NodeType::Paragraph);
+
+        // Verify text content of first paragraph
+        let run = doc.node(p1.children[0]).unwrap();
+        let text = doc.node(run.children[0]).unwrap();
+        assert_eq!(text.text_content.as_deref(), Some("Hello from text box"));
+    }
+
+    #[test]
+    fn parse_draw_rect_with_dimensions() {
+        let doc = parse_body_xml(
+            r#"<draw:rect draw:name="R1" svg:width="10cm" svg:height="5cm"><text:p>Rect text</text:p></draw:rect>"#,
+        );
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1);
+
+        let drawing = doc.node(body.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("rect")
+        );
+
+        let w = drawing
+            .attributes
+            .get_f64(&AttributeKey::ShapeWidth)
+            .unwrap();
+        assert!((w - 283.465).abs() < 1.0, "10cm ~283.5pt, got {w}");
+
+        let h = drawing
+            .attributes
+            .get_f64(&AttributeKey::ShapeHeight)
+            .unwrap();
+        assert!((h - 141.732).abs() < 1.0, "5cm ~141.7pt, got {h}");
+
+        // Check alt text from draw:name
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ImageAltText),
+            Some("R1")
+        );
+
+        // Check text content inside TextBox child
+        assert_eq!(drawing.children.len(), 1);
+        let tb = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(tb.node_type, NodeType::TextBox);
+        assert_eq!(tb.children.len(), 1);
+    }
+
+    #[test]
+    fn parse_draw_ellipse() {
+        let doc =
+            parse_body_xml(r#"<draw:ellipse svg:width="4cm" svg:height="4cm"></draw:ellipse>"#);
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1);
+
+        let drawing = doc.node(body.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("ellipse")
+        );
+    }
+
+    #[test]
+    fn parse_draw_circle() {
+        let doc = parse_body_xml(r#"<draw:circle svg:width="3cm" svg:height="3cm"></draw:circle>"#);
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1);
+
+        let drawing = doc.node(body.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("ellipse")
+        );
+    }
+
+    #[test]
+    fn parse_draw_custom_shape_with_type() {
+        let doc = parse_body_xml(
+            r#"<draw:custom-shape svg:width="6cm" svg:height="4cm"><draw:enhanced-geometry draw:type="heart"/><text:p>Love</text:p></draw:custom-shape>"#,
+        );
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 1);
+
+        let drawing = doc.node(body.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.attributes.get_string(&AttributeKey::ShapeType),
+            Some("heart")
+        );
+
+        // Check text content
+        assert!(!drawing.children.is_empty());
+        let tb = doc.node(drawing.children[0]).unwrap();
+        assert_eq!(tb.node_type, NodeType::TextBox);
+        let p = doc.node(tb.children[0]).unwrap();
+        assert_eq!(p.node_type, NodeType::Paragraph);
+    }
+
+    #[test]
+    fn parse_draw_rect_no_text() {
+        // Rectangle without text content should have no TextBox child
+        let doc = parse_body_xml(r#"<draw:rect svg:width="2cm" svg:height="2cm"></draw:rect>"#);
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let drawing = doc.node(body.children[0]).unwrap();
+        assert_eq!(drawing.node_type, NodeType::Drawing);
+        assert_eq!(
+            drawing.children.len(),
+            0,
+            "Empty rect should have no children"
+        );
+    }
+
+    #[test]
+    fn text_extraction_from_shapes() {
+        // Verify we can extract text from shapes by walking the tree
+        let doc = parse_body_xml(
+            r#"<draw:rect svg:width="5cm" svg:height="3cm"><text:p>Shape text content</text:p></draw:rect>"#,
+        );
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        let drawing = doc.node(body.children[0]).unwrap();
+        let tb = doc.node(drawing.children[0]).unwrap();
+        let para = doc.node(tb.children[0]).unwrap();
+        let run = doc.node(para.children[0]).unwrap();
+        let text = doc.node(run.children[0]).unwrap();
+        assert_eq!(text.text_content.as_deref(), Some("Shape text content"));
+    }
+
+    #[test]
+    fn parse_complex_shapes_still_skipped() {
+        // Lines, polygons, etc. should not create Drawing nodes
+        let doc = parse_body_xml(
+            r#"<draw:line svg:x1="0cm" svg:y1="0cm" svg:x2="5cm" svg:y2="5cm"></draw:line>"#,
+        );
+        let body_id = doc.body_id().unwrap();
+        let body = doc.node(body_id).unwrap();
+        assert_eq!(body.children.len(), 0, "Lines should be skipped");
     }
 }

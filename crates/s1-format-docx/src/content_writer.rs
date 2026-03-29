@@ -472,6 +472,11 @@ fn write_paragraph(
                     xml.push_str("<w:r>");
                     xml.push_str(raw);
                     xml.push_str("</w:r>");
+                } else if has_textbox_children(doc, child_id) {
+                    // No raw XML but has TextBox children — generate a simple VML text box
+                    xml.push_str("<w:r>");
+                    write_textbox_as_vml(doc, child_id, child, xml);
+                    xml.push_str("</w:r>");
                 }
                 i += 1;
             }
@@ -849,7 +854,10 @@ fn write_cell_properties(attrs: &s1_model::AttributeMap) -> String {
 
     // Cell text direction
     if let Some(dir) = attrs.get_string(&AttributeKey::CellTextDirection) {
-        tcp.push_str(&format!(r#"<w:textDirection w:val="{}"/>"#, escape_xml(dir)));
+        tcp.push_str(&format!(
+            r#"<w:textDirection w:val="{}"/>"#,
+            escape_xml(dir)
+        ));
     }
 
     // Cell no-wrap
@@ -1721,6 +1729,71 @@ fn color_to_highlight_name(color: Color) -> &'static str {
         (255, 255, 255) => "white",
         _ => "yellow", // fallback
     }
+}
+
+/// Check if a Drawing node has any TextBox children.
+fn has_textbox_children(doc: &DocumentModel, drawing_id: NodeId) -> bool {
+    if let Some(drawing) = doc.node(drawing_id) {
+        for &child_id in &drawing.children {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::TextBox {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Generate a simple VML text box shape for a Drawing node that has TextBox children
+/// but no stored raw XML.
+fn write_textbox_as_vml(
+    doc: &DocumentModel,
+    drawing_id: NodeId,
+    drawing_node: &s1_model::Node,
+    xml: &mut String,
+) {
+    let width = drawing_node
+        .attributes
+        .get_f64(&AttributeKey::ShapeWidth)
+        .unwrap_or(200.0);
+    let height = drawing_node
+        .attributes
+        .get_f64(&AttributeKey::ShapeHeight)
+        .unwrap_or(100.0);
+
+    xml.push_str(&format!(
+        r#"<w:pict><v:shape style="width:{width}pt;height:{height}pt"><v:textbox><w:txbxContent>"#,
+    ));
+
+    // Write paragraph children from TextBox nodes
+    if let Some(drawing) = doc.node(drawing_id) {
+        // Temporary vecs since we need to pass them but they won't be used for VML
+        let mut image_rels = Vec::new();
+        let mut hyperlink_rels = Vec::new();
+        for &child_id in &drawing.children {
+            if let Some(child) = doc.node(child_id) {
+                if child.node_type == NodeType::TextBox {
+                    // Write each paragraph child of the TextBox
+                    for &para_id in &child.children {
+                        if let Some(para) = doc.node(para_id) {
+                            if para.node_type == NodeType::Paragraph {
+                                write_paragraph(
+                                    doc,
+                                    para_id,
+                                    xml,
+                                    &mut image_rels,
+                                    &mut hyperlink_rels,
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    xml.push_str("</w:txbxContent></v:textbox></v:shape></w:pict>");
 }
 
 #[cfg(test)]

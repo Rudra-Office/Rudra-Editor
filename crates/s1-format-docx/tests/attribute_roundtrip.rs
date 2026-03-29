@@ -83,7 +83,10 @@ fn roundtrip_caps() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::Caps, AttributeValue::Bool(true));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::Caps), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::Caps),
+        Some(true)
+    );
 }
 
 #[test]
@@ -91,7 +94,10 @@ fn roundtrip_small_caps() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::SmallCaps, AttributeValue::Bool(true));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::SmallCaps), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::SmallCaps),
+        Some(true)
+    );
 }
 
 #[test]
@@ -99,13 +105,19 @@ fn roundtrip_hidden() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::Hidden, AttributeValue::Bool(true));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::Hidden), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::Hidden),
+        Some(true)
+    );
 }
 
 #[test]
 fn roundtrip_double_strikethrough() {
     let mut attrs = AttributeMap::new();
-    attrs.set(AttributeKey::DoubleStrikethrough, AttributeValue::Bool(true));
+    attrs.set(
+        AttributeKey::DoubleStrikethrough,
+        AttributeValue::Bool(true),
+    );
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
     assert_eq!(
         first_run_attrs(&rt).get_bool(&AttributeKey::DoubleStrikethrough),
@@ -118,7 +130,10 @@ fn roundtrip_font_size_cs() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::FontSizeCS, AttributeValue::Float(14.0));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_f64(&AttributeKey::FontSizeCS), Some(14.0));
+    assert_eq!(
+        first_run_attrs(&rt).get_f64(&AttributeKey::FontSizeCS),
+        Some(14.0)
+    );
 }
 
 #[test]
@@ -126,7 +141,10 @@ fn roundtrip_bold_cs() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::BoldCS, AttributeValue::Bool(true));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::BoldCS), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::BoldCS),
+        Some(true)
+    );
 }
 
 #[test]
@@ -134,7 +152,10 @@ fn roundtrip_italic_cs() {
     let mut attrs = AttributeMap::new();
     attrs.set(AttributeKey::ItalicCS, AttributeValue::Bool(true));
     let rt = roundtrip_docx(&doc_with_run_attrs(attrs));
-    assert_eq!(first_run_attrs(&rt).get_bool(&AttributeKey::ItalicCS), Some(true));
+    assert_eq!(
+        first_run_attrs(&rt).get_bool(&AttributeKey::ItalicCS),
+        Some(true)
+    );
 }
 
 #[test]
@@ -289,7 +310,11 @@ fn roundtrip_table_layout_fixed() {
         AttributeKey::TableLayout,
         AttributeValue::TableLayoutMode(TableLayoutMode::Fixed),
     );
-    let rt = roundtrip_docx(&doc_with_table_attrs(ta, AttributeMap::new(), AttributeMap::new()));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        ta,
+        AttributeMap::new(),
+        AttributeMap::new(),
+    ));
     assert_eq!(
         first_table_attrs(&rt).get_table_layout(&AttributeKey::TableLayout),
         Some(TableLayoutMode::Fixed)
@@ -300,7 +325,11 @@ fn roundtrip_table_layout_fixed() {
 fn roundtrip_table_indent() {
     let mut ta = AttributeMap::new();
     ta.set(AttributeKey::TableIndent, AttributeValue::Float(36.0));
-    let rt = roundtrip_docx(&doc_with_table_attrs(ta, AttributeMap::new(), AttributeMap::new()));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        ta,
+        AttributeMap::new(),
+        AttributeMap::new(),
+    ));
     assert_eq!(
         first_table_attrs(&rt).get_f64(&AttributeKey::TableIndent),
         Some(36.0)
@@ -314,7 +343,11 @@ fn roundtrip_table_cell_margins() {
         AttributeKey::TableDefaultCellMargins,
         AttributeValue::Margins(Margins::new(5.0, 5.0, 10.0, 10.0)),
     );
-    let rt = roundtrip_docx(&doc_with_table_attrs(ta, AttributeMap::new(), AttributeMap::new()));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        ta,
+        AttributeMap::new(),
+        AttributeMap::new(),
+    ));
     let m = first_table_attrs(&rt)
         .get_margins(&AttributeKey::TableDefaultCellMargins)
         .expect("margins should round-trip");
@@ -330,8 +363,15 @@ fn roundtrip_row_height() {
         AttributeKey::RowHeightRule,
         AttributeValue::String("exact".into()),
     );
-    let rt = roundtrip_docx(&doc_with_table_attrs(AttributeMap::new(), ra, AttributeMap::new()));
-    assert_eq!(first_row_attrs(&rt).get_f64(&AttributeKey::RowHeight), Some(24.0));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        AttributeMap::new(),
+        ra,
+        AttributeMap::new(),
+    ));
+    assert_eq!(
+        first_row_attrs(&rt).get_f64(&AttributeKey::RowHeight),
+        Some(24.0)
+    );
     assert_eq!(
         first_row_attrs(&rt).get_string(&AttributeKey::RowHeightRule),
         Some("exact")
@@ -342,7 +382,11 @@ fn roundtrip_row_height() {
 fn roundtrip_row_no_split() {
     let mut ra = AttributeMap::new();
     ra.set(AttributeKey::RowNoSplit, AttributeValue::Bool(true));
-    let rt = roundtrip_docx(&doc_with_table_attrs(AttributeMap::new(), ra, AttributeMap::new()));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        AttributeMap::new(),
+        ra,
+        AttributeMap::new(),
+    ));
     assert_eq!(
         first_row_attrs(&rt).get_bool(&AttributeKey::RowNoSplit),
         Some(true)
@@ -353,7 +397,11 @@ fn roundtrip_row_no_split() {
 fn roundtrip_cell_no_wrap() {
     let mut ca = AttributeMap::new();
     ca.set(AttributeKey::CellNoWrap, AttributeValue::Bool(true));
-    let rt = roundtrip_docx(&doc_with_table_attrs(AttributeMap::new(), AttributeMap::new(), ca));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        AttributeMap::new(),
+        AttributeMap::new(),
+        ca,
+    ));
     assert_eq!(
         first_cell_attrs(&rt).get_bool(&AttributeKey::CellNoWrap),
         Some(true)
@@ -367,7 +415,11 @@ fn roundtrip_cell_text_direction() {
         AttributeKey::CellTextDirection,
         AttributeValue::String("btLr".into()),
     );
-    let rt = roundtrip_docx(&doc_with_table_attrs(AttributeMap::new(), AttributeMap::new(), ca));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        AttributeMap::new(),
+        AttributeMap::new(),
+        ca,
+    ));
     assert_eq!(
         first_cell_attrs(&rt).get_string(&AttributeKey::CellTextDirection),
         Some("btLr")
@@ -381,7 +433,11 @@ fn roundtrip_cell_padding() {
         AttributeKey::CellPadding,
         AttributeValue::Margins(Margins::new(2.0, 2.0, 4.0, 4.0)),
     );
-    let rt = roundtrip_docx(&doc_with_table_attrs(AttributeMap::new(), AttributeMap::new(), ca));
+    let rt = roundtrip_docx(&doc_with_table_attrs(
+        AttributeMap::new(),
+        AttributeMap::new(),
+        ca,
+    ));
     let m = first_cell_attrs(&rt)
         .get_margins(&AttributeKey::CellPadding)
         .expect("cell padding should round-trip");
@@ -471,9 +527,10 @@ fn roundtrip_field_types() {
         AttributeKey::FieldType,
         AttributeValue::FieldType(FieldType::PageNumber),
     );
-    field
-        .attributes
-        .set(AttributeKey::FieldCode, AttributeValue::String("PAGE".into()));
+    field.attributes.set(
+        AttributeKey::FieldCode,
+        AttributeValue::String("PAGE".into()),
+    );
     doc.insert_node(para_id, 0, field).unwrap();
 
     let rt = roundtrip_docx(&doc);
@@ -490,7 +547,10 @@ fn roundtrip_field_types() {
     });
     assert!(field_node.is_some());
     assert_eq!(
-        field_node.unwrap().attributes.get_field_type(&AttributeKey::FieldType),
+        field_node
+            .unwrap()
+            .attributes
+            .get_field_type(&AttributeKey::FieldType),
         Some(FieldType::PageNumber)
     );
 }

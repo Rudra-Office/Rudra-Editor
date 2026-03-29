@@ -26,8 +26,8 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                 match name.as_slice() {
                     b"rFonts" => {
                         // Font family: prefer w:ascii, then w:hAnsi
-                        if let Some(font) = get_attr(&e, b"ascii")
-                            .or_else(|| get_attr(&e, b"hAnsi"))
+                        if let Some(font) =
+                            get_attr(&e, b"ascii").or_else(|| get_attr(&e, b"hAnsi"))
                         {
                             attrs.set(AttributeKey::FontFamily, AttributeValue::String(font));
                         }
@@ -35,7 +35,10 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                             attrs.set(AttributeKey::FontFamilyEastAsia, AttributeValue::String(ea));
                         }
                         if let Some(cs) = get_attr(&e, b"cs") {
-                            attrs.set(AttributeKey::FontFamilyCS, AttributeValue::String(cs.clone()));
+                            attrs.set(
+                                AttributeKey::FontFamilyCS,
+                                AttributeValue::String(cs.clone()),
+                            );
                             // Fallback: if no ascii/hAnsi, use cs
                             if !attrs.contains(&AttributeKey::FontFamily) {
                                 attrs.set(AttributeKey::FontFamily, AttributeValue::String(cs));
@@ -129,10 +132,7 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         }
                         // Preserve theme color reference for round-trip
                         if let Some(tc) = get_attr(&e, b"themeColor") {
-                            attrs.set(
-                                AttributeKey::ThemeColor,
-                                AttributeValue::String(tc),
-                            );
+                            attrs.set(AttributeKey::ThemeColor, AttributeValue::String(tc));
                         }
                         if let Some(tint) = get_attr(&e, b"themeTint") {
                             attrs.set(
@@ -170,8 +170,8 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         }
                     }
                     b"rFonts" => {
-                        if let Some(font) = get_attr(&e, b"ascii")
-                            .or_else(|| get_attr(&e, b"hAnsi"))
+                        if let Some(font) =
+                            get_attr(&e, b"ascii").or_else(|| get_attr(&e, b"hAnsi"))
                         {
                             attrs.set(AttributeKey::FontFamily, AttributeValue::String(font));
                         }
@@ -179,7 +179,10 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                             attrs.set(AttributeKey::FontFamilyEastAsia, AttributeValue::String(ea));
                         }
                         if let Some(cs) = get_attr(&e, b"cs") {
-                            attrs.set(AttributeKey::FontFamilyCS, AttributeValue::String(cs.clone()));
+                            attrs.set(
+                                AttributeKey::FontFamilyCS,
+                                AttributeValue::String(cs.clone()),
+                            );
                             if !attrs.contains(&AttributeKey::FontFamily) {
                                 attrs.set(AttributeKey::FontFamily, AttributeValue::String(cs));
                             }
@@ -227,7 +230,10 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         attrs.set(AttributeKey::Caps, AttributeValue::Bool(is_toggle_on(&e)));
                     }
                     b"smallCaps" => {
-                        attrs.set(AttributeKey::SmallCaps, AttributeValue::Bool(is_toggle_on(&e)));
+                        attrs.set(
+                            AttributeKey::SmallCaps,
+                            AttributeValue::Bool(is_toggle_on(&e)),
+                        );
                     }
                     b"vanish" => {
                         attrs.set(AttributeKey::Hidden, AttributeValue::Bool(is_toggle_on(&e)));
@@ -249,7 +255,10 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         attrs.set(AttributeKey::BoldCS, AttributeValue::Bool(is_toggle_on(&e)));
                     }
                     b"iCs" => {
-                        attrs.set(AttributeKey::ItalicCS, AttributeValue::Bool(is_toggle_on(&e)));
+                        attrs.set(
+                            AttributeKey::ItalicCS,
+                            AttributeValue::Bool(is_toggle_on(&e)),
+                        );
                     }
                     b"position" => {
                         if let Some(val) = get_val(&e) {
@@ -645,10 +654,7 @@ pub fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap,
                     }
                     b"tcMar" => {
                         let margins = parse_cell_margins(reader, b"tcMar")?;
-                        attrs.set(
-                            AttributeKey::CellPadding,
-                            AttributeValue::Margins(margins),
-                        );
+                        attrs.set(AttributeKey::CellPadding, AttributeValue::Margins(margins));
                     }
                     b"vMerge" => {
                         // vMerge as non-self-closing element (with val attr)
@@ -750,10 +756,7 @@ pub fn parse_cell_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap,
                     }
                     b"textDirection" => {
                         if let Some(val) = get_val(&e) {
-                            attrs.set(
-                                AttributeKey::CellTextDirection,
-                                AttributeValue::String(val),
-                            );
+                            attrs.set(AttributeKey::CellTextDirection, AttributeValue::String(val));
                         }
                     }
                     b"noWrap" => {
@@ -828,10 +831,7 @@ pub fn parse_row_properties(reader: &mut Reader<&[u8]>) -> Result<AttributeMap, 
                             }
                         }
                         if let Some(rule) = get_attr(&e, b"hRule") {
-                            attrs.set(
-                                AttributeKey::RowHeightRule,
-                                AttributeValue::String(rule),
-                            );
+                            attrs.set(AttributeKey::RowHeightRule, AttributeValue::String(rule));
                         }
                     }
                     b"cantSplit" => {
@@ -912,10 +912,7 @@ pub fn parse_indent_attrs(e: &quick_xml::events::BytesStart<'_>, attrs: &mut Att
     // Hanging indent: stored as negative first-line indent
     if let Some(hanging) = get_attr(e, b"hanging") {
         if let Some(pts) = twips_to_points(&hanging) {
-            attrs.set(
-                AttributeKey::IndentFirstLine,
-                AttributeValue::Float(-pts),
-            );
+            attrs.set(AttributeKey::IndentFirstLine, AttributeValue::Float(-pts));
         }
     }
 }

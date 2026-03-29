@@ -131,8 +131,8 @@ pub fn parse_text_properties(e: &BytesStart<'_>) -> AttributeMap {
     }
 
     // Complex-script font size: fo:font-size-complex or style:font-size-asian
-    if let Some(sz_cs) = get_attr(e, b"font-size-complex")
-        .or_else(|| get_attr(e, b"font-size-asian"))
+    if let Some(sz_cs) =
+        get_attr(e, b"font-size-complex").or_else(|| get_attr(e, b"font-size-asian"))
     {
         if let Some(pts) = parse_font_size(&sz_cs) {
             attrs.set(AttributeKey::FontSizeCS, AttributeValue::Float(pts));
@@ -234,19 +234,13 @@ pub fn parse_paragraph_properties(e: &BytesStart<'_>) -> AttributeMap {
     // We treat either being > 0 as WidowControl(true).
     if let Some(w) = get_attr(e, b"widows") {
         if let Ok(val) = w.parse::<u32>() {
-            attrs.set(
-                AttributeKey::WidowControl,
-                AttributeValue::Bool(val > 0),
-            );
+            attrs.set(AttributeKey::WidowControl, AttributeValue::Bool(val > 0));
         }
     }
     // fo:orphans — same treatment; if widows already set this, orphans can override.
     if let Some(o) = get_attr(e, b"orphans") {
         if let Ok(val) = o.parse::<u32>() {
-            attrs.set(
-                AttributeKey::WidowControl,
-                AttributeValue::Bool(val > 0),
-            );
+            attrs.set(AttributeKey::WidowControl, AttributeValue::Bool(val > 0));
         }
     }
 
@@ -472,10 +466,7 @@ pub fn parse_table_cell_properties(e: &BytesStart<'_>) -> AttributeMap {
         || borders.left.is_some()
         || borders.right.is_some()
     {
-        attrs.set(
-            AttributeKey::CellBorders,
-            AttributeValue::Borders(borders),
-        );
+        attrs.set(AttributeKey::CellBorders, AttributeValue::Borders(borders));
     }
 
     attrs
