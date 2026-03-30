@@ -179,7 +179,13 @@ impl<'a> LayoutEngine<'a> {
         };
         let mut current_section_idx = initial_section_idx;
         let mut page_layout = self.resolve_page_layout_for_section(current_section_idx);
-        let full_page_content_rect = page_layout.content_rect();
+        let (mut hf_header_height, mut hf_footer_height) =
+            self.measure_hf_heights(current_section_idx, &page_layout);
+        let mut full_page_content_rect = Self::shrink_rect_for_hf(
+            page_layout.content_rect(),
+            hf_header_height,
+            hf_footer_height,
+        );
 
         // Multi-column tracking
         let (mut column_count, mut column_spacing) =
@@ -286,7 +292,15 @@ impl<'a> LayoutEngine<'a> {
                 // Switch to the new section's page layout
                 current_section_idx = block_section_idx;
                 page_layout = self.resolve_page_layout_for_section(current_section_idx);
-                let full_rect = page_layout.content_rect();
+                let (hh, fh) = self.measure_hf_heights(current_section_idx, &page_layout);
+                hf_header_height = hh;
+                hf_footer_height = fh;
+                full_page_content_rect = Self::shrink_rect_for_hf(
+                    page_layout.content_rect(),
+                    hf_header_height,
+                    hf_footer_height,
+                );
+                let full_rect = full_page_content_rect;
                 // Reset column tracking for the new section
                 let (cc, cs) = self.resolve_section_columns(current_section_idx);
                 column_count = cc;
@@ -320,7 +334,7 @@ impl<'a> LayoutEngine<'a> {
                         page_index += 1;
                         page_floats.clear();
                         current_column = 0;
-                        let full_rect = page_layout.content_rect();
+                        let full_rect = full_page_content_rect;
                         content_rect = Self::column_content_rect(
                             full_rect,
                             column_count,
@@ -375,7 +389,7 @@ impl<'a> LayoutEngine<'a> {
                         // Try next column before going to a new page
                         if current_column + 1 < column_count {
                             current_column += 1;
-                            let full_rect = page_layout.content_rect();
+                            let full_rect = full_page_content_rect;
                             content_rect = Self::column_content_rect(
                                 full_rect,
                                 column_count,
@@ -442,7 +456,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index += 1;
                                 page_floats.clear();
                                 current_column = 0;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -481,7 +495,7 @@ impl<'a> LayoutEngine<'a> {
                                     page_index += 1;
                                     page_floats.clear();
                                     current_column = 0;
-                                    let full_rect = page_layout.content_rect();
+                                    let full_rect = full_page_content_rect;
                                     content_rect = Self::column_content_rect(
                                         full_rect,
                                         column_count,
@@ -537,7 +551,7 @@ impl<'a> LayoutEngine<'a> {
                             page_index += 1;
                             page_floats.clear();
                             current_column = 0;
-                            let full_rect = page_layout.content_rect();
+                            let full_rect = full_page_content_rect;
                             content_rect = Self::column_content_rect(
                                 full_rect,
                                 column_count,
@@ -572,7 +586,7 @@ impl<'a> LayoutEngine<'a> {
                             if current_y > content_rect.bottom() {
                                 if current_column + 1 < column_count {
                                     current_column += 1;
-                                    let full_rect = page_layout.content_rect();
+                                    let full_rect = full_page_content_rect;
                                     content_rect = Self::column_content_rect(
                                         full_rect,
                                         column_count,
@@ -591,7 +605,7 @@ impl<'a> LayoutEngine<'a> {
                                     page_index += 1;
                                     page_floats.clear();
                                     current_column = 0;
-                                    let full_rect = page_layout.content_rect();
+                                    let full_rect = full_page_content_rect;
                                     content_rect = Self::column_content_rect(
                                         full_rect,
                                         column_count,
@@ -613,7 +627,7 @@ impl<'a> LayoutEngine<'a> {
                         if current_y > content_rect.bottom() {
                             if current_column + 1 < column_count {
                                 current_column += 1;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -632,7 +646,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index += 1;
                                 page_floats.clear();
                                 current_column = 0;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -744,7 +758,7 @@ impl<'a> LayoutEngine<'a> {
                             if row_idx < all_rows.len() {
                                 if current_column + 1 < column_count {
                                     current_column += 1;
-                                    let full_rect = page_layout.content_rect();
+                                    let full_rect = full_page_content_rect;
                                     content_rect = Self::column_content_rect(
                                         full_rect,
                                         column_count,
@@ -763,7 +777,7 @@ impl<'a> LayoutEngine<'a> {
                                     page_index += 1;
                                     page_floats.clear();
                                     current_column = 0;
-                                    let full_rect = page_layout.content_rect();
+                                    let full_rect = full_page_content_rect;
                                     content_rect = Self::column_content_rect(
                                         full_rect,
                                         column_count,
@@ -781,7 +795,7 @@ impl<'a> LayoutEngine<'a> {
                         if current_y > content_rect.bottom() && !page_blocks.is_empty() {
                             if current_column + 1 < column_count {
                                 current_column += 1;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -800,7 +814,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index += 1;
                                 page_floats.clear();
                                 current_column = 0;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -841,7 +855,7 @@ impl<'a> LayoutEngine<'a> {
                             // Try next column before going to a new page
                             if current_column + 1 < column_count {
                                 current_column += 1;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -863,7 +877,7 @@ impl<'a> LayoutEngine<'a> {
                                 page_index += 1;
                                 page_floats.clear();
                                 current_column = 0;
-                                let full_rect = page_layout.content_rect();
+                                let full_rect = full_page_content_rect;
                                 content_rect = Self::column_content_rect(
                                     full_rect,
                                     column_count,
@@ -896,7 +910,7 @@ impl<'a> LayoutEngine<'a> {
                         page_index += 1;
                         page_floats.clear();
                         current_column = 0;
-                        let full_rect = page_layout.content_rect();
+                        let full_rect = full_page_content_rect;
                         content_rect = Self::column_content_rect(
                             full_rect,
                             column_count,
@@ -910,7 +924,7 @@ impl<'a> LayoutEngine<'a> {
                     // Force a column break — advance to next column or next page
                     if current_column + 1 < column_count {
                         current_column += 1;
-                        let full_rect = page_layout.content_rect();
+                        let full_rect = full_page_content_rect;
                         content_rect = Self::column_content_rect(
                             full_rect,
                             column_count,
@@ -931,7 +945,7 @@ impl<'a> LayoutEngine<'a> {
                         page_index += 1;
                         page_floats.clear();
                         current_column = 0;
-                        let full_rect = page_layout.content_rect();
+                        let full_rect = full_page_content_rect;
                         content_rect = Self::column_content_rect(
                             full_rect,
                             column_count,
@@ -1663,21 +1677,47 @@ impl<'a> LayoutEngine<'a> {
             if let Some(s1_model::AttributeValue::ListInfo(li)) =
                 para_node.attributes.get(&s1_model::AttributeKey::ListInfo)
             {
+                let ordinal = if li.num_format != s1_model::ListFormat::Bullet {
+                    let start = li.start.unwrap_or(1);
+                    let mut count = start;
+                    if let Some(parent_id) = para_node.parent {
+                        if let Some(parent) = self.doc.node(parent_id) {
+                            for &sibling_id in &parent.children {
+                                if sibling_id == para_id {
+                                    break;
+                                }
+                                if let Some(sib) = self.doc.node(sibling_id) {
+                                    if let Some(s1_model::AttributeValue::ListInfo(sib_li)) =
+                                        sib.attributes.get(&s1_model::AttributeKey::ListInfo)
+                                    {
+                                        if sib_li.num_id == li.num_id
+                                            && sib_li.level == li.level
+                                            && sib_li.num_format != s1_model::ListFormat::Bullet
+                                        {
+                                            count += 1;
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    count
+                } else {
+                    1
+                };
                 let marker = match li.num_format {
                     s1_model::ListFormat::Bullet => "\u{2022}".to_string(),
-                    s1_model::ListFormat::Decimal => format!("{}.", li.start.unwrap_or(1)),
+                    s1_model::ListFormat::Decimal => format!("{ordinal}."),
                     s1_model::ListFormat::LowerAlpha => {
-                        let c = (b'a' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25))
-                            as char;
-                        format!("{}.", c)
+                        let c = (b'a' + ((ordinal as u8).saturating_sub(1)).min(25)) as char;
+                        format!("{c}.")
                     }
                     s1_model::ListFormat::UpperAlpha => {
-                        let c = (b'A' + (li.start.unwrap_or(1) as u8).saturating_sub(1).min(25))
-                            as char;
-                        format!("{}.", c)
+                        let c = (b'A' + ((ordinal as u8).saturating_sub(1)).min(25)) as char;
+                        format!("{c}.")
                     }
-                    s1_model::ListFormat::LowerRoman => format!("{}.", li.start.unwrap_or(1)),
-                    s1_model::ListFormat::UpperRoman => format!("{}.", li.start.unwrap_or(1)),
+                    s1_model::ListFormat::LowerRoman => format!("{}.", to_roman_lower(ordinal)),
+                    s1_model::ListFormat::UpperRoman => format!("{}.", to_roman_upper(ordinal)),
                     _ => "\u{2022}".to_string(),
                 };
                 (Some(marker), li.level)
@@ -2351,37 +2391,37 @@ impl<'a> LayoutEngine<'a> {
                 continue;
             }
 
+            // When real font metrics are available, use ascent - descent +
+            // line_gap for the run height (this mirrors how browsers compute
+            // the "normal" line-height for a font). When no metrics are
+            // loaded, fall back to font_size * 1.2.
             let run_height = run_info
                 .metrics
-                .map(|m| m.ascent - m.descent)
-                .unwrap_or(run_info.font_size);
+                .map(|m| {
+                    let h = m.ascent - m.descent;
+                    h + m.line_gap
+                })
+                .unwrap_or(run_info.font_size * 1.2);
 
-            // Split the run at word boundaries (space → non-space transitions)
-            // so the line-breaking algorithm can break within multi-word runs.
-            // Trailing spaces are included with the preceding word to preserve
-            // text content in GlyphRun output. Zero-width Glue items between
-            // word+space groups serve as break opportunities.
+            // Split the run at word boundaries using the Unicode Line Breaking
+            // Algorithm (UAX #14) so CJK text and other non-ASCII content can
+            // wrap even when there are no ASCII spaces.
             let text = &run_info.text;
             let glyphs = &run_info.glyphs;
 
-            // Build word groups: each group is "word" + optional trailing spaces.
-            // Split at non-space→space→non-space transitions: the break is between
-            // the last trailing space and the next word character.
             let mut word_groups: Vec<(usize, usize)> = Vec::new(); // (byte_start, byte_end)
-            let bytes = text.as_bytes();
-            if !bytes.is_empty() {
+            if !text.is_empty() {
+                let breaks = s1_text::line_break_opportunities(text);
                 let mut group_start: usize = 0;
-                let mut prev_was_space = bytes[0] == b' ';
-                for (byte_idx, ch) in text.char_indices().skip(1) {
-                    let is_space = ch == ' ';
-                    if !is_space && prev_was_space && byte_idx > group_start {
-                        // Transition from space back to word: end current group
-                        word_groups.push((group_start, byte_idx));
-                        group_start = byte_idx;
+                for brk in &breaks {
+                    if brk.offset > group_start && brk.offset < text.len() {
+                        word_groups.push((group_start, brk.offset));
+                        group_start = brk.offset;
                     }
-                    prev_was_space = is_space;
                 }
-                word_groups.push((group_start, text.len()));
+                if group_start < text.len() {
+                    word_groups.push((group_start, text.len()));
+                }
             }
 
             // If only one group (no splits), keep as single Box
@@ -3197,6 +3237,77 @@ impl<'a> LayoutEngine<'a> {
         }
 
         adjusted
+    }
+
+    /// Pre-measure header and footer heights for a section.
+    fn measure_hf_heights(&self, section_idx: usize, page_layout: &PageLayout) -> (f64, f64) {
+        let sections = self.doc.sections();
+        let section = match sections.get(section_idx).or_else(|| sections.last()) {
+            Some(s) => s,
+            None => return (0.0, 0.0),
+        };
+
+        let hf_width = page_layout.content_width();
+        let mut header_h = 0.0;
+        let mut footer_h = 0.0;
+
+        let header_ref = section
+            .header(HeaderFooterType::Default)
+            .or_else(|| section.header(HeaderFooterType::First));
+        if let Some(hf) = header_ref {
+            let h = self.measure_hf_node_height(hf.node_id, hf_width);
+            header_h = section.header_distance + h;
+            if header_h < page_layout.margin_top {
+                header_h = 0.0;
+            } else {
+                header_h -= page_layout.margin_top;
+            }
+        }
+
+        let footer_ref = section
+            .footer(HeaderFooterType::Default)
+            .or_else(|| section.footer(HeaderFooterType::First));
+        if let Some(hf) = footer_ref {
+            let h = self.measure_hf_node_height(hf.node_id, hf_width);
+            footer_h = section.footer_distance + h;
+            if footer_h < page_layout.margin_bottom {
+                footer_h = 0.0;
+            } else {
+                footer_h -= page_layout.margin_bottom;
+            }
+        }
+
+        (header_h, footer_h)
+    }
+
+    /// Measure the total height of a header/footer node's paragraphs.
+    fn measure_hf_node_height(&self, node_id: NodeId, hf_width: f64) -> f64 {
+        let node = match self.doc.node(node_id) {
+            Some(n) => n,
+            None => return 0.0,
+        };
+
+        let mut total_h = 0.0;
+        for &child_id in &node.children {
+            if let Some(child) = self.doc.node(child_id) {
+                if child.node_type == NodeType::Paragraph {
+                    let para_style = resolve_paragraph_style(self.doc, child_id);
+                    let content_rect = Rect::new(0.0, 0.0, hf_width, 100.0);
+                    if let Ok(block) =
+                        self.layout_paragraph(child_id, &para_style, content_rect, 0.0)
+                    {
+                        total_h += block.bounds.height;
+                    }
+                }
+            }
+        }
+        total_h
+    }
+
+    fn shrink_rect_for_hf(rect: Rect, header_h: f64, footer_h: f64) -> Rect {
+        let new_y = rect.y + header_h;
+        let new_height = (rect.height - header_h - footer_h).max(72.0);
+        Rect::new(rect.x, new_y, rect.width, new_height)
     }
 
     /// Layout header/footer content for a page using a specific section's
@@ -4029,11 +4140,12 @@ impl<'a> LayoutEngine<'a> {
         blocks: Vec<LayoutBlock>,
         section_index: usize,
     ) -> LayoutPage {
+        let (header_h, footer_h) = self.measure_hf_heights(section_index, page_layout);
         LayoutPage {
             index,
             width: page_layout.width,
             height: page_layout.height,
-            content_area: page_layout.content_rect(),
+            content_area: Self::shrink_rect_for_hf(page_layout.content_rect(), header_h, footer_h),
             blocks,
             header: None,
             footer: None,
@@ -4042,6 +4154,36 @@ impl<'a> LayoutEngine<'a> {
             section_index,
         }
     }
+}
+
+fn to_roman_lower(mut n: u32) -> String {
+    let vals = [
+        (1000, "m"),
+        (900, "cm"),
+        (500, "d"),
+        (400, "cd"),
+        (100, "c"),
+        (90, "xc"),
+        (50, "l"),
+        (40, "xl"),
+        (10, "x"),
+        (9, "ix"),
+        (5, "v"),
+        (4, "iv"),
+        (1, "i"),
+    ];
+    let mut result = String::new();
+    for &(val, sym) in &vals {
+        while n >= val {
+            result.push_str(sym);
+            n -= val;
+        }
+    }
+    result
+}
+
+fn to_roman_upper(n: u32) -> String {
+    to_roman_lower(n).to_uppercase()
 }
 
 #[cfg(test)]

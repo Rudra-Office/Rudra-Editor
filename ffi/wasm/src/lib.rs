@@ -10682,7 +10682,7 @@ fn layout_block_to_json(block: &s1_layout::LayoutBlock, model: &DocumentModel, j
     let source = format!("{}:{}", block.source_id.replica, block.source_id.counter);
     json.push_str(&format!(
         "{{\"sourceId\":\"{}\",\"bounds\":{{\"x\":{:.2},\"y\":{:.2},\"width\":{:.2},\"height\":{:.2}}},",
-        json_escape_string(&source),
+        escape_json(&source),
         block.bounds.x,
         block.bounds.y,
         block.bounds.width,
@@ -10709,19 +10709,16 @@ fn layout_block_to_json(block: &s1_layout::LayoutBlock, model: &DocumentModel, j
             json.push_str("\"type\":\"paragraph\",");
 
             if let Some(align) = text_align {
-                json.push_str(&format!("\"textAlign\":\"{}\",", json_escape_string(align)));
+                json.push_str(&format!("\"textAlign\":\"{}\",", escape_json(align)));
             }
             if let Some(bg) = background_color {
                 json.push_str(&format!("\"backgroundColor\":\"#{}\",", bg.to_hex()));
             }
             if let Some(b) = border {
-                json.push_str(&format!("\"border\":\"{}\",", json_escape_string(b)));
+                json.push_str(&format!("\"border\":\"{}\",", escape_json(b)));
             }
             if let Some(marker) = list_marker {
-                json.push_str(&format!(
-                    "\"listMarker\":\"{}\",",
-                    json_escape_string(marker)
-                ));
+                json.push_str(&format!("\"listMarker\":\"{}\",", escape_json(marker)));
             }
             json.push_str(&format!(
                 "\"listLevel\":{},\"spaceBefore\":{:.2},\"spaceAfter\":{:.2},\"indentLeft\":{:.2},\"indentRight\":{:.2},\"indentFirstLine\":{:.2},",
@@ -10787,17 +10784,17 @@ fn layout_block_to_json(block: &s1_layout::LayoutBlock, model: &DocumentModel, j
         } => {
             json.push_str(&format!(
                 "\"type\":\"image\",\"mediaId\":\"{}\",\"imageBounds\":{{\"x\":{:.2},\"y\":{:.2},\"width\":{:.2},\"height\":{:.2}}}",
-                json_escape_string(media_id),
+                escape_json(media_id),
                 bounds.x, bounds.y, bounds.width, bounds.height,
             ));
             if let Some(ct) = content_type {
-                json.push_str(&format!(",\"contentType\":\"{}\"", json_escape_string(ct)));
+                json.push_str(&format!(",\"contentType\":\"{}\"", escape_json(ct)));
             }
             if let (Some(data), Some(ct)) = (image_data, content_type) {
                 let b64 = base64_encode(data);
                 json.push_str(&format!(
                     ",\"src\":\"data:{};base64,{}\"",
-                    json_escape_string(ct),
+                    escape_json(ct),
                     b64
                 ));
             }
@@ -10815,8 +10812,8 @@ fn glyph_run_to_json(run: &s1_layout::GlyphRun, model: &DocumentModel, json: &mu
     let source = format!("{}:{}", run.source_id.replica, run.source_id.counter);
     json.push_str(&format!(
         "{{\"sourceId\":\"{}\",\"text\":\"{}\",\"x\":{:.2},\"fontSize\":{:.2},\"width\":{:.2},\"bold\":{},\"italic\":{},\"underline\":{},\"strikethrough\":{},\"superscript\":{},\"subscript\":{},\"color\":\"#{}\",\"characterSpacing\":{:.2}",
-        json_escape_string(&source),
-        json_escape_string(&run.text),
+        escape_json(&source),
+        escape_json(&run.text),
         run.x_offset,
         run.font_size,
         run.width,
@@ -10835,36 +10832,27 @@ fn glyph_run_to_json(run: &s1_layout::GlyphRun, model: &DocumentModel, json: &mu
         .node(run.source_id)
         .and_then(|n| n.attributes.get_string(&AttributeKey::FontFamily))
         .unwrap_or("serif");
-    json.push_str(&format!(
-        ",\"fontFamily\":\"{}\"",
-        json_escape_string(font_family)
-    ));
+    json.push_str(&format!(",\"fontFamily\":\"{}\"", escape_json(font_family)));
 
     if let Some(ref url) = run.hyperlink_url {
-        json.push_str(&format!(
-            ",\"hyperlinkUrl\":\"{}\"",
-            json_escape_string(url)
-        ));
+        json.push_str(&format!(",\"hyperlinkUrl\":\"{}\"", escape_json(url)));
     }
     if let Some(ref hl) = run.highlight_color {
         json.push_str(&format!(",\"highlightColor\":\"#{}\"", hl.to_hex()));
     }
     if let Some(ref rev_type) = run.revision_type {
-        json.push_str(&format!(
-            ",\"revisionType\":\"{}\"",
-            json_escape_string(rev_type)
-        ));
+        json.push_str(&format!(",\"revisionType\":\"{}\"", escape_json(rev_type)));
     }
     if let Some(ref rev_author) = run.revision_author {
         json.push_str(&format!(
             ",\"revisionAuthor\":\"{}\"",
-            json_escape_string(rev_author)
+            escape_json(rev_author)
         ));
     }
     if let Some(ref img) = run.inline_image {
         json.push_str(&format!(
             ",\"inlineImage\":{{\"mediaId\":\"{}\",\"width\":{:.2},\"height\":{:.2}",
-            json_escape_string(&img.media_id),
+            escape_json(&img.media_id),
             img.width,
             img.height,
         ));
@@ -10872,7 +10860,7 @@ fn glyph_run_to_json(run: &s1_layout::GlyphRun, model: &DocumentModel, json: &mu
             let b64 = base64_encode(data);
             json.push_str(&format!(
                 ",\"src\":\"data:{};base64,{}\"",
-                json_escape_string(ct),
+                escape_json(ct),
                 b64
             ));
         }
@@ -10891,16 +10879,16 @@ fn table_cell_to_json(cell: &s1_layout::LayoutTableCell, model: &DocumentModel, 
         json.push_str(&format!(",\"backgroundColor\":\"#{}\"", bg.to_hex()));
     }
     if let Some(ref bt) = cell.border_top {
-        json.push_str(&format!(",\"borderTop\":\"{}\"", json_escape_string(bt)));
+        json.push_str(&format!(",\"borderTop\":\"{}\"", escape_json(bt)));
     }
     if let Some(ref bb) = cell.border_bottom {
-        json.push_str(&format!(",\"borderBottom\":\"{}\"", json_escape_string(bb)));
+        json.push_str(&format!(",\"borderBottom\":\"{}\"", escape_json(bb)));
     }
     if let Some(ref bl) = cell.border_left {
-        json.push_str(&format!(",\"borderLeft\":\"{}\"", json_escape_string(bl)));
+        json.push_str(&format!(",\"borderLeft\":\"{}\"", escape_json(bl)));
     }
     if let Some(ref br) = cell.border_right {
-        json.push_str(&format!(",\"borderRight\":\"{}\"", json_escape_string(br)));
+        json.push_str(&format!(",\"borderRight\":\"{}\"", escape_json(br)));
     }
     json.push_str(",\"blocks\":[");
     for (bi, block) in cell.blocks.iter().enumerate() {

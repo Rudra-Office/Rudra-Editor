@@ -158,14 +158,29 @@ pub(crate) fn format_border_css(border: &s1_model::BorderSide) -> String {
 pub(crate) fn synthesize_glyphs(text: &str, font_size: f64) -> Vec<ShapedGlyph> {
     text.char_indices()
         .map(|(i, ch)| {
-            // Estimate width by character class for more accurate line breaking
-            let width_factor = match ch {
-                'i' | 'j' | 'l' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '"' | '`' => 0.3,
-                'f' | 'r' | 't' | '(' | ')' | '[' | ']' | '{' | '}' => 0.4,
-                'm' | 'w' | 'M' | 'W' | '@' | '%' => 0.8,
-                'A'..='Z' => 0.65,
-                ' ' => 0.3,
-                _ => 0.5,
+            let cp = ch as u32;
+            let is_cjk = (0x4E00..=0x9FFF).contains(&cp)
+                || (0x3400..=0x4DBF).contains(&cp)
+                || (0x3000..=0x303F).contains(&cp)
+                || (0xFF00..=0xFFEF).contains(&cp)
+                || (0x3040..=0x309F).contains(&cp)
+                || (0x30A0..=0x30FF).contains(&cp)
+                || (0xAC00..=0xD7AF).contains(&cp)
+                || (0x20000..=0x2A6DF).contains(&cp)
+                || (0x2A700..=0x2B73F).contains(&cp)
+                || (0xF900..=0xFAFF).contains(&cp);
+            let width_factor = if is_cjk {
+                1.0
+            } else {
+                match ch {
+                    '\t' => 4.0,
+                    'i' | 'j' | 'l' | '!' | '|' | '.' | ',' | ':' | ';' | '\'' | '"' | '`' => 0.3,
+                    'f' | 'r' | 't' | '(' | ')' | '[' | ']' | '{' | '}' => 0.4,
+                    'm' | 'w' | 'M' | 'W' | '@' | '%' => 0.8,
+                    'A'..='Z' => 0.65,
+                    ' ' => 0.3,
+                    _ => 0.5,
+                }
             };
             ShapedGlyph {
                 glyph_id: 0,

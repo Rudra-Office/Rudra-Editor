@@ -2,7 +2,7 @@
 
 > Each feature area has its own specification document.
 > Process: Research → Spec → Break → Fix → Implement → Test → Verify
-> Last updated: 2026-03-20
+> Last updated: 2026-03-30
 
 ## Specifications
 
@@ -20,6 +20,14 @@
 | 10 | **Admin Panel** | [specs/ADMIN_PANEL_SPEC.md](specs/ADMIN_PANEL_SPEC.md) | v1.0 — Dashboard, errors, health, enhancement plan |
 | 11 | **E2E Test Plan** | [specs/E2E_TEST_PLAN.md](specs/E2E_TEST_PLAN.md) | v1.0 — Automated + manual scenarios |
 | 12 | **Spreadsheet Formats** | [specs/SPREADSHEET_SPEC.md](specs/SPREADSHEET_SPEC.md) | v1.0 — XLSX, ODS, CSV, TSV, data model, formula engine |
+| 13 | **Canvas Editor High-Level Architecture** | [CANVAS_EDITOR_HIGH_LEVEL_ARCHITECTURE.md](CANVAS_EDITOR_HIGH_LEVEL_ARCHITECTURE.md) | Draft — canvas-first editor architecture baseline |
+| 14 | **Canvas Editor Low-Level Design** | [CANVAS_EDITOR_LOW_LEVEL_DESIGN.md](CANVAS_EDITOR_LOW_LEVEL_DESIGN.md) | Draft — rendering, input, scene, WASM API design |
+| 15 | **Canvas Editor Elements Spec** | [CANVAS_EDITOR_ELEMENTS_SPEC.md](CANVAS_EDITOR_ELEMENTS_SPEC.md) | Draft — element-by-element ownership and behavior |
+| 16 | **Canvas Editor Implementation Roadmap** | [CANVAS_EDITOR_IMPLEMENTATION_ROADMAP.md](CANVAS_EDITOR_IMPLEMENTATION_ROADMAP.md) | Draft — phased migration plan and exit criteria |
+| 17 | **Canvas Editor WASM API Contract** | [CANVAS_EDITOR_WASM_API_CONTRACT.md](CANVAS_EDITOR_WASM_API_CONTRACT.md) | Draft — scene, geometry, edit, and composition boundary |
+| 18 | **Canvas Editor Frontend Module Plan** | [CANVAS_EDITOR_FRONTEND_MODULE_PLAN.md](CANVAS_EDITOR_FRONTEND_MODULE_PLAN.md) | Draft — browser module split and migration map |
+| 19 | **Canvas Editor Fidelity Validation Spec** | [CANVAS_EDITOR_FIDELITY_VALIDATION_SPEC.md](CANVAS_EDITOR_FIDELITY_VALIDATION_SPEC.md) | Draft — layout, render, interaction, and format fidelity gates |
+| 20 | **Canvas Editor Fidelity Phase Checklist** | [CANVAS_EDITOR_FIDELITY_PHASE_CHECKLIST.md](CANVAS_EDITOR_FIDELITY_PHASE_CHECKLIST.md) | Draft — release gates and evidence checklist per canvas phase |
 
 ## Trackers
 
