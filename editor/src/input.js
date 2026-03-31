@@ -4617,7 +4617,10 @@ export function initTableCellAnnouncements() {
   });
 
   // ─── UXP-12: Table Column Resize Drag Handles ───────────────
-  setupTableColumnResize(page, _inputSignal);
+  const pageContainer = document.getElementById('pageContainer');
+  if (pageContainer) {
+    setupTableColumnResize(pageContainer, {});
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════════════

@@ -1,97 +1,129 @@
 #!/bin/bash
-# Download fonts from Google Fonts that are commonly used in DOCX documents.
-# These are metric-compatible alternatives to Microsoft Office fonts.
-#
-# Usage: ./scripts/download-fonts.sh [cache_dir]
-#   cache_dir defaults to ~/.local/share/s1engine/fonts
+set -e
+FONTS_DIR="/Users/sachin/Desktop/melp/rdrive/doc-engine/editor/fonts"
+cd "$FONTS_DIR"
 
-set -euo pipefail
+# Google Fonts base URL
+GF="https://github.com/google/fonts/raw/main"
 
-CACHE_DIR="${1:-${HOME}/.local/share/s1engine/fonts}"
-mkdir -p "$CACHE_DIR"
-
-echo "Font cache directory: $CACHE_DIR"
-
-# Google Fonts API base URL for downloading font files
-GOOGLE_FONTS_BASE="https://fonts.google.com/download?family="
-GOOGLE_FONTS_API="https://fonts.googleapis.com/css2?family="
-
-download_font() {
-    local family="$1"
-    local url_family="${family// /+}"
-    local target_dir="$CACHE_DIR/$family"
-
-    if [ -d "$target_dir" ] && [ "$(ls -A "$target_dir" 2>/dev/null)" ]; then
-        echo "  SKIP: $family (already cached)"
-        return 0
-    fi
-
-    echo "  Downloading: $family..."
-    local zip_file="/tmp/s1_font_${url_family}.zip"
-
-    # Download the font family ZIP from Google Fonts
-    if curl -sL -o "$zip_file" "${GOOGLE_FONTS_BASE}${url_family}" 2>/dev/null; then
-        mkdir -p "$target_dir"
-        # Extract only TTF/OTF files
-        if unzip -qo "$zip_file" "*.ttf" "*.otf" -d "$target_dir" 2>/dev/null; then
-            # Move files from subdirectories to target_dir root
-            find "$target_dir" -mindepth 2 -name "*.ttf" -o -name "*.otf" | while read f; do
-                mv "$f" "$target_dir/" 2>/dev/null || true
-            done
-            # Clean up empty subdirs
-            find "$target_dir" -mindepth 1 -type d -empty -delete 2>/dev/null || true
-            local count=$(find "$target_dir" -name "*.ttf" -o -name "*.otf" | wc -l)
-            echo "  OK: $family ($count font files)"
-        else
-            echo "  WARN: $family (failed to extract - may not be on Google Fonts)"
-            rm -rf "$target_dir"
-        fi
-        rm -f "$zip_file"
-    else
-        echo "  WARN: $family (download failed)"
-    fi
+download() {
+  local url="$1"
+  local name="$2"
+  if [ ! -f "$name" ]; then
+    echo "  Downloading $name..."
+    curl -sL "$url" -o "$name" 2>/dev/null || echo "  WARN: Failed $name"
+  fi
 }
 
+echo "=== Downloading metric-compatible MS Office fonts ==="
+# Carlito (Calibri replacement) - Croscore
+download "$GF/ofl/carlito/Carlito-Regular.ttf" "Carlito-Regular.ttf"
+download "$GF/ofl/carlito/Carlito-Bold.ttf" "Carlito-Bold.ttf"
+download "$GF/ofl/carlito/Carlito-Italic.ttf" "Carlito-Italic.ttf"
+download "$GF/ofl/carlito/Carlito-BoldItalic.ttf" "Carlito-BoldItalic.ttf"
+
+# Caladea (Cambria replacement) - Croscore
+download "$GF/ofl/caladea/Caladea-Regular.ttf" "Caladea-Regular.ttf"
+download "$GF/ofl/caladea/Caladea-Bold.ttf" "Caladea-Bold.ttf"
+download "$GF/ofl/caladea/Caladea-Italic.ttf" "Caladea-Italic.ttf"
+download "$GF/ofl/caladea/Caladea-BoldItalic.ttf" "Caladea-BoldItalic.ttf"
+
+# Tinos (Times New Roman replacement) - Croscore
+download "$GF/apache/tinos/Tinos-Regular.ttf" "Tinos-Regular.ttf"
+download "$GF/apache/tinos/Tinos-Bold.ttf" "Tinos-Bold.ttf"
+download "$GF/apache/tinos/Tinos-Italic.ttf" "Tinos-Italic.ttf"
+download "$GF/apache/tinos/Tinos-BoldItalic.ttf" "Tinos-BoldItalic.ttf"
+
+# Arimo (Arial replacement) - Croscore
+download "$GF/apache/arimo/Arimo%5Bwght%5D.ttf" "Arimo-Regular.ttf"
+download "$GF/apache/arimo/Arimo-Italic%5Bwght%5D.ttf" "Arimo-Italic.ttf"
+
+# Cousine (Courier New replacement) - Croscore
+download "$GF/apache/cousine/Cousine-Regular.ttf" "Cousine-Regular.ttf"
+download "$GF/apache/cousine/Cousine-Bold.ttf" "Cousine-Bold.ttf"
+download "$GF/apache/cousine/Cousine-Italic.ttf" "Cousine-Italic.ttf"
+download "$GF/apache/cousine/Cousine-BoldItalic.ttf" "Cousine-BoldItalic.ttf"
+
+echo "=== Downloading common document fonts ==="
+# Roboto
+download "$GF/ofl/roboto/Roboto%5Bwdth%2Cwght%5D.ttf" "Roboto-Regular.ttf"
+download "$GF/ofl/roboto/Roboto-Italic%5Bwdth%2Cwght%5D.ttf" "Roboto-Italic.ttf"
+
+# Noto Sans (covers Latin, Cyrillic, Greek)
+download "$GF/ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" "NotoSans-Regular.ttf"
+download "$GF/ofl/notosans/NotoSans-Italic%5Bwdth%2Cwght%5D.ttf" "NotoSans-Italic.ttf"
+
+# Noto Serif
+download "$GF/ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf" "NotoSerif-Regular.ttf"
+download "$GF/ofl/notoserif/NotoSerif-Italic%5Bwdth%2Cwght%5D.ttf" "NotoSerif-Italic.ttf"
+
+# Open Sans
+download "$GF/ofl/opensans/OpenSans%5Bwdth%2Cwght%5D.ttf" "OpenSans-Regular.ttf"
+download "$GF/ofl/opensans/OpenSans-Italic%5Bwdth%2Cwght%5D.ttf" "OpenSans-Italic.ttf"
+
+# Lato
+download "$GF/ofl/lato/Lato-Regular.ttf" "Lato-Regular.ttf"
+download "$GF/ofl/lato/Lato-Bold.ttf" "Lato-Bold.ttf"
+download "$GF/ofl/lato/Lato-Italic.ttf" "Lato-Italic.ttf"
+download "$GF/ofl/lato/Lato-BoldItalic.ttf" "Lato-BoldItalic.ttf"
+
+# Source Sans Pro / Source Sans 3
+download "$GF/ofl/sourcesans3/SourceSans3%5Bwght%5D.ttf" "SourceSans3-Regular.ttf"
+download "$GF/ofl/sourcesans3/SourceSans3-Italic%5Bwght%5D.ttf" "SourceSans3-Italic.ttf"
+
+# Merriweather
+download "$GF/ofl/merriweather/Merriweather-Regular.ttf" "Merriweather-Regular.ttf"
+download "$GF/ofl/merriweather/Merriweather-Bold.ttf" "Merriweather-Bold.ttf"
+download "$GF/ofl/merriweather/Merriweather-Italic.ttf" "Merriweather-Italic.ttf"
+
+# PT Sans / PT Serif
+download "$GF/ofl/ptsans/PT_Sans-Web-Regular.ttf" "PTSans-Regular.ttf"
+download "$GF/ofl/ptsans/PT_Sans-Web-Bold.ttf" "PTSans-Bold.ttf"
+download "$GF/ofl/ptsans/PT_Sans-Web-Italic.ttf" "PTSans-Italic.ttf"
+download "$GF/ofl/ptserif/PT_Serif-Web-Regular.ttf" "PTSerif-Regular.ttf"
+download "$GF/ofl/ptserif/PT_Serif-Web-Bold.ttf" "PTSerif-Bold.ttf"
+download "$GF/ofl/ptserif/PT_Serif-Web-Italic.ttf" "PTSerif-Italic.ttf"
+
+# Georgia-compatible: EB Garamond
+download "$GF/ofl/ebgaramond/EBGaramond%5Bwght%5D.ttf" "EBGaramond-Regular.ttf"
+download "$GF/ofl/ebgaramond/EBGaramond-Italic%5Bwght%5D.ttf" "EBGaramond-Italic.ttf"
+
+# Liberation fonts (MS Office compatible)
+download "https://github.com/liberationfonts/liberation-fonts/files/7261482/liberation-fonts-ttf-2.1.5.tar.gz" "/tmp/liberation.tar.gz"
+if [ -f "/tmp/liberation.tar.gz" ]; then
+  cd /tmp && tar xzf liberation.tar.gz 2>/dev/null || true
+  for f in /tmp/liberation-fonts-ttf-*/Liberation*.ttf; do
+    [ -f "$f" ] && cp "$f" "$FONTS_DIR/" 2>/dev/null || true
+  done
+  cd "$FONTS_DIR"
+fi
+
+# Inter (modern UI font)
+download "$GF/ofl/inter/Inter%5Bopsz%2Cwght%5D.ttf" "Inter-Regular.ttf"
+download "$GF/ofl/inter/Inter-Italic%5Bopsz%2Cwght%5D.ttf" "Inter-Italic.ttf"
+
+# Montserrat
+download "$GF/ofl/montserrat/Montserrat%5Bwght%5D.ttf" "Montserrat-Regular.ttf"
+download "$GF/ofl/montserrat/Montserrat-Italic%5Bwght%5D.ttf" "Montserrat-Italic.ttf"
+
+# Playfair Display
+download "$GF/ofl/playfairdisplay/PlayfairDisplay%5Bwght%5D.ttf" "PlayfairDisplay-Regular.ttf"
+download "$GF/ofl/playfairdisplay/PlayfairDisplay-Italic%5Bwght%5D.ttf" "PlayfairDisplay-Italic.ttf"
+
+echo "=== Downloading Noto CJK/Arabic/Hebrew for internationalization ==="
+# Noto Sans JP (Japanese)
+download "$GF/ofl/notosansjp/NotoSansJP%5Bwght%5D.ttf" "NotoSansJP-Regular.ttf"
+# Noto Sans SC (Simplified Chinese)
+download "$GF/ofl/notosanssc/NotoSansSC%5Bwght%5D.ttf" "NotoSansSC-Regular.ttf"
+# Noto Sans KR (Korean)
+download "$GF/ofl/notosanskr/NotoSansKR%5Bwght%5D.ttf" "NotoSansKR-Regular.ttf"
+# Noto Sans Arabic
+download "$GF/ofl/notosansarabic/NotoSansArabic%5Bwdth%2Cwght%5D.ttf" "NotoSansArabic-Regular.ttf"
+# Noto Sans Hebrew
+download "$GF/ofl/notosanshebrew/NotoSansHebrew%5Bwdth%2Cwght%5D.ttf" "NotoSansHebrew-Regular.ttf"
+# Noto Sans Devanagari (Hindi)
+download "$GF/ofl/notosansdevanagari/NotoSansDevanagari%5Bwdth%2Cwght%5D.ttf" "NotoSansDevanagari-Regular.ttf"
+
 echo ""
-echo "Downloading metric-compatible Microsoft Office font alternatives..."
-echo ""
-
-# Carlito — metric-compatible with Calibri (default Office font)
-download_font "Carlito"
-
-# Caladea — metric-compatible with Cambria
-download_font "Caladea"
-
-# Tinos — metric-compatible with Times New Roman
-download_font "Tinos"
-
-# Arimo — metric-compatible with Arial
-download_font "Arimo"
-
-# Cousine — metric-compatible with Courier New
-download_font "Cousine"
-
-echo ""
-echo "Downloading common document fonts available on Google Fonts..."
-echo ""
-
-# These are commonly used in DOCX files and available on Google Fonts
-download_font "Roboto"
-download_font "Open Sans"
-download_font "Lato"
-download_font "Montserrat"
-download_font "Noto Sans"
-download_font "Noto Serif"
-download_font "Source Sans 3"
-download_font "EB Garamond"
-download_font "Merriweather"
-download_font "PT Sans"
-download_font "PT Serif"
-download_font "Inconsolata"
-
-echo ""
-echo "Done. Fonts cached in: $CACHE_DIR"
-echo ""
-echo "To use these fonts with s1engine, either:"
-echo "  1. Set S1_FONTS_DIR=$CACHE_DIR in your environment"
-echo "  2. Call font_db.load_fonts_dir(\"$CACHE_DIR\") in your code"
+echo "=== Done ==="
+ls -1 "$FONTS_DIR"/*.ttf 2>/dev/null | wc -l | xargs echo "Total font files:"

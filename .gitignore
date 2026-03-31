@@ -21,7 +21,18 @@ editor/dist/
 editor/node_modules/
 editor/.vite/
 editor/pkg/
+
+# WASM build output (generated, not source)
 editor/wasm-pkg/
+demo/pkg/
+
+# Font files (downloaded, not source — regenerate via scripts/download-fonts.sh)
+# Uncomment the next line to track fonts in git (adds ~100MB):
+# !editor/public/fonts/
+editor/public/fonts/*.ttf
+
+# Fidelity artifacts (generated, not source)
+tests/fidelity/artifacts/
 
 # Relay server data (persisted room state)
 data/
@@ -31,7 +42,9 @@ data/
 .env.local
 .env.production
 
-docview/
+# Test results
 editor/test-results/
 
+# External projects
+docview/
 superdoc/

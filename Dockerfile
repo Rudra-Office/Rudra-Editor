@@ -99,6 +99,28 @@ COPY editor/ .
 # Copy WASM output from stage 1 into wasm-pkg/ (where main.js imports from)
 COPY --from=wasm-builder /app/wasm-pkg ./wasm-pkg/
 
+# Download fonts for high-fidelity rendering (same fonts used by WASM layout engine)
+# If fonts are already in public/fonts/, this is a no-op.
+RUN if [ ! -d public/fonts ] || [ "$(ls public/fonts/*.ttf 2>/dev/null | wc -l)" -lt 10 ]; then \
+      echo "Downloading fonts..." && \
+      mkdir -p public/fonts && \
+      apt-get update -qq && apt-get install -y -qq curl && \
+      GF="https://github.com/google/fonts/raw/main" && \
+      for f in \
+        "ofl/carlito/Carlito-Regular.ttf" "ofl/carlito/Carlito-Bold.ttf" \
+        "ofl/carlito/Carlito-Italic.ttf" "ofl/carlito/Carlito-BoldItalic.ttf" \
+        "ofl/caladea/Caladea-Regular.ttf" "ofl/caladea/Caladea-Bold.ttf" \
+        "apache/tinos/Tinos-Regular.ttf" "apache/tinos/Tinos-Bold.ttf" \
+        "apache/tinos/Tinos-Italic.ttf" "apache/tinos/Tinos-BoldItalic.ttf" \
+        "ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" \
+        "ofl/notoserif/NotoSerif%5Bwdth%2Cwght%5D.ttf" \
+        "ofl/roboto/Roboto%5Bwdth%2Cwght%5D.ttf"; \
+      do \
+        name=$(basename "$f" | sed 's/%5B.*%5D//' | sed 's/\.ttf/-Regular.ttf/'); \
+        [ -f "public/fonts/$name" ] || curl -sL "$GF/$f" -o "public/fonts/$(basename $f | python3 -c 'import sys,urllib.parse;print(urllib.parse.unquote(sys.stdin.read().strip()))')" 2>/dev/null || true; \
+      done; \
+    fi
+
 # Build production bundle
 RUN npm run build
 

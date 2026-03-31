@@ -2517,15 +2517,33 @@ impl WasmDocument {
         let first_id = parse_node_id(first_id_str)?;
         let second_id = parse_node_id(second_id_str)?;
 
-        // Collect children (runs) from both paragraphs
+        // Guard: both nodes must be Paragraph type to merge
         let first_para = doc
             .node(first_id)
             .ok_or_else(|| JsError::new("First paragraph not found"))?;
+        if first_para.node_type != NodeType::Paragraph {
+            return Err(JsError::new(&format!(
+                "Cannot merge: first node is {:?}, not Paragraph",
+                first_para.node_type
+            )));
+        }
         let first_child_count = first_para.children.len();
 
         let second_para = doc
             .node(second_id)
             .ok_or_else(|| JsError::new("Second paragraph not found"))?;
+        if second_para.node_type != NodeType::Paragraph {
+            // If second node is a PageBreak, just delete it instead of merging
+            if second_para.node_type == NodeType::PageBreak {
+                return doc
+                    .apply(Operation::delete_node(second_id))
+                    .map_err(|e| JsError::new(&e.to_string()));
+            }
+            return Err(JsError::new(&format!(
+                "Cannot merge: second node is {:?}, not Paragraph",
+                second_para.node_type
+            )));
+        }
         let second_run_ids: Vec<NodeId> = second_para.children.clone();
 
         let mut txn = Transaction::with_label("Merge paragraphs");
@@ -2563,6 +2581,20 @@ impl WasmDocument {
         let doc = self.doc_mut()?;
         let start_para = parse_node_id(start_node_str)?;
         let end_para = parse_node_id(end_node_str)?;
+
+        // Guard: both must be paragraph-like nodes (not Table, not Image)
+        let start_type = doc
+            .node(start_para)
+            .map(|n| n.node_type)
+            .unwrap_or(NodeType::Paragraph);
+        let end_type = doc
+            .node(end_para)
+            .map(|n| n.node_type)
+            .unwrap_or(NodeType::Paragraph);
+        if start_type != NodeType::Paragraph || end_type != NodeType::Paragraph {
+            // Can't delete across non-paragraph boundaries — silently succeed
+            return Ok(());
+        }
 
         if start_para == end_para {
             // Same paragraph — delete the text range, handling multi-run
@@ -9958,7 +9990,7 @@ fn collect_replace_matches(
 
 /// Escape special characters for JSON string values.
 fn escape_json(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
+    let mut out = String::with_capacity(s.len() + s.len() / 8);
     for c in s.chars() {
         match c {
             '"' => out.push_str("\\\""),
@@ -9966,7 +9998,13 @@ fn escape_json(s: &str) -> String {
             '\n' => out.push_str("\\n"),
             '\r' => out.push_str("\\r"),
             '\t' => out.push_str("\\t"),
-            c if c < '\x20' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            '\x08' => out.push_str("\\b"),
+            '\x0C' => out.push_str("\\f"),
+            // Control characters and DEL
+            c if (c as u32) < 0x20 || c == '\x7f' => out.push_str(&format!("\\u{:04x}", c as u32)),
+            // Line/paragraph separators break JSON in some parsers
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
             _ => out.push(c),
         }
     }
@@ -12960,7 +12998,7 @@ fn emit_block_scene_items(
                                 b64
                             ));
                         }
-                        json.push_str("}}");
+                        json.push('}');
                     }
                     json.push('}');
                 }

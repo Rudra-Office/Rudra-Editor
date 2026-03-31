@@ -50,9 +50,12 @@ export function setCanvasMode(enabled) {
  */
 export function initCanvasRenderer(_container) {
   try {
-    _canvasMode = localStorage.getItem('s1-canvas-mode') === '1';
+    const stored = localStorage.getItem('s1-canvas-mode');
+    // Default to canvas mode ON (high-fidelity rendering).
+    // User can toggle off in View menu; preference is persisted.
+    _canvasMode = stored === null ? true : stored === '1';
   } catch (_) {
-    _canvasMode = false;
+    _canvasMode = true;
   }
   // Update the toggle UI to match restored preference
   const toggle = $('canvasModeToggle');
@@ -67,12 +70,15 @@ export function initCanvasRenderer(_container) {
  * @returns {boolean} true if rendering was performed, false on error
  */
 export function renderDocumentCanvas(container) {
-  const { doc } = state;
+  const { doc, fontDb } = state;
   if (!doc || !container) return false;
 
   let layoutJson;
   try {
-    const jsonStr = doc.to_layout_json();
+    // Use font-aware layout when available for accurate text metrics
+    const jsonStr = (fontDb && typeof doc.to_layout_json_with_fonts === 'function')
+      ? doc.to_layout_json_with_fonts(fontDb)
+      : doc.to_layout_json();
     layoutJson = JSON.parse(jsonStr);
   } catch (e) {
     console.error('Canvas render: failed to get layout JSON:', e);
@@ -167,6 +173,7 @@ function renderLayoutToCanvas(layoutJson, container) {
     canvas.style.background = 'white';
     canvas.style.boxShadow = '0 1px 4px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08)';
     canvas.style.borderRadius = '2px';
+    canvas.dataset.pageIndex = layoutJson.pages.indexOf(page);
 
     // Set actual pixel size for retina displays
     canvas.width = Math.ceil(widthPx * dpr);
@@ -224,7 +231,8 @@ function renderLayoutToCanvas(layoutJson, container) {
     ctx.restore();
 
     container.appendChild(canvas);
-    _canvasPages.push({ canvas, ctx, pageData: page });
+    const backingBuffer = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    _canvasPages.push({ canvas, ctx, pageData: page, _backingBuffer: backingBuffer });
   }
 }
 
@@ -624,6 +632,8 @@ export function renderDocumentScene(container) {
   const startPage = 0;
   const endPage = summary.page_count;
 
+  // Fetch and render page scenes. On JSON parse failure, try page-by-page
+  // to isolate which page has the issue, then fall back to layout JSON.
   try {
     const scenesStr = (fontDb && typeof doc.visible_page_scenes_with_fonts === 'function')
       ? doc.visible_page_scenes_with_fonts(fontDb, startPage, endPage)
@@ -632,7 +642,25 @@ export function renderDocumentScene(container) {
     renderScenesToCanvas(scenesData.pages || [], container);
     return true;
   } catch (e) {
-    console.error('Scene render: failed to get page scenes:', e);
+    console.warn('Scene render: batch failed, trying page-by-page:', e.message);
+    // Try rendering pages individually — skip any page with bad JSON
+    const scenes = [];
+    for (let pi = startPage; pi < endPage; pi++) {
+      try {
+        const pageStr = (fontDb && typeof doc.page_scene_with_fonts === 'function')
+          ? doc.page_scene_with_fonts(fontDb, pi)
+          : doc.page_scene(pi);
+        const page = JSON.parse(pageStr);
+        if (!page.error) scenes.push(page);
+      } catch (pageErr) {
+        console.warn(`Scene render: page ${pi} JSON error, skipping:`, pageErr.message);
+      }
+    }
+    if (scenes.length > 0) {
+      renderScenesToCanvas(scenes, container);
+      return true;
+    }
+    console.error('Scene render: all pages failed, falling back to layout JSON');
     return renderDocumentCanvas(container);
   }
 }
@@ -1259,14 +1287,8 @@ export function repaintDirtyPages(dirtyPages) {
   const container = document.getElementById('pageContainer');
   if (!container) return;
 
-  // Full re-render for correctness. Individual page re-render is possible
-  // but requires careful handling of page count changes.
   try {
-    if (typeof state.doc.scene_summary === 'function') {
-      renderDocumentScene(container);
-    } else {
-      renderDocumentCanvas(container);
-    }
+    renderDocumentCanvas(container);
     // Re-focus the hidden textarea after repaint so typing continues to work
     const ta = document.getElementById('s1-canvas-input');
     if (ta) ta.focus({ preventScroll: true });

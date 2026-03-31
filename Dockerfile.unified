@@ -38,8 +38,18 @@ COPY editor/ ./
 RUN rm -rf wasm-pkg && mkdir -p wasm-pkg
 COPY --from=rust-builder /app/wasm-out/ ./wasm-pkg/
 
+# Download essential fonts if not present (for high-fidelity rendering)
+RUN mkdir -p public/fonts && \
+    GF="https://github.com/google/fonts/raw/main" && \
+    for f in "ofl/carlito/Carlito-Regular.ttf" "ofl/carlito/Carlito-Bold.ttf" \
+             "ofl/caladea/Caladea-Regular.ttf" "apache/tinos/Tinos-Regular.ttf" \
+             "apache/tinos/Tinos-Bold.ttf" "ofl/notosans/NotoSans%5Bwdth%2Cwght%5D.ttf" \
+             "ofl/roboto/Roboto%5Bwdth%2Cwght%5D.ttf"; do \
+      name=$(basename "$f" | sed 's/%5B[^%]*%5D//g'); \
+      curl -sL "$GF/$f" -o "public/fonts/$name" 2>/dev/null || true; \
+    done
+
 # Build editor with Vite. If it fails, fall back to serving source files directly.
-# The WASM import uses /* @vite-ignore */ so Vite treats it as an external.
 RUN npx vite build || echo "WARN: Vite build failed, falling back to source files"
 
 # Ensure dist/ exists — if Vite failed, copy source files as fallback

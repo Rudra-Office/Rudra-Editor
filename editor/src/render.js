@@ -273,13 +273,11 @@ export function renderDocument() {
     try {
       const container = $('pageContainer');
       if (container) {
-        // Prefer scene API (higher fidelity) over legacy layout JSON
-        let ok = false;
-        if (typeof doc.scene_summary === 'function') {
+        // Use layout JSON rendering (stable, tested) as primary path.
+        // Scene API is used only when explicitly requested for higher fidelity.
+        let ok = renderDocumentCanvas(container);
+        if (!ok && typeof doc.scene_summary === 'function') {
           ok = renderDocumentScene(container);
-        }
-        if (!ok) {
-          ok = renderDocumentCanvas(container);
         }
         if (ok) {
           updateUndoRedo();
