@@ -2669,6 +2669,45 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 
 /* ── Spell Check ─────────────────────────────────── */
 
+/* ── Watermark Overlay ────────────────────────────── */
+
+.watermark-overlay {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-45deg);
+  font-size: 72pt;
+  font-family: Arial, sans-serif;
+  color: rgba(192, 192, 192, 0.3);
+  white-space: nowrap;
+  pointer-events: none;
+  user-select: none;
+  z-index: 0;
+  letter-spacing: 8px;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+.watermark-overlay.horizontal {
+  transform: translate(-50%, -50%) rotate(0deg);
+}
+
+/* ── Footnote Popup Preview ───────────────────────── */
+
+.footnote-popup {
+  position: fixed;
+  background: white;
+  border: 1px solid var(--border-light);
+  border-radius: 4px;
+  padding: 8px 12px;
+  max-width: 320px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--text-primary);
+  box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  z-index: 10000;
+  pointer-events: none;
+}
+
 .spell-error {
   text-decoration: underline wavy red;
   text-decoration-skip-ink: none;

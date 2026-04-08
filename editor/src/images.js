@@ -1,6 +1,7 @@
 // Image selection, resize, drag, alignment
 import { state, $ } from './state.js';
 import { renderDocument } from './render.js';
+import { markDirty } from './file.js';
 import { updateUndoRedo, recordUndoAction } from './toolbar.js';
 import { getActiveNodeId } from './selection.js';
 import { broadcastOp } from './collab.js';
@@ -842,8 +843,16 @@ function cancelCrop() {
  */
 function _applyCaptionToImage(imageNodeId, captionText) {
   try {
-    // Try to insert a caption paragraph via WASM
-    if (typeof state.doc.insert_image_caption === 'function') {
+    // Try to insert a caption paragraph via WASM (auto-numbered)
+    if (typeof state.doc.insert_caption === 'function') {
+      try {
+        state.doc.insert_caption(imageNodeId, 'Figure', ': ' + captionText);
+        broadcastOp({ action: 'insertCaption', nodeId: imageNodeId, label: 'Figure', text: captionText });
+        renderDocument();
+        markDirty();
+        return;
+      } catch (e) { console.warn('insert_caption failed, fallback:', e); }
+    } else if (typeof state.doc.insert_image_caption === 'function') {
       state.doc.insert_image_caption(imageNodeId, captionText);
       broadcastOp({ action: 'insertImageCaption', nodeId: imageNodeId, caption: captionText });
     } else {

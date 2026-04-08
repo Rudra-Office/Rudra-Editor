@@ -176,8 +176,11 @@
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuPageSetup" role="menuitem" tabindex="-1" title="Configure page size, margins, and orientation"><span class="msi">description</span> Page Setup...</button>
         <button class="app-menu-entry" id="menuColumns" role="menuitem" tabindex="-1" title="Configure text column layout"><span class="msi">view_column</span> Columns...</button>
+        <button class="app-menu-entry" id="menuHyphenation" role="menuitem" tabindex="-1" title="Toggle automatic hyphenation of long words at line breaks"><span class="msi">format_textdirection_l_to_r</span> Hyphenation (auto)</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuAutoFormat" role="menuitem" tabindex="-1" title="Auto-detect and apply formatting (headings, body text)"><span class="msi">auto_fix_high</span> Auto Format Document</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuWatermark" role="menuitem" tabindex="-1" title="Add a text or image watermark to all pages"><span class="msi">branding_watermark</span> Watermark...</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="reviewMenu">
@@ -194,6 +197,8 @@
         <button class="app-menu-entry" id="menuNextChange" role="menuitem" tabindex="-1" title="Navigate to the next tracked change (Ctrl+Shift+])"><span class="msi">arrow_downward</span> Next Change <span class="shortcut">Ctrl+Shift+]</span></button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuShowChangesPanel" role="menuitem" tabindex="-1" title="Toggle the track changes panel"><span class="msi">checklist</span> Track Changes Panel</button>
+        <div class="app-menu-sep" role="separator"></div>
+        <button class="app-menu-entry" id="menuRestrictEditing" role="menuitem" tabindex="-1" title="Restrict editing to specific actions"><span class="msi">lock</span> Restrict Editing...</button>
       </div>
     </div>
     <div class="app-menu-item" data-menu="toolsMenu">
@@ -1156,6 +1161,9 @@
           <button class="zoom-preset" data-zoom="125" role="menuitem">125%</button>
           <button class="zoom-preset" data-zoom="150" role="menuitem">150%</button>
           <button class="zoom-preset" data-zoom="200" role="menuitem">200%</button>
+          <button class="zoom-preset" data-zoom="300" role="menuitem">300%</button>
+          <button class="zoom-preset" data-zoom="400" role="menuitem">400%</button>
+          <button class="zoom-preset" data-zoom="500" role="menuitem">500%</button>
           <div class="zoom-preset-sep"></div>
           <button class="zoom-preset" data-zoom="fit-width" role="menuitem">Fit Width</button>
           <button class="zoom-preset" data-zoom="fit-page" role="menuitem">Fit Page</button>
@@ -1219,6 +1227,63 @@
     <div class="modal-actions">
       <button id="linkCancelBtn">Cancel</button>
       <button class="primary" id="linkInsertBtn">Insert Link</button>
+    </div>
+  </div>
+</div>
+
+<!-- Restrict Editing Modal -->
+<div class="modal-overlay" id="restrictEditingModal" role="dialog" aria-modal="true" aria-label="Restrict Editing">
+  <div class="modal" style="min-width:320px">
+    <h3><span class="msi modal-icon">lock</span> Restrict Editing</h3>
+    <div style="display:flex;flex-direction:column;gap:8px;margin-bottom:16px">
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="radio" name="restrictMode" value="none" checked> No restrictions (full editing)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="radio" name="restrictMode" value="readonly"> Read-only (no changes allowed)
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="radio" name="restrictMode" value="tracked"> Tracked changes only
+      </label>
+      <label style="display:flex;align-items:center;gap:8px;font-size:13px;cursor:pointer">
+        <input type="radio" name="restrictMode" value="comments"> Comments only
+      </label>
+    </div>
+    <div class="modal-actions">
+      <button id="restrictCancel">Cancel</button>
+      <button class="primary" id="restrictApply">Apply</button>
+    </div>
+  </div>
+</div>
+
+<!-- Watermark Modal -->
+<div class="modal-overlay" id="watermarkModal" role="dialog" aria-modal="true" aria-label="Watermark">
+  <div class="modal" style="min-width:340px">
+    <h3><span class="msi modal-icon">branding_watermark</span> Watermark</h3>
+    <div style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Preset</label>
+      <select id="watermarkPreset" style="width:100%;padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:13px">
+        <option value="">None (remove watermark)</option>
+        <option value="DRAFT">DRAFT</option>
+        <option value="CONFIDENTIAL">CONFIDENTIAL</option>
+        <option value="COPY">COPY</option>
+        <option value="DO NOT COPY">DO NOT COPY</option>
+        <option value="SAMPLE">SAMPLE</option>
+        <option value="custom">Custom text...</option>
+      </select>
+    </div>
+    <div id="watermarkCustomWrap" style="margin-bottom:12px;display:none">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Custom Text</label>
+      <input type="text" id="watermarkCustomText" placeholder="Enter watermark text" style="width:100%;padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:13px" maxlength="40">
+    </div>
+    <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center">
+      <label style="font-size:12px;color:var(--text-muted)">Orientation:</label>
+      <label style="font-size:13px"><input type="radio" name="wmOrientation" value="diagonal" checked> Diagonal</label>
+      <label style="font-size:13px"><input type="radio" name="wmOrientation" value="horizontal"> Horizontal</label>
+    </div>
+    <div class="modal-actions">
+      <button id="watermarkCancel">Cancel</button>
+      <button class="primary" id="watermarkApply">Apply</button>
     </div>
   </div>
 </div>
@@ -1314,6 +1379,35 @@
     <input type="color" id="cmCellBgPicker" value="#ffffff" style="position:absolute;opacity:0;pointer-events:none;width:0;height:0">
   </button>
   <div class="ctx-sep"></div>
+  <div class="ctx-submenu-wrapper">
+    <button class="ctx-item ctx-has-submenu" title="Apply a predefined table style"><span class="msi ctx-icon">palette</span> Table Style</button>
+    <div class="ctx-submenu" id="cmTableStyleSubmenu">
+      <button class="ctx-item" data-table-style="plain">Plain (no styling)</button>
+      <button class="ctx-item" data-table-style="grid">Grid</button>
+      <button class="ctx-item" data-table-style="striped-blue">Striped Blue</button>
+      <button class="ctx-item" data-table-style="striped-gray">Striped Gray</button>
+      <button class="ctx-item" data-table-style="header-blue">Header Blue</button>
+      <button class="ctx-item" data-table-style="header-green">Header Green</button>
+      <button class="ctx-item" data-table-style="header-orange">Header Orange</button>
+      <button class="ctx-item" data-table-style="bordered">Bordered</button>
+    </div>
+  </div>
+  <div class="ctx-sep"></div>
+  <button class="ctx-item" id="cmSortAsc" title="Sort this column A to Z"><span class="msi ctx-icon">arrow_upward</span> Sort A to Z</button>
+  <button class="ctx-item" id="cmSortDesc" title="Sort this column Z to A"><span class="msi ctx-icon">arrow_downward</span> Sort Z to A</button>
+  <div class="ctx-sep"></div>
+  <div class="ctx-submenu-wrapper">
+    <button class="ctx-item ctx-has-submenu" title="Insert a formula in this cell"><span class="msi ctx-icon">functions</span> Insert Formula</button>
+    <div class="ctx-submenu" id="cmFormulaSubmenu">
+      <button class="ctx-item" data-formula="=SUM(ABOVE)">SUM(ABOVE)</button>
+      <button class="ctx-item" data-formula="=SUM(LEFT)">SUM(LEFT)</button>
+      <button class="ctx-item" data-formula="=AVERAGE(ABOVE)">AVERAGE(ABOVE)</button>
+      <button class="ctx-item" data-formula="=COUNT(ABOVE)">COUNT(ABOVE)</button>
+      <button class="ctx-item" data-formula="=MIN(ABOVE)">MIN(ABOVE)</button>
+      <button class="ctx-item" data-formula="=MAX(ABOVE)">MAX(ABOVE)</button>
+      <button class="ctx-item" data-formula="=PRODUCT(ABOVE)">PRODUCT(ABOVE)</button>
+    </div>
+  </div>
   <button class="ctx-item" id="cmTableProps" title="Open table properties dialog"><span class="msi ctx-icon">settings</span> Table Properties...</button>
   <div class="ctx-sep"></div>
   <button class="ctx-item" id="cmDeleteTable" title="Delete the entire table"><span class="msi ctx-icon">delete_forever</span> Delete Table</button>

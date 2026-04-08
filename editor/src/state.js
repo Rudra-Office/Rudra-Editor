@@ -103,6 +103,12 @@ export const state = {
   editingMode: 'editing',
   // M13.3: Track changes display mode — 'markup' | 'final' | 'original'
   tcDisplayMode: 'markup',
+  // M15.3: Restrict editing mode — 'none' | 'readonly' | 'tracked' | 'comments'
+  restrictMode: 'none',
+  commentsOnlyMode: false,
+  // M15.6: Watermark
+  watermarkText: '',
+  watermarkOrientation: 'diagonal',
   // FS-11: Read-only / Viewer mode — blocks all editing when true
   readOnlyMode: false,
   // UXP-14: Format Painter

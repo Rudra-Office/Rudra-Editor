@@ -284,11 +284,18 @@ function _processCheckBatch() {
 
     if (words.length === 0) continue;
 
-    // Filter out custom dict and ignore list
-    const toCheck = words.filter(w =>
-      !_customDict.has(w.word.toLowerCase()) &&
-      !_docIgnoreList.has(w.word.toLowerCase())
-    );
+    // Filter out custom dict, ignore list, ALL CAPS, and words with numbers
+    const toCheck = words.filter(w => {
+      const word = w.word;
+      const lower = word.toLowerCase();
+      if (_customDict.has(lower)) return false;
+      if (_docIgnoreList.has(lower)) return false;
+      // Skip ALL CAPS words (abbreviations like "HTML", "API")
+      if (word === word.toUpperCase() && word.length <= 6) return false;
+      // Skip words containing digits (like "v2", "item3")
+      if (/\d/.test(word)) return false;
+      return true;
+    });
 
     if (toCheck.length === 0) continue;
 

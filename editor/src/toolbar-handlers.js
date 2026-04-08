@@ -1072,6 +1072,12 @@ export function initToolbar() {
   // P5-7: Sign Document modal
   initSignDocumentModal();
 
+  // M15.3: Restrict Editing
+  initRestrictEditing();
+
+  // M15.6: Watermark
+  initWatermark();
+
   // Close menus on outside click
   document.addEventListener('click', e => {
     if (!e.target.closest('.insert-dropdown')) {
@@ -1418,7 +1424,7 @@ function adjustZoom(delta) {
 // ── E10.2: Unified zoom — set, persist, update UI ──
 // Canonical version in features/document/toolbar/zoom.js; re-exported at top.
 function setZoomLevel(level) {
-  level = Math.max(50, Math.min(200, Math.round(level)));
+  level = Math.max(50, Math.min(500, Math.round(level)));
   const changed = state.zoomLevel !== level;
   state.zoomLevel = level;
   // Persist zoom across sessions
@@ -2820,6 +2826,50 @@ function initTableContextMenu() {
   cmAction('cmInsertColRight', () => { state.doc.insert_table_column(state.ctxTable, state.ctxCol + 1); broadcastOp({ action: 'insertTableColumn', tableId: state.ctxTable, index: state.ctxCol + 1 }); });
   cmAction('cmDeleteCol', () => { state.doc.delete_table_column(state.ctxTable, state.ctxCol); broadcastOp({ action: 'deleteTableColumn', tableId: state.ctxTable, index: state.ctxCol }); });
 
+  // M14.3: Table formulas
+  const formulaSubmenu = $('cmFormulaSubmenu');
+  if (formulaSubmenu) {
+    formulaSubmenu.querySelectorAll('[data-formula]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        $('tableContextMenu').style.display = 'none';
+        if (!state.doc || !state.ctxTable) return;
+        import('./table-formulas.js').then(({ evaluateTableFormula }) => {
+          const formula = btn.dataset.formula;
+          const result = evaluateTableFormula(formula, state.ctxTable, state.ctxRow, state.ctxCol);
+          if (result !== null) {
+            try {
+              const cellId = state.doc.get_cell_id(state.ctxTable, state.ctxRow, state.ctxCol);
+              if (cellId) {
+                state.doc.set_cell_text(cellId, result);
+                broadcastOp({ action: 'setCellText', cellId, text: result });
+                renderDocument();
+                updateUndoRedo();
+                markDirty();
+                announce('Formula result: ' + result);
+              }
+            } catch (e) { console.error('formula insert:', e); }
+          } else {
+            showToast('Could not evaluate formula', 'error');
+          }
+        }).catch(e => console.error('formula module:', e));
+      });
+    });
+  }
+
+  // M14.3: Sort table by column
+  cmAction('cmSortAsc', () => {
+    if (typeof state.doc.sort_table_by_column === 'function') {
+      state.doc.sort_table_by_column(state.ctxTable, state.ctxCol, true);
+      broadcastOp({ action: 'sortTable', tableId: state.ctxTable, col: state.ctxCol, asc: true });
+    }
+  });
+  cmAction('cmSortDesc', () => {
+    if (typeof state.doc.sort_table_by_column === 'function') {
+      state.doc.sort_table_by_column(state.ctxTable, state.ctxCol, false);
+      broadcastOp({ action: 'sortTable', tableId: state.ctxTable, col: state.ctxCol, asc: false });
+    }
+  });
+
   // Delete entire table
   cmAction('cmDeleteTable', () => {
     state.doc.delete_node(state.ctxTable);
@@ -3078,6 +3128,26 @@ function initTablePropsModal() {
     if (!state.doc || !state.ctxTable) return;
     openTableProps(state.ctxTable);
   });
+
+  // M14.3: Table styles submenu
+  const styleSubmenu = $('cmTableStyleSubmenu');
+  if (styleSubmenu) {
+    styleSubmenu.querySelectorAll('[data-table-style]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        $('tableContextMenu').style.display = 'none';
+        if (!state.doc || !state.ctxTable) return;
+        const styleName = btn.dataset.tableStyle;
+        try {
+          state.doc.apply_table_style(state.ctxTable, styleName);
+          broadcastOp({ action: 'applyTableStyle', tableId: state.ctxTable, style: styleName });
+          renderDocument();
+          updateUndoRedo();
+          markDirty();
+          announce('Table style applied: ' + styleName);
+        } catch (e) { console.error('apply table style:', e); }
+      });
+    });
+  }
 
   // Width mode toggle
   $('tpWidthMode').addEventListener('change', () => {
@@ -4602,6 +4672,20 @@ function initAutoFormat() {
     closeAllMenus();
     autoFormatDocument();
   });
+
+  // M15.6: Hyphenation toggle
+  const hyphenBtn = $('menuHyphenation');
+  if (hyphenBtn) {
+    // Hyphenation is always-on in the layout engine
+    hyphenBtn.classList.add('active');
+    hyphenBtn.addEventListener('click', () => {
+      closeAllMenus();
+      // Toggle visual indicator
+      const isActive = hyphenBtn.classList.toggle('active');
+      announce(isActive ? 'Hyphenation enabled (always active in layout engine)' : 'Hyphenation indicator toggled');
+      showToast('Automatic hyphenation is ' + (isActive ? 'enabled' : 'visually disabled') + '. The layout engine always uses optimal line breaking with hyphenation.', 'info', 3000);
+    });
+  }
 }
 
 /**
@@ -6094,6 +6178,157 @@ function applyReviewerColors() {
     el.style.color = ''; // Don't override text color
     el.dataset.reviewerColor = color;
   });
+}
+
+// ═══════════════════════════════════════════════════════
+// M15.3 — Restrict Editing
+// ═══════════════════════════════════════════════════════
+
+function initRestrictEditing() {
+  const menuBtn = $('menuRestrictEditing');
+  if (!menuBtn) return;
+
+  menuBtn.addEventListener('click', () => {
+    closeAllMenus();
+    const modal = $('restrictEditingModal');
+    if (!modal) return;
+
+    // Set current mode
+    const current = state.restrictMode || 'none';
+    modal.querySelectorAll('input[name="restrictMode"]').forEach(r => {
+      r.checked = r.value === current;
+    });
+
+    modal.classList.add('show');
+
+    $('restrictCancel').onclick = () => modal.classList.remove('show');
+
+    $('restrictApply').onclick = () => {
+      const selected = modal.querySelector('input[name="restrictMode"]:checked')?.value || 'none';
+      state.restrictMode = selected;
+      modal.classList.remove('show');
+
+      // Apply the restriction
+      switch (selected) {
+        case 'readonly':
+          setEditingMode('viewing');
+          break;
+        case 'tracked':
+          setEditingMode('suggesting');
+          break;
+        case 'comments':
+          // Viewing mode but allow comment insertion
+          setEditingMode('viewing');
+          state.commentsOnlyMode = true;
+          break;
+        default:
+          setEditingMode('editing');
+          state.commentsOnlyMode = false;
+          break;
+      }
+
+      const labels = {
+        none: 'No restrictions',
+        readonly: 'Read-only',
+        tracked: 'Tracked changes only',
+        comments: 'Comments only'
+      };
+      showToast('Editing restricted to: ' + labels[selected], 'info', 2000);
+    };
+
+    modal.addEventListener('click', e => {
+      if (e.target === modal) modal.classList.remove('show');
+    });
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+// M15.6 — Watermark
+// ═══════════════════════════════════════════════════════
+
+function initWatermark() {
+  const menuBtn = $('menuWatermark');
+  if (!menuBtn) return;
+
+  menuBtn.addEventListener('click', () => {
+    closeAllMenus();
+    openWatermarkModal();
+  });
+}
+
+function openWatermarkModal() {
+  const modal = $('watermarkModal');
+  if (!modal) return;
+
+  const preset = $('watermarkPreset');
+  const customWrap = $('watermarkCustomWrap');
+  const customText = $('watermarkCustomText');
+
+  // Show/hide custom text field
+  preset.addEventListener('change', () => {
+    customWrap.style.display = preset.value === 'custom' ? '' : 'none';
+  });
+
+  // Restore current watermark state
+  const current = state.watermarkText || '';
+  if (current && !['DRAFT', 'CONFIDENTIAL', 'COPY', 'DO NOT COPY', 'SAMPLE'].includes(current)) {
+    preset.value = 'custom';
+    customWrap.style.display = '';
+    customText.value = current;
+  } else {
+    preset.value = current || '';
+    customWrap.style.display = 'none';
+  }
+
+  modal.classList.add('show');
+  preset.focus();
+
+  $('watermarkCancel').onclick = () => {
+    modal.classList.remove('show');
+  };
+
+  $('watermarkApply').onclick = () => {
+    const text = preset.value === 'custom' ? customText.value.trim() : preset.value;
+    const orientation = document.querySelector('input[name="wmOrientation"]:checked')?.value || 'diagonal';
+
+    state.watermarkText = text;
+    state.watermarkOrientation = orientation;
+
+    // Apply watermark to all pages
+    applyWatermark(text, orientation);
+
+    modal.classList.remove('show');
+    announce(text ? 'Watermark applied: ' + text : 'Watermark removed');
+  };
+
+  modal.addEventListener('click', e => {
+    if (e.target === modal) modal.classList.remove('show');
+  });
+}
+
+function applyWatermark(text, orientation) {
+  const container = $('pageContainer');
+  if (!container) return;
+
+  // Remove existing watermarks
+  container.querySelectorAll('.watermark-overlay').forEach(el => el.remove());
+
+  if (!text) return;
+
+  // Add watermark to each page
+  container.querySelectorAll('.doc-page').forEach(page => {
+    const wm = document.createElement('div');
+    wm.className = 'watermark-overlay' + (orientation === 'horizontal' ? ' horizontal' : '');
+    wm.textContent = text;
+    page.appendChild(wm);
+  });
+}
+
+// Re-apply watermarks after re-render (called from render pipeline)
+export function reapplyWatermark() {
+  if (state.watermarkText) {
+    applyWatermark(state.watermarkText, state.watermarkOrientation || 'diagonal');
+  }
 }
 
 function toggleTrackChangesPanel(forceShow) {

@@ -1284,6 +1284,28 @@ export class WasmDocument {
         }
     }
     /**
+     * Apply a predefined table style to a table.
+     *
+     * Available styles: "plain", "grid", "striped-blue", "striped-gray",
+     * "header-blue", "header-green", "header-orange", "bordered", "minimal".
+     *
+     * Applies cell backgrounds and header row formatting.
+     * @param {string} table_id_str
+     * @param {string} style_name
+     */
+    apply_table_style(table_id_str, style_name) {
+        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+        _assertNum(this.__wbg_ptr);
+        const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(style_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmdocument_apply_table_style(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
+        }
+    }
+    /**
      * Begin a batch of operations that form a single undo step.
      *
      * All operations between `begin_batch()` and `end_batch()` are applied
@@ -3059,6 +3081,46 @@ export class WasmDocument {
         }
     }
     /**
+     * Insert an auto-numbered caption paragraph after a node.
+     *
+     * - `after_node_str`: the node (image paragraph, table, etc.) after which to insert
+     * - `label`: "Figure", "Table", or "Equation"
+     * - `text`: additional caption text (e.g., ": My diagram")
+     *
+     * The caption is numbered automatically by counting existing captions of the same label.
+     * Returns the caption paragraph node ID.
+     * @param {string} after_node_str
+     * @param {string} label
+     * @param {string} text
+     * @returns {string}
+     */
+    insert_caption(after_node_str, label, text) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_insert_caption(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var ptr4 = ret[0];
+            var len4 = ret[1];
+            if (ret[3]) {
+                ptr4 = 0; len4 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+        }
+    }
+    /**
      * Insert a column break inside the specified paragraph.
      *
      * Inserts a ColumnBreak node at the end of the paragraph's children.
@@ -3552,6 +3614,49 @@ export class WasmDocument {
             return getStringFromWasm0(ptr3, len3);
         } finally {
             wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * Insert a shape (Drawing node) after a body-level node.
+     *
+     * Returns the Drawing node ID. The shape is rendered by the layout engine.
+     * @param {string} after_node_str
+     * @param {string} shape_type
+     * @param {number} width_pt
+     * @param {number} height_pt
+     * @param {number} _x_pt
+     * @param {number} _y_pt
+     * @param {string} fill_hex
+     * @param {string} stroke_hex
+     * @param {number} stroke_width
+     * @returns {string}
+     */
+    insert_shape(after_node_str, shape_type, width_pt, height_pt, _x_pt, _y_pt, fill_hex, stroke_hex, stroke_width) {
+        let deferred6_0;
+        let deferred6_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(shape_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(fill_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(stroke_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_insert_shape(this.__wbg_ptr, ptr0, len0, ptr1, len1, width_pt, height_pt, _x_pt, _y_pt, ptr2, len2, ptr3, len3, stroke_width);
+            var ptr5 = ret[0];
+            var len5 = ret[1];
+            if (ret[3]) {
+                ptr5 = 0; len5 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred6_0 = ptr5;
+            deferred6_1 = len5;
+            return getStringFromWasm0(ptr5, len5);
+        } finally {
+            wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
         }
     }
     /**
@@ -6024,6 +6129,28 @@ export class WasmDocument {
             return getStringFromWasm0(ptr2, len2);
         } finally {
             wasm.__wbindgen_free(deferred3_0, deferred3_1, 1);
+        }
+    }
+    /**
+     * Update shape properties (position, size, fill, stroke).
+     * @param {string} shape_id_str
+     * @param {number} width_pt
+     * @param {number} height_pt
+     * @param {string} fill_hex
+     * @param {string} stroke_hex
+     */
+    update_shape(shape_id_str, width_pt, height_pt, fill_hex, stroke_hex) {
+        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+        _assertNum(this.__wbg_ptr);
+        const ptr0 = passStringToWasm0(shape_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ptr1 = passStringToWasm0(fill_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len1 = WASM_VECTOR_LEN;
+        const ptr2 = passStringToWasm0(stroke_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len2 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmdocument_update_shape(this.__wbg_ptr, ptr0, len0, width_pt, height_pt, ptr1, len1, ptr2, len2);
+        if (ret[1]) {
+            throw takeFromExternrefTable0(ret[0]);
         }
     }
     /**

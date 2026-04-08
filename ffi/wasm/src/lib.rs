@@ -3858,6 +3858,240 @@ impl WasmDocument {
             .map_err(|e| JsError::new(&e.to_string()))
     }
 
+    /// Apply a predefined table style to a table.
+    ///
+    /// Available styles: "plain", "grid", "striped-blue", "striped-gray",
+    /// "header-blue", "header-green", "header-orange", "bordered", "minimal".
+    ///
+    /// Applies cell backgrounds and header row formatting.
+    pub fn apply_table_style(
+        &mut self,
+        table_id_str: &str,
+        style_name: &str,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let table_id = parse_node_id(table_id_str)?;
+
+        let table = doc
+            .node(table_id)
+            .ok_or_else(|| JsError::new("Table not found"))?;
+        let row_ids: Vec<NodeId> = table.children.clone();
+
+        // Style definitions: (header_bg, header_text_bold, even_row_bg, odd_row_bg)
+        let (header_bg, header_bold, even_bg, odd_bg) = match style_name {
+            "grid" => (None, false, None, None),
+            "striped-blue" => (
+                Some("4472C4"),
+                true,
+                Some("D6E4F0"),
+                None,
+            ),
+            "striped-gray" => (
+                Some("595959"),
+                true,
+                Some("F2F2F2"),
+                None,
+            ),
+            "header-blue" => (
+                Some("4472C4"),
+                true,
+                None,
+                None,
+            ),
+            "header-green" => (
+                Some("548235"),
+                true,
+                None,
+                None,
+            ),
+            "header-orange" => (
+                Some("ED7D31"),
+                true,
+                None,
+                None,
+            ),
+            "bordered" => (Some("D9E2F3"), true, None, None),
+            "minimal" => (None, false, None, None),
+            _ => (None, false, None, None), // "plain"
+        };
+
+        let mut txn = Transaction::with_label("Apply table style");
+
+        for (row_idx, &row_id) in row_ids.iter().enumerate() {
+            let row = match doc.node(row_id) {
+                Some(r) => r,
+                None => continue,
+            };
+            let cell_ids: Vec<NodeId> = row.children.clone();
+            let is_header = row_idx == 0;
+            let is_even = row_idx % 2 == 0;
+
+            for &cell_id in &cell_ids {
+                let bg_hex = if is_header {
+                    header_bg
+                } else if is_even {
+                    even_bg
+                } else {
+                    odd_bg
+                };
+
+                if let Some(hex) = bg_hex {
+                    if let Some(color) = Color::from_hex(hex) {
+                        let mut attrs = s1_model::AttributeMap::new();
+                        attrs.set(AttributeKey::CellBackground, AttributeValue::Color(color));
+                        txn.push(Operation::set_attributes(cell_id, attrs));
+                    }
+                } else {
+                    // Clear background
+                    txn.push(Operation::remove_attributes(
+                        cell_id,
+                        vec![AttributeKey::CellBackground],
+                    ));
+                }
+
+                // Bold text in header row
+                if is_header && header_bold {
+                    if let Some(cell) = doc.node(cell_id) {
+                        for &para_id in &cell.children {
+                            if let Some(para) = doc.node(para_id) {
+                                for &run_id in &para.children {
+                                    if let Some(run) = doc.node(run_id) {
+                                        if run.node_type == NodeType::Run {
+                                            let mut attrs = s1_model::AttributeMap::new();
+                                            attrs.set(
+                                                AttributeKey::Bold,
+                                                AttributeValue::Bool(true),
+                                            );
+                                            txn.push(Operation::set_attributes(run_id, attrs));
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    // ─── M14.4: Shape/Drawing Persistence API ─────────────────
+
+    /// Insert a shape (Drawing node) after a body-level node.
+    ///
+    /// Returns the Drawing node ID. The shape is rendered by the layout engine.
+    #[allow(clippy::too_many_arguments)]
+    pub fn insert_shape(
+        &mut self,
+        after_node_str: &str,
+        shape_type: &str,
+        width_pt: f64,
+        height_pt: f64,
+        _x_pt: f64,
+        _y_pt: f64,
+        fill_hex: &str,
+        stroke_hex: &str,
+        stroke_width: f64,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let after_id = parse_node_id(after_node_str)?;
+
+        let drawing_id = doc.next_id();
+        let mut drawing_node = Node::new(drawing_id, NodeType::Drawing);
+
+        drawing_node.attributes.set(
+            AttributeKey::ShapeType,
+            AttributeValue::String(shape_type.to_string()),
+        );
+        drawing_node.attributes.set(
+            AttributeKey::ImageWidth,
+            AttributeValue::Float(width_pt),
+        );
+        drawing_node.attributes.set(
+            AttributeKey::ImageHeight,
+            AttributeValue::Float(height_pt),
+        );
+        // Position as floating
+        drawing_node.attributes.set(
+            AttributeKey::ImageWrapType,
+            AttributeValue::String("inFront".to_string()),
+        );
+
+        if !fill_hex.is_empty() {
+            if let Some(c) = Color::from_hex(fill_hex) {
+                drawing_node
+                    .attributes
+                    .set(AttributeKey::ShapeFillColor, AttributeValue::Color(c));
+            }
+        }
+        if !stroke_hex.is_empty() {
+            if let Some(c) = Color::from_hex(stroke_hex) {
+                drawing_node
+                    .attributes
+                    .set(AttributeKey::ShapeStrokeColor, AttributeValue::Color(c));
+            }
+        }
+        if stroke_width > 0.0 {
+            drawing_node.attributes.set(
+                AttributeKey::ShapeStrokeWidth,
+                AttributeValue::Float(stroke_width),
+            );
+        }
+
+        // Find insert position after the target node
+        let parent_id = doc
+            .node(after_id)
+            .and_then(|n| n.parent)
+            .ok_or_else(|| JsError::new("Cannot find parent"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let insert_idx = parent
+            .children
+            .iter()
+            .position(|&id| id == after_id)
+            .map(|i| i + 1)
+            .unwrap_or(parent.children.len());
+
+        let mut txn = Transaction::with_label("Insert shape");
+        txn.push(Operation::insert_node(parent_id, insert_idx, drawing_node));
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", drawing_id.replica, drawing_id.counter))
+    }
+
+    /// Update shape properties (position, size, fill, stroke).
+    pub fn update_shape(
+        &mut self,
+        shape_id_str: &str,
+        width_pt: f64,
+        height_pt: f64,
+        fill_hex: &str,
+        stroke_hex: &str,
+    ) -> Result<(), JsError> {
+        let doc = self.doc_mut()?;
+        let shape_id = parse_node_id(shape_id_str)?;
+
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(AttributeKey::ImageWidth, AttributeValue::Float(width_pt));
+        attrs.set(AttributeKey::ImageHeight, AttributeValue::Float(height_pt));
+        if !fill_hex.is_empty() {
+            if let Some(c) = Color::from_hex(fill_hex) {
+                attrs.set(AttributeKey::ShapeFillColor, AttributeValue::Color(c));
+            }
+        }
+        if !stroke_hex.is_empty() {
+            if let Some(c) = Color::from_hex(stroke_hex) {
+                attrs.set(AttributeKey::ShapeStrokeColor, AttributeValue::Color(c));
+            }
+        }
+        doc.apply(Operation::set_attributes(shape_id, attrs))
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
     // ─── P.3: Image Operations API ──────────────────────────────
 
     /// Insert an image after the specified body-level node.
@@ -4195,6 +4429,119 @@ impl WasmDocument {
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(format!("{}:{}", bk_start_id.replica, bk_start_id.counter))
+    }
+
+    /// Insert an auto-numbered caption paragraph after a node.
+    ///
+    /// - `after_node_str`: the node (image paragraph, table, etc.) after which to insert
+    /// - `label`: "Figure", "Table", or "Equation"
+    /// - `text`: additional caption text (e.g., ": My diagram")
+    ///
+    /// The caption is numbered automatically by counting existing captions of the same label.
+    /// Returns the caption paragraph node ID.
+    pub fn insert_caption(
+        &mut self,
+        after_node_str: &str,
+        label: &str,
+        text: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let after_id = parse_node_id(after_node_str)?;
+
+        // Count existing captions of the same label to determine number
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+        let body = doc
+            .node(body_id)
+            .ok_or_else(|| JsError::new("Body not found"))?;
+        // Count existing captions with the same label by walking body children
+        // and checking for Caption-styled paragraphs whose text starts with the label
+        let mut count = 0u32;
+        for &child_id in &body.children {
+            if let Some(node) = doc.node(child_id) {
+                if let Some(style) = node.attributes.get_string(&AttributeKey::StyleId) {
+                    if style == "Caption" {
+                        // Extract text from runs
+                        let mut text = String::new();
+                        for &run_id in &node.children {
+                            if let Some(run) = doc.node(run_id) {
+                                for &txt_id in &run.children {
+                                    if let Some(txt) = doc.node(txt_id) {
+                                        if let Some(ref tc) = txt.text_content {
+                                            text.push_str(tc);
+                                        }
+                                    }
+                                }
+                                if let Some(ref tc) = run.text_content {
+                                    text.push_str(tc);
+                                }
+                            }
+                        }
+                        if text.starts_with(label) {
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        let number = count + 1;
+
+        // Build caption paragraph: "Figure 1: text"
+        let caption_text = if text.is_empty() {
+            format!("{} {}", label, number)
+        } else {
+            format!("{} {}{}", label, number, text)
+        };
+
+        let para_id = doc.next_id();
+        let run_id = doc.next_id();
+
+        let mut para_node = Node::new(para_id, NodeType::Paragraph);
+        para_node.attributes.set(
+            AttributeKey::StyleId,
+            AttributeValue::String("Caption".to_string()),
+        );
+        para_node.attributes.set(
+            AttributeKey::Alignment,
+            AttributeValue::Alignment(Alignment::Center),
+        );
+
+        let mut run_node = Node::new(run_id, NodeType::Run);
+        let text_id = doc.next_id();
+        let mut text_node = Node::new(text_id, NodeType::Text);
+        text_node.text_content = Some(caption_text);
+        // Italic style for caption
+        run_node.attributes.set(AttributeKey::Italic, AttributeValue::Bool(true));
+        run_node.attributes.set(
+            AttributeKey::FontSize,
+            AttributeValue::Float(10.0),
+        );
+
+        // Find insert position
+        let parent_id = doc
+            .node(after_id)
+            .and_then(|n| n.parent)
+            .ok_or_else(|| JsError::new("Cannot find parent of target node"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let insert_idx = parent
+            .children
+            .iter()
+            .position(|&id| id == after_id)
+            .map(|i| i + 1)
+            .unwrap_or(parent.children.len());
+
+        let mut txn = Transaction::with_label("Insert caption");
+        txn.push(Operation::insert_node(parent_id, insert_idx, para_node));
+        txn.push(Operation::insert_node(para_id, 0, run_node));
+        txn.push(Operation::insert_node(run_id, 0, text_node));
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", para_id.replica, para_id.counter))
     }
 
     /// Get available cross-reference targets as JSON.

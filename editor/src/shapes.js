@@ -428,6 +428,34 @@ function createShapeElement(data, pageContent) {
   data.id = id;
   shapes.set(id, data);
 
+  // M14.4: Persist shape to document model via WASM
+  if (state.doc && typeof state.doc.insert_shape === 'function') {
+    try {
+      // Find a paragraph node on this page to anchor the shape after
+      const pageEl = pageContent.closest('.doc-page');
+      const firstPara = pageContent.querySelector('[data-node-id]');
+      if (firstPara) {
+        const nodeId = firstPara.dataset.nodeId;
+        const ptScale = 72 / 96; // px to pt
+        const wasmId = state.doc.insert_shape(
+          nodeId,
+          data.type || 'rectangle',
+          (data.width || 100) * ptScale,
+          (data.height || 100) * ptScale,
+          (data.x || 0) * ptScale,
+          (data.y || 0) * ptScale,
+          (data.fill || '').replace('#', ''),
+          (data.stroke || '000000').replace('#', ''),
+          data.strokeWidth || 1.0,
+        );
+        data.wasmNodeId = wasmId;
+        markDirty();
+      }
+    } catch (e) {
+      console.warn('[shapes] Failed to persist shape to model:', e);
+    }
+  }
+
   const wrapper = document.createElement('div');
   wrapper.className = 'editor-shape';
   wrapper.dataset.shapeId = id;

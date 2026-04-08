@@ -7,7 +7,7 @@ import { markDirty, updateTrackChanges, updateStatusBar } from './file.js';
 import { broadcastTextSync, broadcastOp } from './collab.js';
 import { getEditableText, setCursorAtOffset, refreshSecondarySelections } from './selection.js';
 import { getFontDb } from './fonts.js';
-import { renderDocumentEquations, renderDocumentBookmarks, refreshPageThumbnails, isSpellCheckEnabled, refreshTrackChangesPanel, applyColumnLayout } from './toolbar-handlers.js';
+import { renderDocumentEquations, renderDocumentBookmarks, refreshPageThumbnails, isSpellCheckEnabled, refreshTrackChangesPanel, applyColumnLayout, reapplyWatermark } from './toolbar-handlers.js';
 import {
   isCanvasMode,
   setCanvasMode,
@@ -1354,6 +1354,36 @@ function setupFootnoteHandlers() {
   if (!container) return;
   _footnoteDelegationSetup = true;
 
+  // M14.5: Footnote popup preview on hover
+  let _fnPopup = null;
+  container.addEventListener('mouseover', e => {
+    const fnRef = e.target.closest?.('.footnote-ref, [data-footnote-ref]');
+    if (!fnRef) return;
+    const fnId = fnRef.dataset.footnoteRef || fnRef.dataset.footnoteId || fnRef.textContent.trim();
+    if (!fnId) return;
+
+    const fnBody = container.querySelector(
+      `.footnote-body[data-footnote-id="${fnId}"], .endnote-body[data-endnote-id="${fnId}"], [data-footnote-body="${fnId}"]`
+    );
+    if (!fnBody) return;
+
+    // Create popup
+    if (_fnPopup) _fnPopup.remove();
+    _fnPopup = document.createElement('div');
+    _fnPopup.className = 'footnote-popup';
+    const text = fnBody.textContent.trim();
+    _fnPopup.textContent = text.length > 200 ? text.slice(0, 200) + '...' : text;
+
+    document.body.appendChild(_fnPopup);
+    const rect = fnRef.getBoundingClientRect();
+    _fnPopup.style.left = rect.left + 'px';
+    _fnPopup.style.top = (rect.bottom + 4) + 'px';
+  });
+  container.addEventListener('mouseout', e => {
+    const fnRef = e.target.closest?.('.footnote-ref, [data-footnote-ref]');
+    if (fnRef && _fnPopup) { _fnPopup.remove(); _fnPopup = null; }
+  });
+
   container.addEventListener('click', e => {
     // Click footnote reference marker in text -> scroll to footnote body
     const fnRef = e.target.closest?.('.footnote-ref, [data-footnote-ref]');
@@ -2197,6 +2227,9 @@ export function renderDocumentFromWasm() {
     try {
       import('./spell-check.js').then(m => m.spellCheckAll()).catch(() => {});
     } catch (_) {}
+
+    // M15.6: Reapply watermark after re-render
+    try { reapplyWatermark(); } catch (_) {}
 
     // Restore cursor
     if (_savedNodeId && container) {
