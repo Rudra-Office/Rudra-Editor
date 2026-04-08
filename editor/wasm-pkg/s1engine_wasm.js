@@ -2710,6 +2710,38 @@ export class WasmDocument {
         }
     }
     /**
+     * Get available cross-reference targets as JSON.
+     *
+     * Returns a JSON object with `headings` and `bookmarks` arrays:
+     * ```json
+     * {
+     *   "headings": [{"nodeId":"0:5","text":"Introduction","level":1}],
+     *   "bookmarks": [{"name":"myBookmark","nodeId":"0:10"}]
+     * }
+     * ```
+     * @returns {string}
+     */
+    get_reference_targets_json() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ret = wasm.wasmdocument_get_reference_targets_json(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Get formatting of a specific run as JSON.
      *
      * Returns `{"bold":true,"italic":false,...}`.
@@ -3171,6 +3203,50 @@ export class WasmDocument {
             return getStringFromWasm0(ptr4, len4);
         } finally {
             wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+        }
+    }
+    /**
+     * Insert a cross-reference field at the cursor position.
+     *
+     * - `para_id_str`: paragraph to insert into
+     * - `offset`: character offset within the paragraph
+     * - `target_id_str`: node ID of the target (heading or bookmark)
+     * - `ref_type`: "heading_text", "page_number", or "bookmark_text"
+     * - `display_text`: the text to show for the cross-reference
+     * @param {string} para_id_str
+     * @param {number} _offset
+     * @param {string} target_id_str
+     * @param {string} _ref_type
+     * @param {string} display_text
+     * @returns {string}
+     */
+    insert_cross_reference(para_id_str, _offset, target_id_str, _ref_type, display_text) {
+        let deferred6_0;
+        let deferred6_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            _assertNum(_offset);
+            const ptr1 = passStringToWasm0(target_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(_ref_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ptr3 = passStringToWasm0(display_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len3 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_insert_cross_reference(this.__wbg_ptr, ptr0, len0, _offset, ptr1, len1, ptr2, len2, ptr3, len3);
+            var ptr5 = ret[0];
+            var len5 = ret[1];
+            if (ret[3]) {
+                ptr5 = 0; len5 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred6_0 = ptr5;
+            deferred6_1 = len5;
+            return getStringFromWasm0(ptr5, len5);
+        } finally {
+            wasm.__wbindgen_free(deferred6_0, deferred6_1, 1);
         }
     }
     /**

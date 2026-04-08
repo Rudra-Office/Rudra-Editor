@@ -212,6 +212,8 @@ impl<'a> LayoutEngine<'a> {
         let mut prev_space_after: f64 = 0.0;
         // Track previous paragraph's style ID for contextual spacing
         let mut prev_para_style_id: Option<String> = None;
+        // M13.4: Track previous paragraph's keep_with_next for page break control
+        let mut prev_keep_with_next = false;
 
         for (block_idx, (node_id, node_type)) in blocks.iter().enumerate() {
             let block_section_idx = section_map[block_idx];
@@ -345,6 +347,7 @@ impl<'a> LayoutEngine<'a> {
                         );
                         current_y = content_rect.y;
                         prev_space_after = 0.0;
+                        prev_keep_with_next = false;
                     }
 
                     // Contextual spacing: suppress space between consecutive
@@ -427,6 +430,7 @@ impl<'a> LayoutEngine<'a> {
                             current_y += block_height + space_after;
                             prev_space_after = space_after;
                             prev_para_style_id = current_style_id.clone();
+                            prev_keep_with_next = para_style.keep_with_next;
                             continue;
                         }
 
@@ -510,6 +514,7 @@ impl<'a> LayoutEngine<'a> {
                                 current_y += cont_height + space_after;
                                 prev_space_after = space_after;
                                 prev_para_style_id = current_style_id.clone();
+                                prev_keep_with_next = para_style.keep_with_next;
 
                                 // Handle case where continuation still overflows
                                 if current_y > content_rect.bottom() {
@@ -544,27 +549,35 @@ impl<'a> LayoutEngine<'a> {
 
                         if !did_split {
                             // Fallback: whole-block page break (existing behavior)
-                            // Widow/orphan control: before creating a new page,
-                            // check if the last block on the current page is a
-                            // short paragraph (fewer than min_orphan_lines lines).
-                            // If so, pull it to the next page to avoid an orphan
-                            // at the bottom of the current page.
-                            let min_orphan = self.config.min_orphan_lines;
+
+                            // M13.4: keep_with_next enforcement — if the previous
+                            // paragraph had keep_with_next=true, pull it to the
+                            // next page so it stays with this paragraph.
                             let mut deferred_block: Option<LayoutBlock> = None;
-                            if page_blocks.len() > 1 {
-                                let is_short_orphan = page_blocks
-                                    .last()
-                                    .map(|b| {
-                                        if let LayoutBlockKind::Paragraph { ref lines, .. } = b.kind
-                                        {
-                                            lines.len() < min_orphan && lines.len() == 1
-                                        } else {
-                                            false
-                                        }
-                                    })
-                                    .unwrap_or(false);
-                                if is_short_orphan {
-                                    deferred_block = page_blocks.pop();
+                            if prev_keep_with_next && page_blocks.len() > 1 {
+                                deferred_block = page_blocks.pop();
+                            }
+
+                            // Widow/orphan control: check if the last block on
+                            // the current page is a short orphan paragraph.
+                            if deferred_block.is_none() {
+                                let min_orphan = self.config.min_orphan_lines;
+                                if page_blocks.len() > 1 {
+                                    let is_short_orphan = page_blocks
+                                        .last()
+                                        .map(|b| {
+                                            if let LayoutBlockKind::Paragraph { ref lines, .. } =
+                                                b.kind
+                                            {
+                                                lines.len() < min_orphan && lines.len() == 1
+                                            } else {
+                                                false
+                                            }
+                                        })
+                                        .unwrap_or(false);
+                                    if is_short_orphan {
+                                        deferred_block = page_blocks.pop();
+                                    }
                                 }
                             }
 
@@ -608,6 +621,7 @@ impl<'a> LayoutEngine<'a> {
                             current_y += block_height + space_after;
                             prev_space_after = space_after;
                             prev_para_style_id = current_style_id.clone();
+                            prev_keep_with_next = para_style.keep_with_next;
                             // If the re-laid-out block still overflows (block
                             // taller than page/column), advance to next
                             // column or force a page break so the next block
@@ -651,6 +665,7 @@ impl<'a> LayoutEngine<'a> {
                         current_y += block_height + space_after;
                         prev_space_after = space_after;
                         prev_para_style_id = current_style_id.clone();
+                        prev_keep_with_next = para_style.keep_with_next;
                         // If the block overflows (e.g. single oversized
                         // block on an empty page), advance to next column
                         // or force a page break.
@@ -3808,10 +3823,14 @@ impl<'a> LayoutEngine<'a> {
         let wrap_type = node
             .and_then(|n| n.attributes.get_string(&AttributeKey::ImageWrapType))
             .map(|s| match s {
+                // DOCX format names
                 "square" => WrapType::Square,
                 "tight" => WrapType::Tight,
                 "through" => WrapType::Through,
                 "topAndBottom" => WrapType::TopAndBottom,
+                // Editor UI names (from set_image_wrap_mode WASM API)
+                "wrapLeft" | "wrapRight" | "wrapBoth" => WrapType::Square,
+                "behind" | "inFront" => WrapType::None,
                 _ => WrapType::None,
             })
             .unwrap_or(WrapType::None);

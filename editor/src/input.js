@@ -2127,6 +2127,64 @@ function _doPlainTextPaste(text, info) {
       menu.appendChild(sep);
     };
 
+    // M13.2: Spell check — if right-clicked on a misspelled word, show suggestions first
+    const spellEl = e.target.closest('.spell-error');
+    if (spellEl && spellEl.dataset.word) {
+      const spellWord = spellEl.dataset.word;
+      import('./spell-check.js').then(({ getSuggestions, ignoreWord, addToCustomDict }) => {
+        getSuggestions(spellWord).then(suggestions => {
+          // Insert suggestions at the top of the menu (before standard items)
+          const refNode = menu.firstChild;
+          if (suggestions.length > 0) {
+            suggestions.slice(0, 5).forEach(s => {
+              const item = document.createElement('button');
+              item.className = 'ctx-item spell-suggestion-item';
+              item.setAttribute('role', 'menuitem');
+              item.innerHTML = `<span style="font-weight:500;color:var(--accent)">${s}</span>`;
+              item.addEventListener('click', () => {
+                menu.remove();
+                // Replace the misspelled word
+                const textNode = document.createTextNode(s);
+                spellEl.parentNode.replaceChild(textNode, spellEl);
+                textNode.parentNode.normalize();
+                // Sync to WASM
+                const paraEl = textNode.parentNode.closest('[data-node-id]');
+                if (paraEl) {
+                  import('./render.js').then(m => m.syncParagraphText(paraEl));
+                }
+              });
+              menu.insertBefore(item, refNode);
+            });
+          } else {
+            const noSugg = document.createElement('button');
+            noSugg.className = 'ctx-item';
+            noSugg.disabled = true;
+            noSugg.innerHTML = '<span style="color:var(--text-muted);font-style:italic">No suggestions</span>';
+            menu.insertBefore(noSugg, refNode);
+          }
+          const sep1 = document.createElement('div');
+          sep1.className = 'ctx-sep';
+          menu.insertBefore(sep1, refNode);
+
+          const ignoreItem = document.createElement('button');
+          ignoreItem.className = 'ctx-item';
+          ignoreItem.innerHTML = '<span>Ignore</span>';
+          ignoreItem.addEventListener('click', () => { menu.remove(); ignoreWord(spellWord); });
+          menu.insertBefore(ignoreItem, refNode);
+
+          const addDictItem = document.createElement('button');
+          addDictItem.className = 'ctx-item';
+          addDictItem.innerHTML = '<span>Add to Dictionary</span>';
+          addDictItem.addEventListener('click', () => { menu.remove(); addToCustomDict(spellWord); });
+          menu.insertBefore(addDictItem, refNode);
+
+          const sep2 = document.createElement('div');
+          sep2.className = 'ctx-sep';
+          menu.insertBefore(sep2, refNode);
+        });
+      }).catch(() => {});
+    }
+
     // Standard edit operations — use WASM-backed operations (not deprecated execCommand)
     addItem('Cut', '\u2318X', () => {
       doCut();

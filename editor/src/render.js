@@ -2193,6 +2193,11 @@ export function renderDocumentFromWasm() {
     state._onTextChanged?.();
     refreshPageThumbnails();
 
+    // M13.2: Trigger spell check after render
+    try {
+      import('./spell-check.js').then(m => m.spellCheckAll()).catch(() => {});
+    } catch (_) {}
+
     // Restore cursor
     if (_savedNodeId && container) {
       const el = container.querySelector(`[data-node-id="${_savedNodeId}"]`);

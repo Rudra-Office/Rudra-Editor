@@ -956,12 +956,59 @@ export function updateTrackChanges() {
     } else {
       $('tcBar').classList.remove('show');
     }
-    
+
+    // M13.3: Apply display mode class (markup/final/original)
+    if (container) {
+      container.classList.remove('tc-display-markup', 'tc-display-final', 'tc-display-original');
+      container.classList.add('tc-display-' + (state.tcDisplayMode || 'markup'));
+    }
+
+    // M13.3: Apply per-author reviewer colors in markup mode
+    if (state.tcDisplayMode === 'markup' && count > 0) {
+      applyReviewerColorsToTC(container);
+    }
+
+    // M13.3.6: Status bar track changes toggle
+    const statusTc = $('statusTcToggle');
+    if (statusTc) {
+      statusTc.style.display = count > 0 ? '' : 'none';
+      const label = $('statusTcLabel');
+      if (label) {
+        const mode = state.tcDisplayMode || 'markup';
+        label.textContent = mode === 'markup' ? 'Markup' : mode === 'final' ? 'Final' : 'Original';
+      }
+    }
+
     // S3-12: Refresh sidebar if open
     if ($('tcPanel')?.classList.contains('show')) {
       refreshTrackChangesSidebar();
     }
   } catch (_) { $('tcBar').classList.remove('show'); }
+}
+
+/** M13.3: Apply per-author colors to tracked change elements. */
+const TC_REVIEWER_COLORS = [
+  '#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5',
+  '#70AD47', '#264478', '#9B57A0', '#636363', '#EB7E33',
+  '#2F5597', '#BF9000', '#44546A', '#C00000', '#00B0F0',
+];
+
+function tcReviewerColor(authorName) {
+  if (!authorName) return '#888888';
+  let hash = 0;
+  for (let i = 0; i < authorName.length; i++) {
+    hash = ((hash << 5) - hash + authorName.charCodeAt(i)) | 0;
+  }
+  return TC_REVIEWER_COLORS[Math.abs(hash) % TC_REVIEWER_COLORS.length];
+}
+
+function applyReviewerColorsToTC(container) {
+  if (!container) return;
+  container.querySelectorAll('ins[data-tc-node-id], del[data-tc-node-id]').forEach(el => {
+    const author = el.getAttribute('title') || '';
+    const color = tcReviewerColor(author);
+    el.style.textDecorationColor = color;
+  });
 }
 
 /** S3-12: Refresh the Track Changes sidebar with actionable cards */

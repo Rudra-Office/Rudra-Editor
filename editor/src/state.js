@@ -101,6 +101,8 @@ export const state = {
   _applyingUndo: false,
   // E5.4: Editing mode — 'editing' | 'suggesting' | 'viewing'
   editingMode: 'editing',
+  // M13.3: Track changes display mode — 'markup' | 'final' | 'original'
+  tcDisplayMode: 'markup',
   // FS-11: Read-only / Viewer mode — blocks all editing when true
   readOnlyMode: false,
   // UXP-14: Format Painter

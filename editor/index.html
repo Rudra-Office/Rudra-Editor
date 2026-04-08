@@ -154,6 +154,7 @@
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="miEquation" role="menuitem" tabindex="-1" title="Insert a LaTeX equation (Ctrl+Shift+E)"><span class="msi">functions</span> Equation... <span class="shortcut">Ctrl+Shift+E</span></button>
         <button class="app-menu-entry" id="miBookmark" role="menuitem" tabindex="-1" title="Insert a bookmark at the cursor position (Ctrl+Shift+B)"><span class="msi">bookmark</span> Bookmark... <span class="shortcut">Ctrl+Shift+B</span></button>
+        <button class="app-menu-entry" id="miCrossRef" role="menuitem" tabindex="-1" title="Insert a cross-reference to a heading or bookmark"><span class="msi">link</span> Cross Reference...</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="miDrawing" role="menuitem" tabindex="-1" title="Insert a drawing"><span class="msi">draw</span> Drawing...</button>
         <div class="app-menu-sep" role="separator"></div>
@@ -580,11 +581,19 @@
       </div>
       <div class="tc-panel-toolbar">
         <div class="tc-panel-mode">
-          <label class="tc-mode-label">Mode</label>
+          <label class="tc-mode-label">Edit Mode</label>
           <select class="tc-mode-select" id="tcModeSelect" title="Choose editing mode">
             <option value="editing">Editing</option>
             <option value="suggesting">Suggesting</option>
             <option value="viewing">Viewing</option>
+          </select>
+        </div>
+        <div class="tc-panel-mode">
+          <label class="tc-mode-label">Display</label>
+          <select class="tc-mode-select" id="tcDisplayMode" title="How tracked changes are displayed">
+            <option value="markup">All Markup</option>
+            <option value="final">Final (No Markup)</option>
+            <option value="original">Original (No Markup)</option>
           </select>
         </div>
         <div class="tc-panel-actions">
@@ -1121,6 +1130,10 @@
         <option value="viewing">Viewing</option>
       </select>
     </div>
+    <button class="status-tc-toggle" id="statusTcToggle" title="Toggle track changes display mode" style="display:none">
+      <span class="msi" style="font-size:14px">rate_review</span>
+      <span class="status-tc-label" id="statusTcLabel">Markup</span>
+    </button>
     <div class="status-sep"></div>
     <span id="statusInfo">Ready</span>
     <!-- E5.2: Peer presence dots -->
@@ -1206,6 +1219,29 @@
     <div class="modal-actions">
       <button id="linkCancelBtn">Cancel</button>
       <button class="primary" id="linkInsertBtn">Insert Link</button>
+    </div>
+  </div>
+</div>
+
+<!-- Cross Reference Modal -->
+<div class="modal-overlay" id="crossRefModal" role="dialog" aria-modal="true" aria-label="Cross Reference">
+  <div class="modal" style="min-width:380px">
+    <h3><span class="msi modal-icon">link</span> Insert Cross Reference</h3>
+    <div style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Reference Type</label>
+      <select id="crossRefType" style="width:100%;padding:6px 8px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:13px">
+        <option value="heading">Heading</option>
+        <option value="bookmark">Bookmark</option>
+      </select>
+    </div>
+    <div style="margin-bottom:12px">
+      <label style="display:block;font-size:12px;color:var(--text-muted);margin-bottom:4px">Target</label>
+      <select id="crossRefTarget" size="6" style="width:100%;padding:4px;border:1px solid var(--border-light);border-radius:var(--radius-sm);font-size:13px;min-height:120px">
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button id="crossRefCancel">Cancel</button>
+      <button class="primary" id="crossRefInsert">Insert</button>
     </div>
   </div>
 </div>

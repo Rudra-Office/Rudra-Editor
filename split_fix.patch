@@ -1,0 +1,223 @@
+--- ffi/wasm/src/lib.rs	2024-05-18
++++ ffi/wasm/src/lib.rs	2024-05-18
+@@ -2375,103 +2375,107 @@
+         let para_id = parse_node_id(node_id_str)?;
+ 
+-        // Get full paragraph text and style
+-        let full_text = extract_paragraph_text(doc.model(), para_id);
+-        let style_id = doc
+-            .model()
+-            .node(para_id)
+-            .and_then(|n| n.attributes.get_string(&AttributeKey::StyleId))
+-            .map(|s| s.to_string());
+-
+-        let char_len = full_text.chars().count();
+-        let tail_text: String = full_text.chars().skip(char_offset).collect();
+-
+-        // Find body/section parent and paragraph position
+-        let para_node = doc
+-            .node(para_id)
+-            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+-        let parent_id = para_node
+-            .parent
+-            .ok_or_else(|| JsError::new("Paragraph has no parent"))?;
+-        let parent = doc
+-            .node(parent_id)
+-            .ok_or_else(|| JsError::new("Parent not found"))?;
+-        let index = parent
+-            .children
+-            .iter()
+-            .position(|&c| c == para_id)
+-            .ok_or_else(|| JsError::new("Paragraph not found in parent"))?;
+-
+-        // Collect runs that need tail deletion (from split point onward)
+-        // We need to: delete text from the run containing the offset, then delete
+-        // all subsequent runs entirely.
+         let para = doc
+             .node(para_id)
+             .ok_or_else(|| JsError::new("Paragraph not found"))?;
+-        let run_children: Vec<NodeId> = para
+-            .children
+-            .iter()
+-            .filter(|&&c| {
+-                doc.node(c)
+-                    .map(|n| n.node_type == NodeType::Run)
+-                    .unwrap_or(false)
+-            })
+-            .copied()
+-            .collect();
++        let parent_id = para.parent.ok_or_else(|| JsError::new("No parent"))?;
++        let parent = doc.node(parent_id).ok_or_else(|| JsError::new("Parent not found"))?;
++        let index = parent.children.iter().position(|&c| c == para_id).unwrap();
++        let para_children = para.children.clone();
++        let para_attributes = para.attributes.clone();
+ 
+-        // Find which run contains the split offset
++        // Find the split point child and local offset
+         let mut accumulated = 0usize;
+-        let mut split_run_idx = run_children.len(); // default: after all runs
++        let mut split_child_idx = para_children.len();
+         let mut local_offset = 0usize;
+-        let mut run_scan_idx = 0usize;
+-        for &child_id in &para.children {
++        for (i, &child_id) in para_children.iter().enumerate() {
+             if let Some(child) = doc.node(child_id) {
+-                match child.node_type {
+-                    NodeType::Run => {
+-                        let run_id = run_children[run_scan_idx];
+-                        let rlen = run_char_len(doc.model(), run_id);
+-                        if char_offset <= accumulated + rlen {
+-                            split_run_idx = run_scan_idx;
+-                            local_offset = char_offset - accumulated;
+-                            break;
+-                        }
+-                        accumulated += rlen;
+-                        run_scan_idx += 1;
+-                    }
+-                    NodeType::LineBreak | NodeType::Tab => {
+-                        accumulated += 1;
+-                    }
+-                    _ => {}
++                let clen = match child.node_type {
++                    NodeType::Run => run_char_len(doc.model(), child_id),
++                    NodeType::LineBreak | NodeType::Tab => 1,
++                    _ => 0,
++                };
++                if char_offset <= accumulated + clen {
++                    split_child_idx = i;
++                    local_offset = char_offset - accumulated;
++                    break;
+                 }
++                accumulated += clen;
+             }
+         }
+ 
+-        // Allocate IDs for new paragraph
+         let new_para_id = doc.next_id();
+-        let new_run_id = doc.next_id();
+-        let new_text_id = doc.next_id();
+-
+         let mut txn = Transaction::with_label("Split paragraph");
+-
+-        // Delete tail text from the run at split point
+-        if split_run_idx < run_children.len() && char_offset < char_len {
+-            let split_run_id = run_children[split_run_idx];
+-            let (text_node_id, local_off, text_len) =
+-                find_text_node_at_char_offset_in_run(doc.model(), split_run_id, local_offset)?;
+-            if local_off < text_len {
+-                txn.push(Operation::delete_text(
+-                    text_node_id,
+-                    local_off,
+-                    text_len - local_off,
+-                ));
++        let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
++        new_para.attributes = para_attributes;
++        txn.push(Operation::insert_node(parent_id, index + 1, new_para));
++        
++        let mut new_para_child_idx = 0;
++        
++        if split_child_idx < para_children.len() {
++            let split_child_id = para_children[split_child_idx];
++            let split_child_node = doc.node(split_child_id).unwrap();
++            let split_child_type = split_child_node.node_type;
++            
++            if local_offset == 0 {
++                for &child_id in para_children.iter().skip(split_child_idx) {
++                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
++                    new_para_child_idx += 1;
++                }
++            } else if split_child_type == NodeType::Run {
++                let mut new_run = Node::new(doc.next_id(), NodeType::Run);
++                new_run.attributes = split_child_node.attributes.clone();
++                let new_run_id = new_run.id;
++                txn.push(Operation::insert_node(new_para_id, new_para_child_idx, new_run));
++                new_para_child_idx += 1;
++                
++                let (text_node_id, local_off, text_len) =
++                    find_text_node_at_char_offset_in_run(doc.model(), split_child_id, local_offset)?;
++                
++                let mut new_run_child_idx = 0;
++                if local_off < text_len {
++                    let text_node = doc.node(text_node_id).unwrap();
++                    let full_text = text_node.text_content.as_deref().unwrap_or("");
++                    let tail_text: String = full_text.chars().skip(local_off).collect();
++                    
++                    txn.push(Operation::delete_text(text_node_id, local_off, text_len - local_off));
++                    
++                    let new_text_id = doc.next_id();
++                    txn.push(Operation::insert_node(new_run_id, new_run_child_idx, Node::text(new_text_id, &tail_text)));
++                    new_run_child_idx += 1;
++                }
++                
++                let text_idx = split_child_node.children.iter().position(|&c| c == text_node_id).unwrap();
++                for &sub_id in split_child_node.children.iter().skip(text_idx + 1) {
++                    txn.push(Operation::move_node(sub_id, new_run_id, new_run_child_idx));
++                    new_run_child_idx += 1;
++                }
++                
++                for &child_id in para_children.iter().skip(split_child_idx + 1) {
++                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
++                    new_para_child_idx += 1;
++                }
++            } else {
++                for &child_id in para_children.iter().skip(split_child_idx + 1) {
++                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
++                    new_para_child_idx += 1;
++                }
+             }
+         }
+-
+-        // Delete all runs after the split point
+-        for &run_id in run_children.iter().skip(split_run_idx + 1) {
+-            txn.push(Operation::delete_node(run_id));
++        
++        if new_para_child_idx == 0 {
++            let new_run_id = doc.next_id();
++            let mut new_run = Node::new(new_run_id, NodeType::Run);
++            if let Some(&last_run_id) = para_children.iter().rev().find(|&&c| {
++                doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false)
++            }) {
++                if let Some(last_run) = doc.node(last_run_id) {
++                    new_run.attributes = last_run.attributes.clone();
++                }
++            }
++            txn.push(Operation::insert_node(new_para_id, 0, new_run));
++            txn.push(Operation::insert_node(new_run_id, 0, Node::text(doc.next_id(), "")));
+         }
+-
+-        // Create new paragraph with tail text, copying paragraph-level attributes
+-        let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
+-        if let Some(sid) = &style_id {
+-            new_para
+-                .attributes
+-                .set(AttributeKey::StyleId, AttributeValue::String(sid.clone()));
+-        }
+-        // Copy paragraph-level formatting: list info, alignment, line spacing, heading level
+-        if let Some(para_node_ref) = doc.node(para_id) {
+-            let keys_to_copy = [
+-                AttributeKey::ListInfo,
+-                AttributeKey::Alignment,
+-                AttributeKey::LineSpacing,
+-                AttributeKey::IndentLeft,
+-                AttributeKey::IndentRight,
+-                AttributeKey::IndentFirstLine,
+-            ];
+-            for key in &keys_to_copy {
+-                if let Some(val) = para_node_ref.attributes.get(key) {
+-                    new_para.attributes.set(key.clone(), val.clone());
+-                }
+-            }
+-        }
+-        txn.push(Operation::insert_node(parent_id, index + 1, new_para));
+-        txn.push(Operation::insert_node(
+-            new_para_id,
+-            0,
+-            Node::new(new_run_id, NodeType::Run),
+-        ));
+-        txn.push(Operation::insert_node(
+-            new_run_id,
+-            0,
+-            Node::text(new_text_id, &tail_text),
+-        ));
+ 
+         doc.apply_transaction(&txn)

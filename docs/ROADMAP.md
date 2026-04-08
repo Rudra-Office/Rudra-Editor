@@ -17,7 +17,12 @@ Phase 9: Editor Demo        █████████████████�
 Phase 10: PDF Editor        ████████████████████  COMPLETE (8/8 phases)
 Phase 11: Spreadsheet       ████████████████████  COMPLETE (XLSX/ODS/CSV, formulas, charts, collab)
 Phase 12: AI Integration    ████████████████████  COMPLETE (llama.cpp sidecar, Qwen2.5-3B)
+Phase 13: Parity Sprint 1   ████████████████░░░░  21/24 DONE (canvas overlay, spell check, TC display modes, autocorrect, keep-with-next)
+Phase 14: Parity Sprint 2   ░░░░░░░░░░░░░░░░░░░░  PLANNED (layout, objects, tables, references)
+Phase 15: Parity Sprint 3   ░░░░░░░░░░░░░░░░░░░░  PLANNED (formats, protection, UI modernization)
 ```
+
+> **OnlyOffice Parity**: See `docs/ONLYOFFICE_COMPARISON.md` for full gap analysis and `docs/PARITY_MILESTONES.md` for detailed milestone tracker.
 
 ---
 

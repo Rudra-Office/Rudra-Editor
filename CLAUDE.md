@@ -16,7 +16,9 @@ This is a **library**, not an application. Consumers build editors/tools on top 
 6. `docs/SPECIFICATIONS_INDEX.md` — **Specification-first development framework**
 7. `docs/COLLABORATION_PROTOCOL.md` — **Real-time collaboration protocol v3.0**
 8. `docs/specs/EDITOR_UX_SPEC.md` — **Editor UX specification (cursor, selection, clipboard)**
-6. `docs/DEPENDENCIES.md` — All external dependencies with rationale
+9. `docs/ONLYOFFICE_COMPARISON.md` — **OnlyOffice parity gap analysis (80+ items)**
+10. `docs/PARITY_MILESTONES.md` — **Phase 13-15 milestones for OnlyOffice parity**
+11. `docs/DEPENDENCIES.md` — All external dependencies with rationale
 
 ## Architecture Rules (MUST Follow)
 

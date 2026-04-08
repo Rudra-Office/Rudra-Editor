@@ -48,3 +48,6 @@ editor/test-results/
 # External projects
 docview/
 superdoc/
+
+# Vendor reference repos (OnlyOffice study)
+vendor/

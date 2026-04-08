@@ -809,7 +809,8 @@ body.format-painter-active [contenteditable] { cursor: copy !important; }
 .doc-page{
   background:#fff;
   width:var(--page-width, 816px);
-  min-height:var(--page-height, 1056px);
+  height:var(--page-height, 1056px);
+  max-height:var(--page-height, 1056px);
   box-shadow:0 0 0 0.5px rgba(0,0,0,.08), 0 2px 4px rgba(0,0,0,.06), 0 4px 12px rgba(0,0,0,.04);
   border-radius:0;
   position:relative;
@@ -817,6 +818,7 @@ body.format-painter-active [contenteditable] { cursor: copy !important; }
   flex-direction:column;
   flex-shrink:0;
   transform-origin:top center;
+  overflow:hidden;
 }
 
 /* ─── Page Header (non-editable) ─── */
@@ -1912,6 +1914,15 @@ body.format-painter-active [contenteditable] { cursor: copy !important; }
 .status-view-btn:hover{background:var(--bg-toolbar);color:var(--text-secondary)}
 .status-view-btn.active{color:var(--accent);background:var(--accent-light)}
 .status-sep{width:1px;height:16px;background:var(--border-light);flex-shrink:0}
+.status-tc-toggle{
+  display:inline-flex;align-items:center;gap:4px;
+  padding:2px 6px;border:none;background:transparent;
+  border-radius:var(--radius-sm);cursor:pointer;
+  font-size:11px;color:var(--text-muted);
+  transition:background .1s;
+}
+.status-tc-toggle:hover{background:var(--bg-toolbar-hover)}
+.status-tc-label{font-size:11px}
 /* E10.5: Error indicator in status bar */
 .error-indicator{
   display:inline-flex;align-items:center;gap:3px;
@@ -2612,6 +2623,93 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 /* Suggesting mode — enhanced border indicator */
 .page-content.suggesting-mode {
   box-shadow: inset 0 0 0 2px rgba(232,113,10,.35);
+}
+
+/* ── Track Changes Display Modes ─────────────────── */
+
+/* Markup mode (default): show all marks with colored decorations */
+.tc-display-markup ins[data-tc-node-id] {
+  text-decoration: underline;
+  text-decoration-style: solid;
+  background: rgba(34,134,58,.06);
+}
+.tc-display-markup del[data-tc-node-id] {
+  text-decoration: line-through;
+  text-decoration-style: solid;
+  background: rgba(203,36,49,.06);
+}
+
+/* Final mode: insertions are normal text, deletions are hidden */
+.tc-display-final ins[data-tc-node-id] {
+  text-decoration: none !important;
+  background: none !important;
+  color: inherit !important;
+}
+.tc-display-final del[data-tc-node-id] {
+  display: none !important;
+}
+
+/* Original mode: deletions are normal text, insertions are hidden */
+.tc-display-original ins[data-tc-node-id] {
+  display: none !important;
+}
+.tc-display-original del[data-tc-node-id] {
+  text-decoration: none !important;
+  background: none !important;
+  color: inherit !important;
+}
+
+/* Per-reviewer colored marks (applied via JS) */
+.tc-display-markup ins[data-reviewer-color] {
+  text-decoration-color: attr(data-reviewer-color);
+}
+.tc-display-markup del[data-reviewer-color] {
+  text-decoration-color: attr(data-reviewer-color);
+}
+
+/* ── Spell Check ─────────────────────────────────── */
+
+.spell-error {
+  text-decoration: underline wavy red;
+  text-decoration-skip-ink: none;
+  cursor: default;
+}
+
+.spell-context-menu {
+  background: white;
+  border: 1px solid #d0d0d0;
+  border-radius: 4px;
+  padding: 4px 0;
+  min-width: 160px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.18);
+  font-size: 13px;
+  font-family: var(--font-ui);
+}
+
+.spell-menu-item {
+  padding: 6px 12px;
+  cursor: pointer;
+  color: var(--text-primary);
+}
+.spell-menu-item:hover {
+  background: var(--bg-toolbar-hover);
+}
+.spell-suggestion {
+  font-weight: 500;
+  color: var(--accent);
+}
+.spell-no-suggestions {
+  color: var(--text-muted);
+  font-style: italic;
+  cursor: default;
+}
+.spell-no-suggestions:hover {
+  background: none;
+}
+.spell-menu-sep {
+  height: 1px;
+  background: var(--border-light);
+  margin: 4px 0;
 }
 
 /* ═══════════════════════════════════════════════════

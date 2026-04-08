@@ -24,6 +24,7 @@ import { initFonts, ensureDocumentFonts } from './fonts.js';
 import { initAIPanel } from './ai-panel.js';
 import { initAIInline } from './ai-inline.js';
 import { initTabs } from './tabs.js';
+import { initSpellCheck } from './spell-check.js';
 import { initCapabilities, gateElement } from './app/capabilities.js';
 import { initPdfToolbar } from './features/pdf/toolbar.js';
 import { initSpreadsheetToolbar } from './features/spreadsheet/toolbar.js';
@@ -134,6 +135,7 @@ async function boot() {
     initAIPanel();
     initAIInline();
     initTabs();
+    initSpellCheck();
     renderRuler();
     initPdfToolbar();
     initSpreadsheetToolbar();

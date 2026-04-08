@@ -146,93 +146,122 @@ const PAGE_GAP_PX = 20;
  * Render parsed layout JSON into canvas elements inside the container.
  */
 function renderLayoutToCanvas(layoutJson, container) {
-  // Remove previous canvas pages
-  _canvasPages.forEach(p => {
-    if (p.canvas.parentNode) p.canvas.parentNode.removeChild(p.canvas);
-  });
-  _canvasPages = [];
-
   if (!layoutJson || !layoutJson.pages) return;
 
   const dpr = window.devicePixelRatio || 1;
   const ptToPx = 96 / 72;
 
-  // Clear container
-  container.innerHTML = '';
+  // Clear non-canvas elements if switching from DOM to Canvas mode
+  if (_canvasPages.length === 0) {
+    container.innerHTML = '';
+  }
 
-  for (const page of layoutJson.pages) {
+  // Handle removed pages
+  while (_canvasPages.length > layoutJson.pages.length) {
+    const p = _canvasPages.pop();
+    const removeEl = p.wrapper || p.canvas;
+    if (removeEl.parentNode) removeEl.parentNode.removeChild(removeEl);
+  }
+
+  for (let i = 0; i < layoutJson.pages.length; i++) {
+    const page = layoutJson.pages[i];
     const widthPx = page.width * ptToPx;
     const heightPx = page.height * ptToPx;
 
-    const canvas = document.createElement('canvas');
-    canvas.className = 's1-canvas-page';
-    canvas.style.width = widthPx + 'px';
-    canvas.style.height = heightPx + 'px';
-    canvas.style.margin = PAGE_GAP_PX + 'px auto';
-    canvas.style.display = 'block';
-    canvas.style.background = 'white';
-    canvas.style.boxShadow = '0 1px 4px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08)';
-    canvas.style.borderRadius = '2px';
-    canvas.dataset.pageIndex = layoutJson.pages.indexOf(page);
+    let pageObj = _canvasPages[i];
+    const pageHash = JSON.stringify(page);
+    let needsRedraw = true;
 
-    // Set actual pixel size for retina displays
-    canvas.width = Math.ceil(widthPx * dpr);
-    canvas.height = Math.ceil(heightPx * dpr);
-
-    const ctx = canvas.getContext('2d');
-    ctx.scale(dpr, dpr);
-
-    // White background
-    ctx.fillStyle = '#ffffff';
-    ctx.fillRect(0, 0, widthPx, heightPx);
-
-    // Convert pt positions to px for drawing
-    ctx.save();
-    ctx.scale(ptToPx, ptToPx);
-
-    // Render header
-    if (page.header) {
-      renderBlock(ctx, page.header);
-    }
-
-    // Render body blocks
-    for (const block of page.blocks || []) {
-      renderBlock(ctx, block);
-    }
-
-    // Render floating images
-    for (const img of page.floatingImages || []) {
-      renderBlock(ctx, img);
-    }
-
-    // Render footnotes
-    if (page.footnotes && page.footnotes.length > 0) {
-      // Draw a thin separator line above footnotes
-      const contentBottom = page.contentArea
-        ? page.contentArea.y + page.contentArea.height
-        : page.height - 72;
-      ctx.strokeStyle = '#999999';
-      ctx.lineWidth = 0.5;
-      ctx.beginPath();
-      ctx.moveTo(page.contentArea ? page.contentArea.x : 72, contentBottom - 12);
-      ctx.lineTo((page.contentArea ? page.contentArea.x : 72) + 120, contentBottom - 12);
-      ctx.stroke();
-
-      for (const note of page.footnotes) {
-        renderBlock(ctx, note);
+    if (pageObj) {
+      const parentEl = pageObj.wrapper || pageObj.canvas;
+      if (pageObj._pageHash === pageHash && parentEl.parentNode === container) {
+        needsRedraw = false;
       }
+    } else {
+      // Content canvas (expensive to render, cached)
+      const wrapper = document.createElement('div');
+      wrapper.className = 's1-canvas-page-wrapper';
+      wrapper.style.position = 'relative';
+      wrapper.style.margin = PAGE_GAP_PX + 'px auto';
+      wrapper.style.display = 'block';
+
+      const canvas = document.createElement('canvas');
+      canvas.className = 's1-canvas-page';
+      canvas.style.display = 'block';
+      canvas.style.background = 'white';
+      canvas.style.boxShadow = '0 1px 4px rgba(0,0,0,0.15), 0 2px 8px rgba(0,0,0,0.08)';
+      canvas.style.borderRadius = '2px';
+
+      // Overlay canvas for cursor/selection (cheap to redraw, no full page restore)
+      const overlay = document.createElement('canvas');
+      overlay.className = 's1-canvas-overlay';
+      overlay.style.position = 'absolute';
+      overlay.style.left = '0';
+      overlay.style.top = '0';
+      overlay.style.pointerEvents = 'none';
+
+      const ctx = canvas.getContext('2d');
+      const overlayCtx = overlay.getContext('2d');
+      pageObj = { canvas, ctx, overlay, overlayCtx, wrapper };
+      _canvasPages.push(pageObj);
+      wrapper.appendChild(canvas);
+      wrapper.appendChild(overlay);
+      container.appendChild(wrapper);
     }
 
-    // Render footer
-    if (page.footer) {
-      renderBlock(ctx, page.footer);
+    if (needsRedraw) {
+      const canvas = pageObj.canvas;
+      const ctx = pageObj.ctx;
+
+      canvas.dataset.pageIndex = i;
+      canvas.style.width = widthPx + 'px';
+      canvas.style.height = heightPx + 'px';
+      canvas.width = Math.ceil(widthPx * dpr);
+      canvas.height = Math.ceil(heightPx * dpr);
+
+      // Size overlay canvas to match content canvas
+      if (pageObj.overlay) {
+        pageObj.overlay.style.width = widthPx + 'px';
+        pageObj.overlay.style.height = heightPx + 'px';
+        pageObj.overlay.width = Math.ceil(widthPx * dpr);
+        pageObj.overlay.height = Math.ceil(heightPx * dpr);
+        pageObj.overlay.dataset.pageIndex = i;
+      }
+      if (pageObj.wrapper) {
+        pageObj.wrapper.style.width = widthPx + 'px';
+      }
+
+      ctx.setTransform(1, 0, 0, 1, 0, 0); // Reset transform
+      ctx.scale(dpr, dpr);
+
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, widthPx, heightPx);
+
+      ctx.save();
+      ctx.scale(ptToPx, ptToPx);
+
+      if (page.header) renderBlock(ctx, page.header);
+      for (const block of page.blocks || []) renderBlock(ctx, block);
+      for (const img of page.floatingImages || []) renderBlock(ctx, img);
+
+      if (page.footnotes && page.footnotes.length > 0) {
+        const contentBottom = page.contentArea ? page.contentArea.y + page.contentArea.height : page.height - 72;
+        ctx.strokeStyle = '#999999';
+        ctx.lineWidth = 0.5;
+        ctx.beginPath();
+        ctx.moveTo(page.contentArea ? page.contentArea.x : 72, contentBottom - 12);
+        ctx.lineTo((page.contentArea ? page.contentArea.x : 72) + 120, contentBottom - 12);
+        ctx.stroke();
+        for (const note of page.footnotes) renderBlock(ctx, note);
+      }
+
+      if (page.footer) renderBlock(ctx, page.footer);
+      ctx.restore();
+
+      pageObj.pageData = page;
+      pageObj._pageHash = pageHash;
+      pageObj._backingBuffer = ctx.getImageData(0, 0, canvas.width, canvas.height);
     }
-
-    ctx.restore();
-
-    container.appendChild(canvas);
-    const backingBuffer = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    _canvasPages.push({ canvas, ctx, pageData: page, _backingBuffer: backingBuffer });
   }
 }
 
@@ -289,7 +318,7 @@ function renderParagraph(ctx, block) {
     const markerY = firstLine ? (bounds.y + firstLine.baselineY) : (bounds.y + 12);
     const markerX = bounds.x - 18 + (block.listLevel || 0) * 18;
     ctx.fillStyle = '#000000';
-    ctx.font = '12pt serif';
+    ctx.font = '12px serif';
     ctx.fillText(block.listMarker, markerX, markerY);
   }
 
@@ -317,7 +346,6 @@ function renderRun(ctx, run, blockBounds, line) {
       ctx.drawImage(img, x, y, imgData.width, imgData.height);
     };
     img.onerror = function () {
-      // Draw a placeholder rect for broken images
       ctx.save();
       ctx.strokeStyle = '#ccc';
       ctx.lineWidth = 0.5;
@@ -334,7 +362,7 @@ function renderRun(ctx, run, blockBounds, line) {
   if (run.bold) parts.push('bold');
   const fontSize = run.fontSize || 12;
   const family = run.fontFamily || 'serif';
-  parts.push(fontSize + 'pt');
+  parts.push(fontSize + 'px');
   parts.push(family);
   ctx.font = parts.join(' ');
 
@@ -342,36 +370,37 @@ function renderRun(ctx, run, blockBounds, line) {
   const x = blockBounds.x + run.x;
   const baselineY = blockBounds.y + line.baselineY;
 
+  // Use engine-computed width when available (rustybuzz metrics) instead of
+  // ctx.measureText which uses the browser's font engine and may differ.
+  const runWidth = run.width || ctx.measureText(run.text).width;
+
   // Superscript/subscript offset
   let yOffset = 0;
   if (run.superscript) yOffset = -(fontSize * 0.35);
   if (run.subscript) yOffset = (fontSize * 0.2);
 
-  // Highlight background
+  // Highlight background — use engine width for precise coverage
   if (run.highlightColor) {
-    const metrics = ctx.measureText(run.text);
     ctx.fillStyle = run.highlightColor;
-    ctx.fillRect(x, baselineY - fontSize * 0.85 + yOffset, metrics.width, fontSize * 1.2);
+    ctx.fillRect(x, baselineY - fontSize * 0.85 + yOffset, runWidth, fontSize * 1.2);
   }
 
   // Text color
   ctx.fillStyle = run.color || '#000000';
 
-  // Strikethrough (draw behind text)
+  // Strikethrough (draw behind text) — use engine width
   if (run.strikethrough) {
-    const metrics = ctx.measureText(run.text);
     const midY = baselineY - fontSize * 0.3 + yOffset;
     ctx.beginPath();
     ctx.strokeStyle = run.color || '#000000';
     ctx.lineWidth = Math.max(0.5, fontSize / 20);
     ctx.moveTo(x, midY);
-    ctx.lineTo(x + metrics.width, midY);
+    ctx.lineTo(x + runWidth, midY);
     ctx.stroke();
   }
 
-  // Draw text
+  // Draw text — use engine positions for character spacing
   if (run.characterSpacing && run.characterSpacing !== 0) {
-    // Manual letter-spacing: draw character by character
     let cx = x;
     for (const ch of run.text) {
       ctx.fillText(ch, cx, baselineY + yOffset);
@@ -381,15 +410,14 @@ function renderRun(ctx, run, blockBounds, line) {
     ctx.fillText(run.text, x, baselineY + yOffset);
   }
 
-  // Underline
+  // Underline — use engine width for precise underline length
   if (run.underline) {
-    const metrics = ctx.measureText(run.text);
     const underlineY = baselineY + 2 + yOffset;
     ctx.beginPath();
     ctx.strokeStyle = run.color || '#000000';
     ctx.lineWidth = Math.max(0.5, fontSize / 20);
     ctx.moveTo(x, underlineY);
-    ctx.lineTo(x + metrics.width, underlineY);
+    ctx.lineTo(x + runWidth, underlineY);
     ctx.stroke();
   }
 }
@@ -463,7 +491,7 @@ function renderImage(ctx, block) {
     ctx.fillStyle = '#f0f0f0';
     ctx.fillRect(b.x || 0, b.y || 0, b.width || 100, b.height || 100);
     ctx.fillStyle = '#999999';
-    ctx.font = '10pt sans-serif';
+    ctx.font = '10px sans-serif';
     ctx.fillText('[Image]', (b.x || 0) + 4, (b.y || 0) + 14);
     return;
   }
@@ -753,7 +781,7 @@ function renderSceneItems(ctx, items) {
 
       case 'list_marker':
         ctx.fillStyle = item.color || '#000000';
-        ctx.font = (item.font_size_pt || 11) + 'pt serif';
+        ctx.font = (item.font_size_pt || 11) + 'px serif';
         ctx.fillText(item.marker_text, item.bounds_pt.x, item.bounds_pt.y + (item.font_size_pt || 11));
         break;
 
@@ -831,7 +859,7 @@ function renderSceneTextRun(ctx, item) {
   const parts = [];
   if (item.italic) parts.push('italic');
   if (item.bold) parts.push('bold');
-  parts.push(effectiveFontSize + 'pt');
+  parts.push(effectiveFontSize + 'px');
   parts.push(item.font_family || 'serif');
   ctx.font = parts.join(' ');
 
@@ -980,7 +1008,7 @@ function renderSceneImage(ctx, item) {
     ctx.fillStyle = '#f0f0f0';
     ctx.fillRect(b.x, b.y, b.width, b.height);
     ctx.fillStyle = '#999999';
-    ctx.font = '10pt sans-serif';
+    ctx.font = '10px sans-serif';
     ctx.fillText('[Image]', b.x + 4, b.y + 14);
   }
 }
@@ -1167,18 +1195,50 @@ function findClosestRun(page, x, y) {
   return closest;
 }
 
+// Offscreen canvas for text measurement in hit testing
+let _measureCtx = null;
+function getMeasureCtx() {
+  if (!_measureCtx) {
+    const c = document.createElement('canvas');
+    c.width = 1; c.height = 1;
+    _measureCtx = c.getContext('2d');
+  }
+  return _measureCtx;
+}
+
 /**
  * Estimate the character offset for a click position within a run.
+ * Uses canvas measureText with substring widths for per-character precision.
  */
 function estimateCharOffset(run, localX) {
   if (!run.text || run.text.length === 0) return 0;
   if (localX <= 0) return 0;
+  if (localX >= run.width) return run.text.length;
 
-  const avgCharWidth = run.width / run.text.length;
-  if (avgCharWidth <= 0) return 0;
+  const chars = [...run.text];
+  if (chars.length <= 1) return localX >= run.width / 2 ? 1 : 0;
 
-  const charIndex = Math.round(localX / avgCharWidth);
-  return Math.max(0, Math.min(charIndex, run.text.length));
+  // Use offscreen canvas for substring measurement
+  const mctx = getMeasureCtx();
+  const parts = [];
+  if (run.italic) parts.push('italic');
+  if (run.bold) parts.push('bold');
+  parts.push((run.fontSize || 12) + 'px');
+  parts.push(run.fontFamily || 'serif');
+  mctx.font = parts.join(' ');
+
+  // Scale factor: engine width vs browser measured width
+  const browserWidth = mctx.measureText(run.text).width;
+  const scale = browserWidth > 0 ? run.width / browserWidth : 1;
+
+  // Binary search for the character offset using substring widths
+  let cumWidth = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const charW = mctx.measureText(chars[i]).width * scale;
+    if (localX < cumWidth + charW / 2) return i;
+    cumWidth += charW;
+  }
+  return chars.length;
 }
 
 /**
@@ -1186,7 +1246,8 @@ function estimateCharOffset(run, localX) {
  */
 export function destroyCanvasRenderer() {
   _canvasPages.forEach(p => {
-    if (p.canvas.parentNode) p.canvas.parentNode.removeChild(p.canvas);
+    const removeEl = p.wrapper || p.canvas;
+    if (removeEl.parentNode) removeEl.parentNode.removeChild(removeEl);
   });
   _canvasPages = [];
   _lastLayoutJson = null;
@@ -1372,28 +1433,33 @@ function _drawCaret() {
 
   const ptToPx = 96 / 72;
   const dpr = window.devicePixelRatio || 1;
-  const { ctx, canvas } = entry;
 
-  // Use backing buffer: save page pixels once, restore on each blink toggle.
-  // This avoids re-fetching the full scene from WASM on every 530ms blink.
-  if (!entry._backingBuffer) {
-    entry._backingBuffer = ctx.getImageData(0, 0, canvas.width, canvas.height);
+  // Use overlay canvas if available — avoids expensive putImageData on content canvas
+  const drawCtx = entry.overlayCtx || entry.ctx;
+  const drawCanvas = entry.overlay || entry.canvas;
+
+  if (entry.overlay) {
+    // Clear overlay (transparent)
+    drawCtx.clearRect(0, 0, drawCanvas.width, drawCanvas.height);
+  } else {
+    // Fallback: restore backing buffer on content canvas
+    if (entry._backingBuffer) {
+      entry.ctx.putImageData(entry._backingBuffer, 0, 0);
+    }
   }
-  // Restore the clean page (without caret)
-  ctx.putImageData(entry._backingBuffer, 0, 0);
 
   if (_caretVisible) {
-    ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.scale(ptToPx, ptToPx);
-    ctx.fillStyle = '#000000';
-    ctx.fillRect(
+    drawCtx.save();
+    drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawCtx.scale(ptToPx, ptToPx);
+    drawCtx.fillStyle = '#000000';
+    drawCtx.fillRect(
       _caretState.x,
       _caretState.y,
       _caretState.width,
       _caretState.height
     );
-    ctx.restore();
+    drawCtx.restore();
   }
 }
 
@@ -1406,27 +1472,35 @@ function _drawSelectionOverlay() {
   }
 
   const ptToPx = 96 / 72;
-
   const dpr = window.devicePixelRatio || 1;
+
+  // Clear all overlay canvases first
+  for (const entry of _canvasPages) {
+    if (entry.overlay && entry.overlayCtx) {
+      entry.overlayCtx.clearRect(0, 0, entry.overlay.width, entry.overlay.height);
+    }
+  }
+
   for (const [pi, rects] of Object.entries(byPage)) {
     const entry = _canvasPages[parseInt(pi)];
     if (!entry) continue;
 
-    // Restore clean page from backing buffer (fast, no WASM call)
-    if (entry._backingBuffer) {
+    // Use overlay canvas if available
+    const drawCtx = entry.overlayCtx || entry.ctx;
+
+    if (!entry.overlay && entry._backingBuffer) {
+      // Fallback: restore backing buffer on content canvas
       entry.ctx.putImageData(entry._backingBuffer, 0, 0);
     }
 
-    // Draw selection rects
-    const { ctx } = entry;
-    ctx.save();
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.scale(ptToPx, ptToPx);
-    ctx.fillStyle = 'rgba(66, 133, 244, 0.3)';
+    drawCtx.save();
+    drawCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    drawCtx.scale(ptToPx, ptToPx);
+    drawCtx.fillStyle = 'rgba(66, 133, 244, 0.3)';
     for (const r of rects) {
-      ctx.fillRect(r.x, r.y, r.width, r.height);
+      drawCtx.fillRect(r.x, r.y, r.width, r.height);
     }
-    ctx.restore();
+    drawCtx.restore();
   }
 }
 

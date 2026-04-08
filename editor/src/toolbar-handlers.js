@@ -5102,6 +5102,118 @@ function initBookmarkModal() {
       showToast('Bookmark: ' + name, 'info', 2000);
     }
   });
+
+  // M14.5: Cross Reference
+  const miCrossRef = $('miCrossRef');
+  if (miCrossRef) {
+    miCrossRef.addEventListener('click', () => {
+      closeAllMenus();
+      $('insertMenu')?.classList.remove('show');
+      openCrossRefModal();
+    });
+  }
+}
+
+function openCrossRefModal() {
+  if (!state.doc) return;
+  const modal = $('crossRefModal');
+  if (!modal) return;
+
+  const typeSelect = $('crossRefType');
+  const targetSelect = $('crossRefTarget');
+  if (!typeSelect || !targetSelect) return;
+
+  // Get targets from WASM
+  let targets = { headings: [], bookmarks: [] };
+  try {
+    if (typeof state.doc.get_reference_targets_json === 'function') {
+      targets = JSON.parse(state.doc.get_reference_targets_json());
+    }
+  } catch (e) {
+    console.warn('Failed to get reference targets:', e);
+  }
+
+  function populateTargets() {
+    targetSelect.innerHTML = '';
+    const type = typeSelect.value;
+    const items = type === 'heading' ? targets.headings : targets.bookmarks;
+
+    if (items.length === 0) {
+      const opt = document.createElement('option');
+      opt.disabled = true;
+      opt.textContent = type === 'heading' ? 'No headings found' : 'No bookmarks found';
+      targetSelect.appendChild(opt);
+      return;
+    }
+
+    items.forEach(item => {
+      const opt = document.createElement('option');
+      opt.value = item.nodeId;
+      if (type === 'heading') {
+        const indent = '\u00A0\u00A0'.repeat((item.level || 1) - 1);
+        opt.textContent = indent + item.text;
+        opt.dataset.text = item.text;
+      } else {
+        opt.textContent = item.name;
+        opt.dataset.text = item.name;
+      }
+      targetSelect.appendChild(opt);
+    });
+
+    // Auto-select first
+    if (targetSelect.options.length > 0) targetSelect.selectedIndex = 0;
+  }
+
+  typeSelect.addEventListener('change', populateTargets);
+  populateTargets();
+
+  modal.classList.add('show');
+  targetSelect.focus();
+
+  // Cancel
+  $('crossRefCancel').onclick = () => {
+    modal.classList.remove('show');
+    ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+  };
+
+  // Insert
+  $('crossRefInsert').onclick = () => {
+    const selected = targetSelect.options[targetSelect.selectedIndex];
+    if (!selected || selected.disabled) return;
+
+    const targetNodeId = selected.value;
+    const displayText = selected.dataset.text || selected.textContent.trim();
+
+    modal.classList.remove('show');
+
+    // Get current paragraph for insertion
+    const info = getSelectionInfo();
+    if (!info || !info.nodeId) {
+      showToast('Place cursor in a paragraph first', 'error');
+      return;
+    }
+
+    try {
+      syncAllText();
+      state.doc.insert_cross_reference(info.nodeId, info.offset || 0, targetNodeId, 'heading_text', displayText);
+      broadcastOp({ action: 'insertCrossRef', paraId: info.nodeId, targetId: targetNodeId });
+      renderDocument();
+      updateUndoRedo();
+      markDirty();
+      announce('Cross reference inserted');
+    } catch (e) {
+      console.error('insert cross-ref:', e);
+      showToast('Failed to insert cross reference', 'error');
+    }
+  };
+
+  // Close on backdrop click
+  modal.addEventListener('click', e => {
+    if (e.target === modal) {
+      modal.classList.remove('show');
+      ($('pageContainer')?.querySelector('.page-content') || $('pageContainer'))?.focus();
+    }
+  });
 }
 
 /**
@@ -5893,6 +6005,95 @@ function initTrackChangesPanel() {
   const nextBtn = $('btnNextChange');
   if (prevBtn) prevBtn.addEventListener('click', () => navigateChange(-1));
   if (nextBtn) nextBtn.addEventListener('click', () => navigateChange(1));
+
+  // Display mode selector (Markup / Final / Original)
+  const displayMode = $('tcDisplayMode');
+  if (displayMode) {
+    displayMode.addEventListener('change', () => {
+      setTrackChangesDisplayMode(displayMode.value);
+    });
+  }
+
+  // M13.3.6: Status bar TC toggle — cycles through display modes
+  const statusTc = $('statusTcToggle');
+  if (statusTc) {
+    statusTc.addEventListener('click', () => {
+      const modes = ['markup', 'final', 'original'];
+      const current = state.tcDisplayMode || 'markup';
+      const idx = modes.indexOf(current);
+      const next = modes[(idx + 1) % modes.length];
+      setTrackChangesDisplayMode(next);
+    });
+  }
+}
+
+// ── Track Changes Display Modes ──────────────────────
+// 'markup'   — All changes visible with colored marks (underline/strikethrough)
+// 'final'    — Insertions shown as normal text, deletions hidden (as if accepted)
+// 'original' — Deletions shown as normal text, insertions hidden (as if rejected)
+
+const TC_REVIEWER_COLORS = [
+  '#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5',
+  '#70AD47', '#264478', '#9B57A0', '#636363', '#EB7E33',
+  '#2F5597', '#BF9000', '#44546A', '#C00000', '#00B0F0',
+];
+
+function getReviewerColor(authorName) {
+  if (!authorName) return '#888888';
+  let hash = 0;
+  for (let i = 0; i < authorName.length; i++) {
+    hash = ((hash << 5) - hash + authorName.charCodeAt(i)) | 0;
+  }
+  return TC_REVIEWER_COLORS[Math.abs(hash) % TC_REVIEWER_COLORS.length];
+}
+
+function setTrackChangesDisplayMode(mode) {
+  state.tcDisplayMode = mode || 'markup';
+  const container = $('pageContainer');
+  if (!container) return;
+
+  // Remove previous display mode classes
+  container.classList.remove('tc-display-markup', 'tc-display-final', 'tc-display-original');
+  container.classList.add('tc-display-' + state.tcDisplayMode);
+
+  // Apply per-author colors in markup mode
+  if (state.tcDisplayMode === 'markup') {
+    applyReviewerColors();
+  }
+
+  // Sync dropdown
+  const sel = $('tcDisplayMode');
+  if (sel && sel.value !== mode) sel.value = mode;
+
+  // Sync status bar label
+  const label = $('statusTcLabel');
+  if (label) {
+    label.textContent = state.tcDisplayMode === 'markup' ? 'Markup'
+      : state.tcDisplayMode === 'final' ? 'Final' : 'Original';
+  }
+}
+
+function applyReviewerColors() {
+  const container = $('pageContainer');
+  if (!container) return;
+
+  // Color all insertion marks by author
+  container.querySelectorAll('ins[data-tc-node-id]').forEach(el => {
+    const author = el.getAttribute('title') || '';
+    const color = getReviewerColor(author);
+    el.style.textDecorationColor = color;
+    el.style.color = ''; // Don't override text color
+    el.dataset.reviewerColor = color;
+  });
+
+  // Color all deletion marks by author
+  container.querySelectorAll('del[data-tc-node-id]').forEach(el => {
+    const author = el.getAttribute('title') || '';
+    const color = getReviewerColor(author);
+    el.style.textDecorationColor = color;
+    el.style.color = ''; // Don't override text color
+    el.dataset.reviewerColor = color;
+  });
 }
 
 function toggleTrackChangesPanel(forceShow) {

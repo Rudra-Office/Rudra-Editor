@@ -470,10 +470,14 @@ impl WasmDocument {
     pub fn to_layout_json_with_fonts(&self, font_db: &WasmFontDatabase) -> Result<String, JsError> {
         let doc = self.doc()?;
         let model = doc.model();
-        let layout = doc
-            .layout(&font_db.inner)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(layout_document_to_json(&layout, model))
+        
+        // Force update cache with loaded fonts to prevent caret/hit_test from using fallback fonts
+        *self.layout_cache.borrow_mut() = None;
+        self.ensure_layout(&font_db.inner)?;
+        
+        let cache = self.layout_cache.borrow();
+        let layout = cache.as_ref().unwrap();
+        Ok(layout_document_to_json(layout, model))
     }
 
     /// Render the document layout as structured JSON with loaded fonts and custom config.
@@ -488,10 +492,14 @@ impl WasmDocument {
         let doc = self.doc()?;
         let model = doc.model();
         let layout_config = config.to_layout_config();
-        let layout = doc
-            .layout_with_config(&font_db.inner, layout_config)
-            .map_err(|e| JsError::new(&e.to_string()))?;
-        Ok(layout_document_to_json(&layout, model))
+        
+        *self.layout_cache.borrow_mut() = Some(
+            doc.layout_with_config(&font_db.inner, layout_config)
+                .map_err(|e| JsError::new(&e.to_string()))?
+        );
+        let cache = self.layout_cache.borrow();
+        let layout = cache.as_ref().unwrap();
+        Ok(layout_document_to_json(layout, model))
     }
 
     /// Get page break information from the layout engine as JSON.
@@ -2366,137 +2374,122 @@ impl WasmDocument {
         let doc = self.doc_mut()?;
         let para_id = parse_node_id(node_id_str)?;
 
-        // Get full paragraph text and style
-        let full_text = extract_paragraph_text(doc.model(), para_id);
-        let style_id = doc
-            .model()
-            .node(para_id)
-            .and_then(|n| n.attributes.get_string(&AttributeKey::StyleId))
-            .map(|s| s.to_string());
-
-        let char_len = full_text.chars().count();
-        let tail_text: String = full_text.chars().skip(char_offset).collect();
-
-        // Find body/section parent and paragraph position
-        let para_node = doc
-            .node(para_id)
-            .ok_or_else(|| JsError::new("Paragraph not found"))?;
-        let parent_id = para_node
-            .parent
-            .ok_or_else(|| JsError::new("Paragraph has no parent"))?;
-        let parent = doc
-            .node(parent_id)
-            .ok_or_else(|| JsError::new("Parent not found"))?;
-        let index = parent
-            .children
-            .iter()
-            .position(|&c| c == para_id)
-            .ok_or_else(|| JsError::new("Paragraph not found in parent"))?;
-
-        // Collect runs that need tail deletion (from split point onward)
-        // We need to: delete text from the run containing the offset, then delete
-        // all subsequent runs entirely.
         let para = doc
             .node(para_id)
             .ok_or_else(|| JsError::new("Paragraph not found"))?;
-        let run_children: Vec<NodeId> = para
-            .children
-            .iter()
-            .filter(|&&c| {
-                doc.node(c)
-                    .map(|n| n.node_type == NodeType::Run)
-                    .unwrap_or(false)
-            })
-            .copied()
-            .collect();
+        let parent_id = para.parent.ok_or_else(|| JsError::new("No parent"))?;
+        let parent = doc.node(parent_id).ok_or_else(|| JsError::new("Parent not found"))?;
+        let index = parent.children.iter().position(|&c| c == para_id).unwrap();
+        let para_children = para.children.clone();
+        let para_attributes = para.attributes.clone();
 
-        // Find which run contains the split offset
         let mut accumulated = 0usize;
-        let mut split_run_idx = run_children.len(); // default: after all runs
+        let mut split_child_idx = para_children.len();
         let mut local_offset = 0usize;
-        let mut run_scan_idx = 0usize;
-        for &child_id in &para.children {
+        for (i, &child_id) in para_children.iter().enumerate() {
             if let Some(child) = doc.node(child_id) {
-                match child.node_type {
-                    NodeType::Run => {
-                        let run_id = run_children[run_scan_idx];
-                        let rlen = run_char_len(doc.model(), run_id);
-                        if char_offset <= accumulated + rlen {
-                            split_run_idx = run_scan_idx;
-                            local_offset = char_offset - accumulated;
-                            break;
-                        }
-                        accumulated += rlen;
-                        run_scan_idx += 1;
-                    }
-                    NodeType::LineBreak | NodeType::Tab => {
-                        accumulated += 1;
-                    }
-                    _ => {}
+                let clen = match child.node_type {
+                    NodeType::Run => run_char_len(doc.model(), child_id),
+                    NodeType::LineBreak | NodeType::Tab => 1,
+                    _ => 0,
+                };
+                if char_offset <= accumulated + clen {
+                    split_child_idx = i;
+                    local_offset = char_offset - accumulated;
+                    break;
                 }
+                accumulated += clen;
             }
         }
 
-        // Allocate IDs for new paragraph
         let new_para_id = doc.next_id();
-        let new_run_id = doc.next_id();
-        let new_text_id = doc.next_id();
-
         let mut txn = Transaction::with_label("Split paragraph");
-
-        // Delete tail text from the run at split point
-        if split_run_idx < run_children.len() && char_offset < char_len {
-            let split_run_id = run_children[split_run_idx];
-            let (text_node_id, local_off, text_len) =
-                find_text_node_at_char_offset_in_run(doc.model(), split_run_id, local_offset)?;
-            if local_off < text_len {
-                txn.push(Operation::delete_text(
-                    text_node_id,
-                    local_off,
-                    text_len - local_off,
-                ));
-            }
-        }
-
-        // Delete all runs after the split point
-        for &run_id in run_children.iter().skip(split_run_idx + 1) {
-            txn.push(Operation::delete_node(run_id));
-        }
-
-        // Create new paragraph with tail text, copying paragraph-level attributes
         let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
-        if let Some(sid) = &style_id {
-            new_para
-                .attributes
-                .set(AttributeKey::StyleId, AttributeValue::String(sid.clone()));
-        }
-        // Copy paragraph-level formatting: list info, alignment, line spacing, heading level
-        if let Some(para_node_ref) = doc.node(para_id) {
-            let keys_to_copy = [
-                AttributeKey::ListInfo,
-                AttributeKey::Alignment,
-                AttributeKey::LineSpacing,
-                AttributeKey::IndentLeft,
-                AttributeKey::IndentRight,
-                AttributeKey::IndentFirstLine,
-            ];
-            for key in &keys_to_copy {
-                if let Some(val) = para_node_ref.attributes.get(key) {
-                    new_para.attributes.set(key.clone(), val.clone());
+        new_para.attributes = para_attributes;
+        txn.push(Operation::insert_node(parent_id, index + 1, new_para));
+        
+        let mut new_para_child_idx = 0;
+        
+        if split_child_idx < para_children.len() {
+            let split_child_id = para_children[split_child_idx];
+            let split_child_node = doc.node(split_child_id).unwrap();
+            let split_child_type = split_child_node.node_type;
+            let split_child_attrs = split_child_node.attributes.clone();
+            let split_child_children = split_child_node.children.clone();
+            
+            if local_offset == 0 {
+                for &child_id in para_children.iter().skip(split_child_idx) {
+                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    new_para_child_idx += 1;
+                }
+            } else if split_child_type == NodeType::Run {
+                let mut new_run = Node::new(doc.next_id(), NodeType::Run);
+                new_run.attributes = split_child_attrs;
+                let new_run_id = new_run.id;
+                txn.push(Operation::insert_node(new_para_id, new_para_child_idx, new_run));
+                new_para_child_idx += 1;
+                
+                let (text_node_id, local_off, text_len) =
+                    find_text_node_at_char_offset_in_run(doc.model(), split_child_id, local_offset)?;
+                
+                let mut new_run_child_idx = 0;
+                if local_off < text_len {
+                    let text_node = doc.node(text_node_id).unwrap();
+                    let full_text = text_node.text_content.as_deref().unwrap_or("");
+                    let tail_text: String = full_text.chars().skip(local_off).collect();
+                    
+                    txn.push(Operation::delete_text(text_node_id, local_off, text_len - local_off));
+                    
+                    let new_text_id = doc.next_id();
+                    txn.push(Operation::insert_node(new_run_id, new_run_child_idx, Node::text(new_text_id, &tail_text)));
+                    new_run_child_idx += 1;
+                }
+                
+                let text_idx = split_child_children.iter().position(|&c| c == text_node_id).unwrap();
+                for &sub_id in split_child_children.iter().skip(text_idx + 1) {
+                    txn.push(Operation::move_node(sub_id, new_run_id, new_run_child_idx));
+                    new_run_child_idx += 1;
+                }
+                
+                for &child_id in para_children.iter().skip(split_child_idx + 1) {
+                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    new_para_child_idx += 1;
+                }
+            } else {
+                for &child_id in para_children.iter().skip(split_child_idx + 1) {
+                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    new_para_child_idx += 1;
                 }
             }
         }
-        txn.push(Operation::insert_node(parent_id, index + 1, new_para));
-        txn.push(Operation::insert_node(
-            new_para_id,
-            0,
-            Node::new(new_run_id, NodeType::Run),
-        ));
-        txn.push(Operation::insert_node(
-            new_run_id,
-            0,
-            Node::text(new_text_id, &tail_text),
-        ));
+        
+        if new_para_child_idx == 0 {
+            let new_run_id = doc.next_id();
+            let mut new_run = Node::new(new_run_id, NodeType::Run);
+            if let Some(&last_run_id) = para_children.iter().rev().find(|&&c| {
+                doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false)
+            }) {
+                if let Some(last_run) = doc.node(last_run_id) {
+                    new_run.attributes = last_run.attributes.clone();
+                }
+            }
+            txn.push(Operation::insert_node(new_para_id, 0, new_run));
+            txn.push(Operation::insert_node(new_run_id, 0, Node::text(doc.next_id(), "")));
+        }
+        
+        if split_child_idx == 0 && local_offset == 0 {
+            let empty_run_id = doc.next_id();
+            let mut empty_run = Node::new(empty_run_id, NodeType::Run);
+            if let Some(&first_run_id) = para_children.iter().find(|&&c| {
+                doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false)
+            }) {
+                if let Some(first_run) = doc.node(first_run_id) {
+                    empty_run.attributes = first_run.attributes.clone();
+                }
+            }
+            txn.push(Operation::insert_node(para_id, 0, empty_run));
+            txn.push(Operation::insert_node(empty_run_id, 0, Node::text(doc.next_id(), "")));
+        }
 
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
@@ -4202,6 +4195,121 @@ impl WasmDocument {
         doc.apply_transaction(&txn)
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(format!("{}:{}", bk_start_id.replica, bk_start_id.counter))
+    }
+
+    /// Get available cross-reference targets as JSON.
+    ///
+    /// Returns a JSON object with `headings` and `bookmarks` arrays:
+    /// ```json
+    /// {
+    ///   "headings": [{"nodeId":"0:5","text":"Introduction","level":1}],
+    ///   "bookmarks": [{"name":"myBookmark","nodeId":"0:10"}]
+    /// }
+    /// ```
+    pub fn get_reference_targets_json(&self) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let mut json = String::from("{\"headings\":[");
+
+        // Collect headings using the model's built-in method
+        let headings = model.collect_headings();
+        for (i, (node_id, level, text)) in headings.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            let preview: String = text.chars().take(80).collect();
+            json.push_str(&format!(
+                "{{\"nodeId\":\"{}:{}\",\"text\":\"{}\",\"level\":{}}}",
+                node_id.replica,
+                node_id.counter,
+                escape_json(&preview),
+                level,
+            ));
+        }
+
+        json.push_str("],\"bookmarks\":[");
+
+        // Collect bookmarks by walking the tree
+        let mut first_bk = true;
+        fn collect_bookmarks(
+            model: &DocumentModel,
+            node_id: NodeId,
+            json: &mut String,
+            first: &mut bool,
+        ) {
+            if let Some(node) = model.node(node_id) {
+                if node.node_type == NodeType::BookmarkStart {
+                    if let Some(name) = node.attributes.get_string(&AttributeKey::BookmarkName) {
+                        if !*first {
+                            json.push(',');
+                        }
+                        *first = false;
+                        json.push_str(&format!(
+                            "{{\"name\":\"{}\",\"nodeId\":\"{}:{}\"}}",
+                            escape_json(name),
+                            node_id.replica,
+                            node_id.counter,
+                        ));
+                    }
+                }
+                for &child_id in &node.children {
+                    collect_bookmarks(model, child_id, json, first);
+                }
+            }
+        }
+        collect_bookmarks(model, NodeId::ROOT, &mut json, &mut first_bk);
+
+        json.push_str("]}");
+        Ok(json)
+    }
+
+    /// Insert a cross-reference field at the cursor position.
+    ///
+    /// - `para_id_str`: paragraph to insert into
+    /// - `offset`: character offset within the paragraph
+    /// - `target_id_str`: node ID of the target (heading or bookmark)
+    /// - `ref_type`: "heading_text", "page_number", or "bookmark_text"
+    /// - `display_text`: the text to show for the cross-reference
+    pub fn insert_cross_reference(
+        &mut self,
+        para_id_str: &str,
+        _offset: usize,
+        target_id_str: &str,
+        _ref_type: &str,
+        display_text: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(para_id_str)?;
+        let _target_id = parse_node_id(target_id_str)?;
+
+        let field_id = doc.next_id();
+        let mut field_node = Node::new(field_id, NodeType::Field);
+        field_node.attributes.set(
+            AttributeKey::FieldType,
+            AttributeValue::FieldType(s1_model::FieldType::CrossReference),
+        );
+        field_node.attributes.set(
+            AttributeKey::FieldCode,
+            AttributeValue::String(format!("REF {} \\h", target_id_str)),
+        );
+        field_node.attributes.set(
+            AttributeKey::HyperlinkUrl,
+            AttributeValue::String(format!("#{}", target_id_str)),
+        );
+        field_node.text_content = Some(display_text.to_string());
+
+        // Find the run at offset and insert the field
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let insert_idx = para.children.len(); // Append at end (simplified)
+
+        let mut txn = Transaction::with_label("Insert cross-reference");
+        txn.push(Operation::insert_node(para_id, insert_idx, field_node));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+        Ok(format!("{}:{}", field_id.replica, field_id.counter))
     }
 
     /// Set list format on a paragraph.
@@ -6861,15 +6969,39 @@ impl WasmDocument {
         let para_id_str = format!("{}:{}", para_id.replica, para_id.counter);
         self.insert_text_in_paragraph(&para_id_str, char_offset, text)?;
 
-        // Compute new position: advance by the inserted text length in UTF-16 units
-        let inserted_utf16_len: u32 = text.chars().map(|c| c.len_utf16() as u32).sum();
-        let new_pos = PositionRefParsed {
-            node_id: pos.node_id,
-            offset_utf16: pos.offset_utf16 + inserted_utf16_len,
-            affinity: "downstream".to_string(),
+        let doc = self.doc()?;
+        
+        let inserted_char_len = text.chars().count();
+        let new_char_offset = char_offset + inserted_char_len;
+        
+        let new_pos = match find_text_node_at_char_offset(doc.model(), para_id, new_char_offset) {
+            Ok((tid, local_off, _)) => {
+                let text_node = doc.model().node(tid).unwrap();
+                let text_content = text_node.text_content.as_deref().unwrap_or("");
+                let utf16_off = char_offset_to_utf16_offset(text_content, local_off);
+                PositionRefParsed {
+                    node_id: tid,
+                    offset_utf16: utf16_off,
+                    affinity: "downstream".to_string(),
+                }
+            }
+            Err(_) => {
+                if let Ok((tid, _)) = find_first_text_node(doc.model(), para_id) {
+                    PositionRefParsed {
+                        node_id: tid,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
+                    }
+                } else {
+                    PositionRefParsed {
+                        node_id: para_id,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
+                    }
+                }
+            }
         };
 
-        let doc = self.doc()?;
         Ok(build_edit_result_json(doc, &new_pos))
     }
 
@@ -6887,38 +7019,36 @@ impl WasmDocument {
         let end_para_str = format!("{}:{}", end_para.replica, end_para.counter);
         self.delete_selection(&start_para_str, start_offset, &end_para_str, end_offset)?;
 
-        // Resolve the start position back to text-node coordinates for the result.
-        // After deletion, the document has changed, so we use the anchor position
-        // (or focus, whichever is earlier) as the new collapsed cursor.
-        let new_pos = if range.anchor.node_id == range.focus.node_id {
-            let min_offset = range.anchor.offset_utf16.min(range.focus.offset_utf16);
-            PositionRefParsed {
-                node_id: range.anchor.node_id,
-                offset_utf16: min_offset,
-                affinity: "downstream".to_string(),
+        let doc = self.doc()?;
+
+        // Resolve the start position back to text-node coordinates using the mutated model.
+        let new_pos = match find_text_node_at_char_offset(doc.model(), start_para, start_offset) {
+            Ok((tid, local_off, _)) => {
+                let text_node = doc.model().node(tid).unwrap();
+                let text_content = text_node.text_content.as_deref().unwrap_or("");
+                let utf16_off = char_offset_to_utf16_offset(text_content, local_off);
+                PositionRefParsed {
+                    node_id: tid,
+                    offset_utf16: utf16_off,
+                    affinity: "downstream".to_string(),
+                }
             }
-        } else {
-            // Multi-paragraph: cursor collapses to the start (anchor or focus)
-            let (anchor_para, _) = resolve_position_to_paragraph(&model, &range.anchor)?;
-            let (focus_para, _) = resolve_position_to_paragraph(&model, &range.focus)?;
-            if let Some(bid) = model.body_id() {
-                if let Some(body) = model.node(bid) {
-                    let ai = body.children.iter().position(|&c| c == anchor_para);
-                    let fi = body.children.iter().position(|&c| c == focus_para);
-                    match (ai, fi) {
-                        (Some(a), Some(f)) if a <= f => range.anchor.to_parsed_clone(),
-                        (Some(_), Some(_)) => range.focus.to_parsed_clone(),
-                        _ => range.anchor.to_parsed_clone(),
+            Err(_) => {
+                if let Ok((tid, _)) = find_first_text_node(doc.model(), start_para) {
+                    PositionRefParsed {
+                        node_id: tid,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
                     }
                 } else {
-                    range.anchor.to_parsed_clone()
+                    PositionRefParsed {
+                        node_id: start_para,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
+                    }
                 }
-            } else {
-                range.anchor.to_parsed_clone()
             }
         };
-
-        let doc = self.doc()?;
         Ok(build_edit_result_json(doc, &new_pos))
     }
 
@@ -6945,31 +7075,38 @@ impl WasmDocument {
         // Insert text at start position
         self.insert_text_in_paragraph(&start_para_str, start_offset, text)?;
 
-        // Compute new position: need to figure out the text node at the insertion point
-        // For now, use the anchor position advanced by inserted text length
-        let earlier_pos = if range.anchor.offset_utf16 <= range.focus.offset_utf16
-            && range.anchor.node_id == range.focus.node_id
-        {
-            &range.anchor
-        } else {
-            // Multi-node: use whichever resolved to start_para/start_offset
-            let (ap, _) = resolve_position_to_paragraph(&model, &range.anchor)
-                .unwrap_or((start_para, start_offset));
-            if ap == start_para {
-                &range.anchor
-            } else {
-                &range.focus
+        let doc = self.doc()?;
+        
+        let inserted_char_len = text.chars().count();
+        let new_char_offset = start_offset + inserted_char_len;
+        
+        let new_pos = match find_text_node_at_char_offset(doc.model(), start_para, new_char_offset) {
+            Ok((tid, local_off, _)) => {
+                let text_node = doc.model().node(tid).unwrap();
+                let text_content = text_node.text_content.as_deref().unwrap_or("");
+                let utf16_off = char_offset_to_utf16_offset(text_content, local_off);
+                PositionRefParsed {
+                    node_id: tid,
+                    offset_utf16: utf16_off,
+                    affinity: "downstream".to_string(),
+                }
+            }
+            Err(_) => {
+                if let Ok((tid, _)) = find_first_text_node(doc.model(), start_para) {
+                    PositionRefParsed {
+                        node_id: tid,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
+                    }
+                } else {
+                    PositionRefParsed {
+                        node_id: start_para,
+                        offset_utf16: 0,
+                        affinity: "downstream".to_string(),
+                    }
+                }
             }
         };
-
-        let inserted_utf16_len: u32 = text.chars().map(|c| c.len_utf16() as u32).sum();
-        let new_pos = PositionRefParsed {
-            node_id: earlier_pos.node_id,
-            offset_utf16: earlier_pos.offset_utf16 + inserted_utf16_len,
-            affinity: "downstream".to_string(),
-        };
-
-        let doc = self.doc()?;
         Ok(build_edit_result_json(doc, &new_pos))
     }
 

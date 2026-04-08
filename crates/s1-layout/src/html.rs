@@ -478,24 +478,27 @@ fn render_glyph_run(html: &mut String, run: &GlyphRun, line_height: f64) {
 
     let escaped_text = escape_html(&run.text);
 
-    // Determine track change wrapper tag
+    // Determine track change wrapper tag — styling handled by CSS display mode classes
+    let tc_node_id = format!("{}:{}", run.source_id.replica, run.source_id.counter);
     let (tc_open, tc_close) = match run.revision_type.as_deref() {
         Some("insertion") => {
-            let title = run.revision_author.as_deref().unwrap_or("");
+            let author = run.revision_author.as_deref().unwrap_or("");
             (
                 format!(
-                    "<ins class=\"s1-ins\" style=\"text-decoration:underline;color:green\" title=\"{}\">",
-                    escape_attr(title)
+                    "<ins data-tc-node-id=\"{}\" data-tc-type=\"insert\" title=\"{}\">",
+                    escape_attr(&tc_node_id),
+                    escape_attr(author),
                 ),
                 "</ins>".to_string(),
             )
         }
         Some("deletion") => {
-            let title = run.revision_author.as_deref().unwrap_or("");
+            let author = run.revision_author.as_deref().unwrap_or("");
             (
                 format!(
-                    "<del class=\"s1-del\" style=\"text-decoration:line-through;color:red\" title=\"{}\">",
-                    escape_attr(title)
+                    "<del data-tc-node-id=\"{}\" data-tc-type=\"delete\" title=\"{}\">",
+                    escape_attr(&tc_node_id),
+                    escape_attr(author),
                 ),
                 "</del>".to_string(),
             )
@@ -1813,7 +1816,8 @@ mod tests {
         };
         let html = layout_to_html(&doc);
         assert!(html.contains("<ins"), "missing <ins> tag: {html}");
-        assert!(html.contains("color:green"), "missing green color: {html}");
+        assert!(html.contains("data-tc-type=\"insert\""), "missing tc-type insert: {html}");
+        assert!(html.contains("data-tc-node-id="), "missing tc-node-id: {html}");
         assert!(html.contains("Author A"), "missing author: {html}");
         assert!(html.contains("inserted text"), "missing text: {html}");
     }
@@ -1895,7 +1899,8 @@ mod tests {
         };
         let html = layout_to_html(&doc);
         assert!(html.contains("<del"), "missing <del> tag: {html}");
-        assert!(html.contains("color:red"), "missing red color: {html}");
+        assert!(html.contains("data-tc-type=\"delete\""), "missing tc-type delete: {html}");
+        assert!(html.contains("data-tc-node-id="), "missing tc-node-id: {html}");
         assert!(html.contains("Author B"), "missing author: {html}");
         assert!(html.contains("deleted text"), "missing text: {html}");
     }
