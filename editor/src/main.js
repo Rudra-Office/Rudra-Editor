@@ -25,6 +25,8 @@ import { initAIPanel } from './ai-panel.js';
 import { initAIInline } from './ai-inline.js';
 import { initTabs } from './tabs.js';
 import { initSpellCheck } from './spell-check.js';
+import { initFormControls } from './form-controls.js';
+import { startFreehandMode, stopFreehandMode, isFreehandActive } from './freehand.js';
 import { initCapabilities, gateElement } from './app/capabilities.js';
 import { initPdfToolbar } from './features/pdf/toolbar.js';
 import { initSpreadsheetToolbar } from './features/spreadsheet/toolbar.js';
@@ -136,6 +138,24 @@ async function boot() {
     initAIInline();
     initTabs();
     initSpellCheck();
+    initFormControls();
+
+    // M15.6: Freehand drawing tools
+    ['miFreehandPen', 'miFreehandHighlighter', 'miFreehandEraser'].forEach(id => {
+      const btn = document.getElementById(id);
+      if (btn) {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.app-menu-item').forEach(m => m.classList.remove('open'));
+          document.getElementById('insertMenu')?.classList.remove('show');
+          if (isFreehandActive()) {
+            stopFreehandMode();
+          } else {
+            const tool = id === 'miFreehandPen' ? 'pen' : id === 'miFreehandHighlighter' ? 'highlighter' : 'eraser';
+            startFreehandMode(tool);
+          }
+        });
+      }
+    });
     renderRuler();
     initPdfToolbar();
     initSpreadsheetToolbar();

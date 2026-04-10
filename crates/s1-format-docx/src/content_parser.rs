@@ -2696,19 +2696,36 @@ fn parse_field_instruction(instr: &str) -> FieldType {
     // (e.g. "PAGEREF" should not match "PAGE")
     let first_word = trimmed.split_whitespace().next().unwrap_or("");
     match first_word {
+        // Page numbering
         "PAGE" => FieldType::PageNumber,
-        "NUMPAGES" | "SECTIONPAGES" => FieldType::PageCount,
+        "NUMPAGES" | "SECTIONPAGES" | "REVNUM" => FieldType::PageCount,
+        // Date/time
         "DATE" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => FieldType::Date,
         "TIME" | "EDITTIME" => FieldType::Time,
-        "FILENAME" => FieldType::FileName,
+        // Document info
+        "FILENAME" | "TITLE" | "SUBJECT" | "KEYWORDS" | "COMMENTS" | "TEMPLATE"
+        | "DOCPROPERTY" | "INFO" | "NUMCHARS" | "NUMWORDS" => FieldType::FileName,
         "AUTHOR" | "LASTSAVEDBY" | "USERNAME" => FieldType::Author,
-        "TOC" => FieldType::TableOfContents,
+        // Table of contents / figures
+        "TOC" | "TOA" => FieldType::TableOfContents,
+        // Hyperlinks
         "HYPERLINK" => FieldType::Hyperlink,
-        "REF" | "PAGEREF" | "NOTEREF" => FieldType::CrossReference,
-        "SEQ" => FieldType::Sequence,
-        "MERGEFIELD" | "MERGEREC" | "MERGESEQ" => FieldType::MergeField,
-        "IF" => FieldType::Conditional,
+        // Cross-references
+        "REF" | "PAGEREF" | "NOTEREF" | "FTNREF" => FieldType::CrossReference,
+        // Sequential numbering
+        "SEQ" | "AUTONUM" | "AUTONUMLGL" | "AUTONUMOUT" | "LISTNUM" => FieldType::Sequence,
+        // Mail merge
+        "MERGEFIELD" | "MERGEREC" | "MERGESEQ" | "NEXT" | "NEXTIF" | "SKIPIF"
+        | "DATABASE" | "ASK" | "FILLIN" | "SET" => FieldType::MergeField,
+        // Conditional
+        "IF" | "COMPARE" => FieldType::Conditional,
+        // Style references
         "STYLEREF" => FieldType::StyleRef,
+        // Other recognized fields (map to Custom with preserved instruction)
+        "SYMBOL" | "ADVANCE" | "EQ" | "EMBED" | "LINK" | "INCLUDEPICTURE"
+        | "INCLUDETEXT" | "QUOTE" | "GOTOBUTTON" | "MACROBUTTON" | "PRINT"
+        | "RD" | "TA" | "TC" | "XE" | "INDEX" | "CITATION" | "BIBLIOGRAPHY"
+        | "BARCODE" | "DISPLAYBARCODE" | "MERGEBARCODE" => FieldType::Custom,
         _ => FieldType::Custom,
     }
 }

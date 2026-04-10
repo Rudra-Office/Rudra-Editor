@@ -792,6 +792,21 @@ impl WasmDocument {
         Ok(format!("data:application/pdf;base64,{}", b64))
     }
 
+    /// Export the document as PDF/A-1b bytes (ISO 19005 archival format).
+    pub fn to_pdf_a(&self) -> Result<Vec<u8>, JsError> {
+        let doc = self.doc()?;
+        let font_db = s1_text::FontDatabase::empty();
+        doc.export_pdf_a(&font_db, s1_format_pdf::PdfAConformance::PdfA1b)
+            .map_err(|e| JsError::new(&e.to_string()))
+    }
+
+    /// Export the document as a PDF/A data URL.
+    pub fn to_pdf_a_data_url(&self) -> Result<String, JsError> {
+        let bytes = self.to_pdf_a()?;
+        let b64 = base64_encode(&bytes);
+        Ok(format!("data:application/pdf;base64,{}", b64))
+    }
+
     /// Export the document as a PDF data URL using loaded fonts.
     pub fn to_pdf_data_url_with_fonts(
         &self,
@@ -6220,6 +6235,329 @@ impl WasmDocument {
         let doc = self.doc_mut()?;
         doc.update_toc();
         Ok(())
+    }
+
+    /// Convert selected paragraphs to a table.
+    ///
+    /// Takes consecutive paragraphs and converts each into a table row.
+    /// Cells are split by `delimiter` ("tab", "comma", "semicolon", or "paragraph").
+    /// If delimiter is "paragraph", each paragraph becomes a single-cell row.
+    ///
+    /// Returns the new table node ID.
+    pub fn text_to_table(
+        &mut self,
+        first_para_str: &str,
+        last_para_str: &str,
+        delimiter: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let first_id = parse_node_id(first_para_str)?;
+        let last_id = parse_node_id(last_para_str)?;
+
+        // Collect paragraphs in range
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+        let body = doc
+            .node(body_id)
+            .ok_or_else(|| JsError::new("Body not found"))?;
+
+        let mut para_ids: Vec<NodeId> = Vec::new();
+        let mut in_range = false;
+        for &child_id in &body.children {
+            if child_id == first_id {
+                in_range = true;
+            }
+            if in_range {
+                para_ids.push(child_id);
+            }
+            if child_id == last_id {
+                break;
+            }
+        }
+
+        if para_ids.is_empty() {
+            return Err(JsError::new("No paragraphs found in range"));
+        }
+
+        // Extract text from each paragraph
+        let delim_char = match delimiter {
+            "tab" => '\t',
+            "comma" => ',',
+            "semicolon" => ';',
+            _ => '\n', // "paragraph" = each para is one cell
+        };
+
+        let mut rows: Vec<Vec<String>> = Vec::new();
+        for &para_id in &para_ids {
+            let mut text = String::new();
+            if let Some(para) = doc.node(para_id) {
+                for &run_id in &para.children {
+                    if let Some(run) = doc.node(run_id) {
+                        for &txt_id in &run.children {
+                            if let Some(txt) = doc.node(txt_id) {
+                                if let Some(ref tc) = txt.text_content {
+                                    text.push_str(tc);
+                                }
+                            }
+                        }
+                        if let Some(ref tc) = run.text_content {
+                            text.push_str(tc);
+                        }
+                    }
+                }
+            }
+            if delimiter == "paragraph" {
+                rows.push(vec![text]);
+            } else {
+                rows.push(text.split(delim_char).map(|s| s.trim().to_string()).collect());
+            }
+        }
+
+        // Determine column count (max cells in any row)
+        let num_cols = rows.iter().map(|r| r.len()).max().unwrap_or(1).max(1);
+        let _num_rows = rows.len();
+
+        // Insert table after first paragraph
+        let parent_id = body_id;
+        let insert_idx = body
+            .children
+            .iter()
+            .position(|&id| id == first_id)
+            .unwrap_or(0);
+
+        // Create table using insert_table, then populate cells
+        let table_id = doc.next_id();
+        let mut table_node = Node::new(table_id, NodeType::Table);
+        // Set equal column widths
+        let col_width = 468.0 / num_cols as f64; // Letter page content width / cols
+        let widths: Vec<String> = (0..num_cols).map(|_| format!("{:.1}", col_width)).collect();
+        table_node.attributes.set(
+            AttributeKey::TableColumnWidths,
+            AttributeValue::String(widths.join(",")),
+        );
+
+        let mut txn = Transaction::with_label("Convert text to table");
+        txn.push(Operation::insert_node(parent_id, insert_idx, table_node));
+
+        for (ri, row) in rows.iter().enumerate() {
+            let row_id = doc.next_id();
+            let row_node = Node::new(row_id, NodeType::TableRow);
+            txn.push(Operation::insert_node(table_id, ri, row_node));
+
+            for ci in 0..num_cols {
+                let cell_id = doc.next_id();
+                let cell_node = Node::new(cell_id, NodeType::TableCell);
+                txn.push(Operation::insert_node(row_id, ci, cell_node));
+
+                let para_id_new = doc.next_id();
+                let para_node = Node::new(para_id_new, NodeType::Paragraph);
+                txn.push(Operation::insert_node(cell_id, 0, para_node));
+
+                let cell_text = row.get(ci).cloned().unwrap_or_default();
+                if !cell_text.is_empty() {
+                    let run_id = doc.next_id();
+                    let run_node = Node::new(run_id, NodeType::Run);
+                    txn.push(Operation::insert_node(para_id_new, 0, run_node));
+
+                    let txt_id = doc.next_id();
+                    let mut txt_node = Node::new(txt_id, NodeType::Text);
+                    txt_node.text_content = Some(cell_text);
+                    txn.push(Operation::insert_node(run_id, 0, txt_node));
+                }
+            }
+        }
+
+        // Delete original paragraphs
+        for &para_id in &para_ids {
+            txn.push(Operation::delete_node(para_id));
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", table_id.replica, table_id.counter))
+    }
+
+    /// Toggle a form checkbox's checked state.
+    ///
+    /// Returns the new checked state.
+    pub fn toggle_form_checkbox(&mut self, node_id_str: &str) -> Result<bool, JsError> {
+        let doc = self.doc_mut()?;
+        let node_id = parse_node_id(node_id_str)?;
+        let current = doc
+            .node(node_id)
+            .and_then(|n| n.attributes.get_bool(&AttributeKey::FormChecked))
+            .unwrap_or(false);
+        let new_value = !current;
+        let mut attrs = s1_model::AttributeMap::new();
+        attrs.set(AttributeKey::FormChecked, AttributeValue::Bool(new_value));
+        doc.apply(Operation::set_attributes(node_id, attrs))
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(new_value)
+    }
+
+    /// Insert a SEQ (sequence) field for auto-numbering.
+    ///
+    /// Sequence fields maintain separate counters per `seq_name` (e.g., "Figure", "Table").
+    /// Returns the field node ID.
+    pub fn insert_seq_field(
+        &mut self,
+        para_id_str: &str,
+        seq_name: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(para_id_str)?;
+
+        // Count existing SEQ fields with same name to determine number
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+        let mut count = 0u32;
+        fn count_seq_fields(
+            doc: &s1engine::Document,
+            node_id: NodeId,
+            seq_name: &str,
+            count: &mut u32,
+        ) {
+            if let Some(node) = doc.node(node_id) {
+                if node.node_type == NodeType::Field {
+                    if let Some(code) = node.attributes.get_string(&AttributeKey::FieldCode) {
+                        if code.starts_with("SEQ ") && code.contains(seq_name) {
+                            *count += 1;
+                        }
+                    }
+                }
+                for &child_id in &node.children {
+                    count_seq_fields(doc, child_id, seq_name, count);
+                }
+            }
+        }
+        count_seq_fields(doc, body_id, seq_name, &mut count);
+        let number = count + 1;
+
+        let field_id = doc.next_id();
+        let mut field_node = Node::new(field_id, NodeType::Field);
+        field_node.attributes.set(
+            AttributeKey::FieldType,
+            AttributeValue::FieldType(s1_model::FieldType::Sequence),
+        );
+        field_node.attributes.set(
+            AttributeKey::FieldCode,
+            AttributeValue::String(format!("SEQ {}", seq_name)),
+        );
+        field_node.text_content = Some(number.to_string());
+
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let insert_idx = para.children.len();
+
+        let mut txn = Transaction::with_label("Insert SEQ field");
+        txn.push(Operation::insert_node(para_id, insert_idx, field_node));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", field_id.replica, field_id.counter))
+    }
+
+    /// Generate a Table of Figures from all Caption-styled paragraphs.
+    ///
+    /// Inserts a new section after `after_node_str` containing a list of all
+    /// captions found in the document (Figure 1: ..., Table 2: ..., etc.).
+    /// Returns the TOF container node ID.
+    pub fn insert_table_of_figures(
+        &mut self,
+        after_node_str: &str,
+        label_filter: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let after_id = parse_node_id(after_node_str)?;
+
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+
+        // Collect caption paragraphs
+        let body = doc
+            .node(body_id)
+            .ok_or_else(|| JsError::new("Body not found"))?;
+        let mut captions: Vec<(NodeId, String)> = Vec::new();
+
+        for &child_id in &body.children {
+            if let Some(node) = doc.node(child_id) {
+                if let Some(style) = node.attributes.get_string(&AttributeKey::StyleId) {
+                    if style == "Caption" {
+                        let mut text = String::new();
+                        for &run_id in &node.children {
+                            if let Some(run) = doc.node(run_id) {
+                                for &txt_id in &run.children {
+                                    if let Some(txt) = doc.node(txt_id) {
+                                        if let Some(ref tc) = txt.text_content {
+                                            text.push_str(tc);
+                                        }
+                                    }
+                                }
+                                if let Some(ref tc) = run.text_content {
+                                    text.push_str(tc);
+                                }
+                            }
+                        }
+                        if label_filter.is_empty() || text.starts_with(label_filter) {
+                            captions.push((child_id, text));
+                        }
+                    }
+                }
+            }
+        }
+
+        // Create the TOF container
+        let tof_id = doc.next_id();
+        let mut tof_node = Node::new(tof_id, NodeType::TableOfContents);
+        tof_node.attributes.set(
+            AttributeKey::StyleId,
+            AttributeValue::String("TableOfFigures".to_string()),
+        );
+
+        let mut txn = Transaction::with_label("Insert table of figures");
+
+        // Find insert position
+        let parent = doc
+            .node(after_id)
+            .and_then(|n| n.parent)
+            .unwrap_or(body_id);
+        let parent_node = doc
+            .node(parent)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let insert_idx = parent_node
+            .children
+            .iter()
+            .position(|&id| id == after_id)
+            .map(|i| i + 1)
+            .unwrap_or(parent_node.children.len());
+
+        txn.push(Operation::insert_node(parent, insert_idx, tof_node));
+
+        // Add entries
+        for (i, (_cap_id, cap_text)) in captions.iter().enumerate() {
+            let para_id = doc.next_id();
+            let run_id = doc.next_id();
+            let text_id = doc.next_id();
+
+            let para_node = Node::new(para_id, NodeType::Paragraph);
+            let run_node = Node::new(run_id, NodeType::Run);
+            let mut text_node = Node::new(text_id, NodeType::Text);
+            text_node.text_content = Some(cap_text.clone());
+
+            txn.push(Operation::insert_node(tof_id, i, para_node));
+            txn.push(Operation::insert_node(para_id, 0, run_node));
+            txn.push(Operation::insert_node(run_id, 0, text_node));
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", tof_id.replica, tof_id.counter))
     }
 
     /// Get the document heading hierarchy as JSON.
@@ -12680,6 +13018,15 @@ fn render_table_cell(model: &DocumentModel, cell_id: NodeId, html: &mut String) 
             _ => "top",
         };
         style.push_str(&format!("vertical-align:{val};"));
+    }
+
+    // Cell text direction (rotated text)
+    if let Some(dir) = cell.attributes.get_string(&AttributeKey::CellTextDirection) {
+        match dir {
+            "btLr" => style.push_str("writing-mode:vertical-lr;transform:rotate(180deg);"),
+            "tbRl" | "tbRlV" => style.push_str("writing-mode:vertical-rl;"),
+            _ => {} // "lrTb" is default horizontal
+        }
     }
 
     html.push_str(&format!(

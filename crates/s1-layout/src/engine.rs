@@ -3855,9 +3855,16 @@ impl<'a> LayoutEngine<'a> {
             })
             .unwrap_or((0.0, 0.0, 0.0, 0.0));
 
+        // Parse wrap side (from wrapSquare wrapSide attribute)
+        let wrap_side = node
+            .and_then(|n| n.attributes.get_string(&AttributeKey::ImageWrapSide))
+            .unwrap_or("bothSides")
+            .to_string();
+
         FloatingImageRect {
             bounds: block.bounds,
             wrap_type,
+            wrap_side,
             dist_top,
             dist_bottom,
             dist_left,
@@ -3880,32 +3887,100 @@ impl<'a> LayoutEngine<'a> {
             match flt.wrap_type {
                 WrapType::Square | WrapType::Tight | WrapType::Through => {
                     let ex = flt.exclusion_rect();
-                    // Check if this float overlaps the paragraph's starting Y
-                    // Use a conservative check: float overlaps [current_y, page bottom]
                     if ex.y < content_rect.bottom() && ex.bottom() > current_y {
-                        // Determine if float is on left or right side
                         let float_center_x = ex.x + ex.width / 2.0;
                         let content_center_x = content_rect.x + content_rect.width / 2.0;
 
-                        if float_center_x < content_center_x {
-                            // Float on left — narrow from left
-                            let new_left = ex.right();
-                            if new_left > adjusted.x && new_left < adjusted.right() {
-                                let delta = new_left - adjusted.x;
-                                adjusted.x = new_left;
-                                adjusted.width -= delta;
+                        // Determine wrap side behavior
+                        let side = flt.wrap_side.as_str();
+                        let float_on_left = float_center_x < content_center_x;
+
+                        match side {
+                            "left" => {
+                                // Text only on left of float — narrow from right
+                                let new_right = ex.x;
+                                if new_right > adjusted.x && new_right < adjusted.right() {
+                                    adjusted.width = new_right - adjusted.x;
+                                }
                             }
-                        } else {
-                            // Float on right — narrow from right
-                            let new_right = ex.x;
-                            if new_right > adjusted.x && new_right < adjusted.right() {
-                                adjusted.width = new_right - adjusted.x;
+                            "right" => {
+                                // Text only on right of float — narrow from left
+                                let new_left = ex.right();
+                                if new_left > adjusted.x && new_left < adjusted.right() {
+                                    let delta = new_left - adjusted.x;
+                                    adjusted.x = new_left;
+                                    adjusted.width -= delta;
+                                }
+                            }
+                            "largest" => {
+                                // Text on whichever side has more space
+                                let left_space = ex.x - adjusted.x;
+                                let right_space = adjusted.right() - ex.right();
+                                if left_space >= right_space {
+                                    let new_right = ex.x;
+                                    if new_right > adjusted.x {
+                                        adjusted.width = new_right - adjusted.x;
+                                    }
+                                } else {
+                                    let new_left = ex.right();
+                                    if new_left < adjusted.right() {
+                                        let delta = new_left - adjusted.x;
+                                        adjusted.x = new_left;
+                                        adjusted.width -= delta;
+                                    }
+                                }
+                            }
+                            _ => {
+                                // "bothSides" (default) — narrow from the side where the float is
+                                if float_on_left {
+                                    let new_left = ex.right();
+                                    if new_left > adjusted.x && new_left < adjusted.right() {
+                                        let delta = new_left - adjusted.x;
+                                        adjusted.x = new_left;
+                                        adjusted.width -= delta;
+                                    }
+                                } else {
+                                    let new_right = ex.x;
+                                    if new_right > adjusted.x && new_right < adjusted.right() {
+                                        adjusted.width = new_right - adjusted.x;
+                                    }
+                                }
                             }
                         }
                     }
                 }
                 _ => {}
             }
+        }
+
+        // Interval merging: if the remaining text width between two floats
+        // is smaller than the merge threshold, treat them as one exclusion
+        // (text can't fit in the gap, so skip it entirely).
+        const MERGE_THRESHOLD_PT: f64 = 4.5; // ~3.175mm for tight, ~1/8 inch
+
+        // Check if the adjusted rect has become too narrow due to multiple floats
+        // narrowing from both sides — if so, the gap is too small for text
+        if adjusted.width < MERGE_THRESHOLD_PT {
+            // Content can't fit — push it below the tallest float
+            let max_float_bottom = page_floats
+                .iter()
+                .filter(|f| {
+                    matches!(
+                        f.wrap_type,
+                        WrapType::Square | WrapType::Tight | WrapType::Through
+                    )
+                })
+                .filter(|f| f.exclusion_rect().bottom() > current_y)
+                .map(|f| f.exclusion_rect().bottom())
+                .fold(current_y, f64::max);
+
+            // Return original width but shifted below all floats
+            return Rect::new(
+                content_rect.x,
+                max_float_bottom,
+                content_rect.width,
+                content_rect.height - (max_float_bottom - content_rect.y),
+            );
         }
 
         // Ensure minimum width

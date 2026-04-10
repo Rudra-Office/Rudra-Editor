@@ -87,6 +87,8 @@
         <button class="app-menu-entry" data-fmt="pdf" role="menuitem" tabindex="-1" title="Export document as PDF"><span class="msi">download</span> Export as PDF</button>
         <button class="app-menu-entry" data-fmt="txt" role="menuitem" tabindex="-1" title="Export document as plain text"><span class="msi">download</span> Export as Plain Text</button>
         <button class="app-menu-entry" data-fmt="md" role="menuitem" tabindex="-1" title="Export document as Markdown"><span class="msi">download</span> Export as Markdown</button>
+        <button class="app-menu-entry" id="btnExportPNG" role="menuitem" tabindex="-1" title="Export current page as PNG image"><span class="msi">image</span> Export Page as PNG</button>
+        <button class="app-menu-entry" id="btnExportPDFA" role="menuitem" tabindex="-1" title="Export as PDF/A-1b (archival format)"><span class="msi">archive</span> Export as PDF/A</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="btnPrint" role="menuitem" tabindex="-1" title="Print this document (Ctrl+P)"><span class="msi">print</span> Print <span class="shortcut">Ctrl+P</span></button>
         <div class="app-menu-sep" role="separator"></div>
@@ -116,6 +118,7 @@
         <button class="app-menu-entry" id="menuZoomOut" role="menuitem" tabindex="-1" title="Zoom out (Ctrl+-)"><span class="msi">zoom_out</span> Zoom Out <span class="shortcut">Ctrl+-</span></button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuPrintPreview" role="menuitem" tabindex="-1" title="Preview document layout before printing"><span class="msi">preview</span> Print Preview</button>
+        <button class="app-menu-entry" id="menuMultipage" role="menuitem" tabindex="-1" title="Toggle multipage view (show pages side by side)"><span class="msi">view_comfy</span> Multipage View</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuReadOnly" role="menuitem" tabindex="-1" title="Toggle read-only viewer mode (disables all editing)"><span class="msi">lock</span> Read-Only Mode</button>
         <div class="app-menu-sep" role="separator"></div>
@@ -157,6 +160,9 @@
         <button class="app-menu-entry" id="miCrossRef" role="menuitem" tabindex="-1" title="Insert a cross-reference to a heading or bookmark"><span class="msi">link</span> Cross Reference...</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="miDrawing" role="menuitem" tabindex="-1" title="Insert a drawing"><span class="msi">draw</span> Drawing...</button>
+        <button class="app-menu-entry" id="miFreehandPen" role="menuitem" tabindex="-1" title="Draw freehand with pen tool"><span class="msi">edit</span> Pen</button>
+        <button class="app-menu-entry" id="miFreehandHighlighter" role="menuitem" tabindex="-1" title="Draw freehand with highlighter"><span class="msi">highlight</span> Highlighter</button>
+        <button class="app-menu-entry" id="miFreehandEraser" role="menuitem" tabindex="-1" title="Erase freehand drawings"><span class="msi">ink_eraser</span> Eraser</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="miSpecialChars" role="menuitem" tabindex="-1" title="Insert a special character or symbol"><span class="msi">special_character</span> Special Characters...</button>
       </div>
@@ -177,6 +183,8 @@
         <button class="app-menu-entry" id="menuPageSetup" role="menuitem" tabindex="-1" title="Configure page size, margins, and orientation"><span class="msi">description</span> Page Setup...</button>
         <button class="app-menu-entry" id="menuColumns" role="menuitem" tabindex="-1" title="Configure text column layout"><span class="msi">view_column</span> Columns...</button>
         <button class="app-menu-entry" id="menuHyphenation" role="menuitem" tabindex="-1" title="Toggle automatic hyphenation of long words at line breaks"><span class="msi">format_textdirection_l_to_r</span> Hyphenation (auto)</button>
+        <button class="app-menu-entry" id="menuDropCap" role="menuitem" tabindex="-1" title="Toggle drop cap on the current paragraph"><span class="msi">format_size</span> Drop Cap</button>
+        <button class="app-menu-entry" id="menuLineNumbers" role="menuitem" tabindex="-1" title="Toggle line numbers in the left margin"><span class="msi">format_list_numbered</span> Line Numbers</button>
         <div class="app-menu-sep" role="separator"></div>
         <button class="app-menu-entry" id="menuAutoFormat" role="menuitem" tabindex="-1" title="Auto-detect and apply formatting (headings, body text)"><span class="msi">auto_fix_high</span> Auto Format Document</button>
         <div class="app-menu-sep" role="separator"></div>
@@ -205,6 +213,7 @@
       <button class="app-menu-btn" role="menuitem" aria-haspopup="true" aria-expanded="false" tabindex="-1">Tools</button>
       <div class="app-menu-dropdown" id="toolsMenu" role="menu" aria-label="Tools">
         <button class="app-menu-entry" id="btnSpellCheck" role="menuitem" tabindex="-1" title="Toggle spell check on the document"><span class="msi">spellcheck</span> Spell check</button>
+        <button class="app-menu-entry" id="menuGrammarCheck" role="menuitem" tabindex="-1" title="Check grammar using AI assistant"><span class="msi">edit_note</span> Grammar Check (AI)</button>
         <button class="app-menu-entry" id="menuCustomDict" role="menuitem" tabindex="-1" title="Manage custom dictionary words"><span class="msi">book</span> Custom Dictionary...</button>
         <button class="app-menu-entry" id="menuAutoCorrect" role="menuitem" tabindex="-1" title="Configure auto-correct rules"><span class="msi">auto_fix_high</span> Auto-Correct...</button>
         <div class="app-menu-sep" role="separator"></div>

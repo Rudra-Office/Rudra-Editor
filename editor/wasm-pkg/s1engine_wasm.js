@@ -3617,6 +3617,39 @@ export class WasmDocument {
         }
     }
     /**
+     * Insert a SEQ (sequence) field for auto-numbering.
+     *
+     * Sequence fields maintain separate counters per `seq_name` (e.g., "Figure", "Table").
+     * Returns the field node ID.
+     * @param {string} para_id_str
+     * @param {string} seq_name
+     * @returns {string}
+     */
+    insert_seq_field(para_id_str, seq_name) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(seq_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_insert_seq_field(this.__wbg_ptr, ptr0, len0, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
      * Insert a shape (Drawing node) after a body-level node.
      *
      * Returns the Drawing node ID. The shape is rendered by the layout engine.
@@ -3752,6 +3785,40 @@ export class WasmDocument {
             const ptr1 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_insert_table_of_contents(this.__wbg_ptr, ptr0, len0, max_level, ptr1, len1);
+            var ptr3 = ret[0];
+            var len3 = ret[1];
+            if (ret[3]) {
+                ptr3 = 0; len3 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred4_0 = ptr3;
+            deferred4_1 = len3;
+            return getStringFromWasm0(ptr3, len3);
+        } finally {
+            wasm.__wbindgen_free(deferred4_0, deferred4_1, 1);
+        }
+    }
+    /**
+     * Generate a Table of Figures from all Caption-styled paragraphs.
+     *
+     * Inserts a new section after `after_node_str` containing a list of all
+     * captions found in the document (Figure 1: ..., Table 2: ..., etc.).
+     * Returns the TOF container node ID.
+     * @param {string} after_node_str
+     * @param {string} label_filter
+     * @returns {string}
+     */
+    insert_table_of_figures(after_node_str, label_filter) {
+        let deferred4_0;
+        let deferred4_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(label_filter, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_insert_table_of_figures(this.__wbg_ptr, ptr0, len0, ptr1, len1);
             var ptr3 = ret[0];
             var len3 = ret[1];
             if (ret[3]) {
@@ -5636,6 +5703,45 @@ export class WasmDocument {
         }
     }
     /**
+     * Convert selected paragraphs to a table.
+     *
+     * Takes consecutive paragraphs and converts each into a table row.
+     * Cells are split by `delimiter` ("tab", "comma", "semicolon", or "paragraph").
+     * If delimiter is "paragraph", each paragraph becomes a single-cell row.
+     *
+     * Returns the new table node ID.
+     * @param {string} first_para_str
+     * @param {string} last_para_str
+     * @param {string} delimiter
+     * @returns {string}
+     */
+    text_to_table(first_para_str, last_para_str, delimiter) {
+        let deferred5_0;
+        let deferred5_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ptr0 = passStringToWasm0(first_para_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len0 = WASM_VECTOR_LEN;
+            const ptr1 = passStringToWasm0(last_para_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len1 = WASM_VECTOR_LEN;
+            const ptr2 = passStringToWasm0(delimiter, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+            const len2 = WASM_VECTOR_LEN;
+            const ret = wasm.wasmdocument_text_to_table(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2);
+            var ptr4 = ret[0];
+            var len4 = ret[1];
+            if (ret[3]) {
+                ptr4 = 0; len4 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred5_0 = ptr4;
+            deferred5_1 = len4;
+            return getStringFromWasm0(ptr4, len4);
+        } finally {
+            wasm.__wbindgen_free(deferred5_0, deferred5_1, 1);
+        }
+    }
+    /**
      * Render the document as HTML with formatting, images, and hyperlinks.
      * @returns {string}
      */
@@ -5946,6 +6052,45 @@ export class WasmDocument {
         return v1;
     }
     /**
+     * Export the document as PDF/A-1b bytes (ISO 19005 archival format).
+     * @returns {Uint8Array}
+     */
+    to_pdf_a() {
+        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+        _assertNum(this.__wbg_ptr);
+        const ret = wasm.wasmdocument_to_pdf_a(this.__wbg_ptr);
+        if (ret[3]) {
+            throw takeFromExternrefTable0(ret[2]);
+        }
+        var v1 = getArrayU8FromWasm0(ret[0], ret[1]).slice();
+        wasm.__wbindgen_free(ret[0], ret[1] * 1, 1);
+        return v1;
+    }
+    /**
+     * Export the document as a PDF/A data URL.
+     * @returns {string}
+     */
+    to_pdf_a_data_url() {
+        let deferred2_0;
+        let deferred2_1;
+        try {
+            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+            _assertNum(this.__wbg_ptr);
+            const ret = wasm.wasmdocument_to_pdf_a_data_url(this.__wbg_ptr);
+            var ptr1 = ret[0];
+            var len1 = ret[1];
+            if (ret[3]) {
+                ptr1 = 0; len1 = 0;
+                throw takeFromExternrefTable0(ret[2]);
+            }
+            deferred2_0 = ptr1;
+            deferred2_1 = len1;
+            return getStringFromWasm0(ptr1, len1);
+        } finally {
+            wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
+        }
+    }
+    /**
      * Export the document as a PDF data URL.
      *
      * Returns a string like `data:application/pdf;base64,...` suitable
@@ -6047,6 +6192,24 @@ export class WasmDocument {
         } finally {
             wasm.__wbindgen_free(deferred2_0, deferred2_1, 1);
         }
+    }
+    /**
+     * Toggle a form checkbox's checked state.
+     *
+     * Returns the new checked state.
+     * @param {string} node_id_str
+     * @returns {boolean}
+     */
+    toggle_form_checkbox(node_id_str) {
+        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
+        _assertNum(this.__wbg_ptr);
+        const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
+        const len0 = WASM_VECTOR_LEN;
+        const ret = wasm.wasmdocument_toggle_form_checkbox(this.__wbg_ptr, ptr0, len0);
+        if (ret[2]) {
+            throw takeFromExternrefTable0(ret[1]);
+        }
+        return ret[0] !== 0;
     }
     /**
      * Get the number of tracked changes in the document.

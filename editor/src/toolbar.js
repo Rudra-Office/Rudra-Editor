@@ -197,6 +197,28 @@ function _updateToolbarStateImpl() {
       }
     }
   } catch (_) {}
+
+  // M15.5: Context-sensitive toolbar sections
+  // Show/hide tool groups based on what's selected
+  try {
+    const sel = window.getSelection();
+    const anchor = sel?.anchorNode;
+    const el = anchor?.nodeType === 1 ? anchor : anchor?.parentElement;
+
+    const inTable = !!el?.closest('table, td, th');
+    const inImage = !!el?.closest('img, [data-node-id] img');
+    const inShape = !!el?.closest('.editor-shape');
+
+    // Toggle context-sensitive toolbar sections
+    const tableTools = $('tableToolsGroup');
+    if (tableTools) tableTools.style.display = inTable ? '' : 'none';
+
+    const imageTools = $('imageToolsGroup');
+    if (imageTools) imageTools.style.display = inImage ? '' : 'none';
+
+    const shapeTools = $('shapeToolsGroup');
+    if (shapeTools) shapeTools.style.display = inShape ? '' : 'none';
+  } catch (_) {}
 }
 
 export function updateUndoRedo() {

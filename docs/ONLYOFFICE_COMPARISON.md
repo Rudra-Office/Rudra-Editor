@@ -9,15 +9,15 @@
 
 | Area | OnlyOffice | Rudra Office | Gap Severity |
 |------|-----------|--------------|-------------|
-| **Rendering Engine** | Custom Canvas + WASM FreeType | Canvas default + overlay, engine-computed widths | MEDIUM (was CRITICAL) |
-| **DOCX Fidelity** | 95%+ round-trip | ~80% (good core, missing advanced) | HIGH |
-| **Editing UX** | Mature, desktop-grade | Spell check, autocorrect, track changes display modes — closing gap | MEDIUM (was HIGH) |
+| **Rendering Engine** | Custom Canvas + WASM FreeType | Canvas default + overlay, engine widths, multipage view | LOW (was CRITICAL) |
+| **DOCX Fidelity** | 95%+ round-trip | ~85% (good core, shapes persisted, text-to-table, SEQ fields) | MEDIUM (was HIGH) |
+| **Editing UX** | Mature, desktop-grade | Spell check, autocorrect, grammar (AI), track changes, watermarks, drop caps | LOW (was HIGH) |
 | **Collaboration** | OT-based, battle-tested | CRDT-based (stronger foundation) | LOW |
-| **Format Coverage** | 40+ formats via C++ x2t | 6 formats (DOCX, ODT, PDF, TXT, MD, XLSX) | MEDIUM |
-| **Tables** | Full (draw, merge, formulas, styles) | Insert, merge, borders, auto-fit, header repeat, multi-page | MEDIUM (was HIGH) |
-| **Track Changes** | Full (accept/reject, compare, 4 display modes) | Full: engine + UI + 3 display modes + per-author colors + status bar toggle | LOW (was HIGH) |
-| **Spell Check** | Custom Hunspell WASM + red underlines + suggestions | Worker-based spell check + red underlines + context menu suggestions + custom dict | LOW (was CRITICAL) |
-| **Page Layout** | Pixel-perfect cross-platform | Good pagination, keep-with-next, widow/orphan, overflow clipping | MEDIUM (was HIGH) |
+| **Format Coverage** | 40+ formats via C++ x2t | 6 formats + image export (DOCX, ODT, PDF, TXT, MD, XLSX, PNG) | MEDIUM |
+| **Tables** | Full (draw, merge, formulas, styles) | Merge, auto-fit, header repeat, styles (8), formulas, sorting, text-to-table | LOW (was HIGH) |
+| **Track Changes** | Full (accept/reject, compare, 4 display modes) | Full: 3 display modes, per-author colors, move tracking, status bar toggle | LOW (was HIGH) |
+| **Spell Check** | Custom Hunspell WASM + red underlines + suggestions | Worker spell check, 9.6K dict, red underlines, suggestions, custom dict, grammar (AI) | LOW (was CRITICAL) |
+| **Page Layout** | Pixel-perfect cross-platform | Pagination, keep-with-next, widow/orphan, overflow clip, drop caps, line numbers | LOW (was HIGH) |
 
 ---
 

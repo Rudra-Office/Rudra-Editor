@@ -6,14 +6,45 @@
 import { state, $ } from './state.js';
 import { markDirty } from './file.js';
 
-// ─── Shape Type Definitions ─────────────────────────────────────
+// ─── Shape Type Definitions (M14.4: 30+ types) ──────────────────
 const SHAPE_TYPES = {
-  rectangle: { label: 'Rectangle', icon: 'rectangle', cursor: 'crosshair' },
-  oval:      { label: 'Oval',      icon: 'circle',    cursor: 'crosshair' },
-  line:      { label: 'Line',      icon: 'pen_size_1', cursor: 'crosshair' },
-  arrow:     { label: 'Arrow',     icon: 'arrow_right_alt', cursor: 'crosshair' },
-  textbox:   { label: 'Text Box',  icon: 'text_fields', cursor: 'crosshair' },
-  callout:   { label: 'Callout',   icon: 'chat_bubble', cursor: 'crosshair' },
+  // Basic shapes
+  rectangle:    { label: 'Rectangle',    icon: 'rectangle',       cursor: 'crosshair', category: 'basic' },
+  roundRect:    { label: 'Rounded Rect', icon: 'rounded_corner',  cursor: 'crosshair', category: 'basic' },
+  oval:         { label: 'Oval',         icon: 'circle',          cursor: 'crosshair', category: 'basic' },
+  triangle:     { label: 'Triangle',     icon: 'change_history',  cursor: 'crosshair', category: 'basic' },
+  diamond:      { label: 'Diamond',      icon: 'diamond',         cursor: 'crosshair', category: 'basic' },
+  pentagon:     { label: 'Pentagon',      icon: 'pentagon',        cursor: 'crosshair', category: 'basic' },
+  hexagon:      { label: 'Hexagon',      icon: 'hexagon',         cursor: 'crosshair', category: 'basic' },
+  octagon:      { label: 'Octagon',      icon: 'stop',            cursor: 'crosshair', category: 'basic' },
+  trapezoid:    { label: 'Trapezoid',    icon: 'signal_cellular_0_bar', cursor: 'crosshair', category: 'basic' },
+  parallelogram:{ label: 'Parallelogram',icon: 'filter_list',     cursor: 'crosshair', category: 'basic' },
+  cross:        { label: 'Cross',        icon: 'add',             cursor: 'crosshair', category: 'basic' },
+  heart:        { label: 'Heart',        icon: 'favorite',        cursor: 'crosshair', category: 'basic' },
+  // Lines & arrows
+  line:         { label: 'Line',         icon: 'pen_size_1',      cursor: 'crosshair', category: 'lines' },
+  arrow:        { label: 'Arrow',        icon: 'arrow_right_alt', cursor: 'crosshair', category: 'lines' },
+  doubleArrow:  { label: 'Double Arrow', icon: 'swap_horiz',      cursor: 'crosshair', category: 'lines' },
+  curvedArrow:  { label: 'Curved Arrow', icon: 'redo',            cursor: 'crosshair', category: 'lines' },
+  // Flowchart
+  flowProcess:  { label: 'Process',      icon: 'rectangle',       cursor: 'crosshair', category: 'flowchart' },
+  flowDecision: { label: 'Decision',     icon: 'diamond',         cursor: 'crosshair', category: 'flowchart' },
+  flowTerminator:{ label: 'Terminator',  icon: 'stadium',         cursor: 'crosshair', category: 'flowchart' },
+  flowDocument: { label: 'Document',     icon: 'description',     cursor: 'crosshair', category: 'flowchart' },
+  flowData:     { label: 'Data',         icon: 'filter_list',     cursor: 'crosshair', category: 'flowchart' },
+  flowPredefined:{ label: 'Predefined Process', icon: 'indeterminate_check_box', cursor: 'crosshair', category: 'flowchart' },
+  flowDatabase: { label: 'Database',     icon: 'storage',         cursor: 'crosshair', category: 'flowchart' },
+  // Callouts & text
+  textbox:      { label: 'Text Box',     icon: 'text_fields',     cursor: 'crosshair', category: 'text' },
+  callout:      { label: 'Callout',      icon: 'chat_bubble',     cursor: 'crosshair', category: 'text' },
+  calloutRect:  { label: 'Rect Callout', icon: 'chat',            cursor: 'crosshair', category: 'text' },
+  // Stars & banners
+  star4:        { label: '4-Point Star', icon: 'star_rate',       cursor: 'crosshair', category: 'stars' },
+  star5:        { label: '5-Point Star', icon: 'star',            cursor: 'crosshair', category: 'stars' },
+  star6:        { label: '6-Point Star', icon: 'star_outline',    cursor: 'crosshair', category: 'stars' },
+  ribbon:       { label: 'Ribbon',       icon: 'bookmark',        cursor: 'crosshair', category: 'stars' },
+  banner:       { label: 'Banner',       icon: 'flag',            cursor: 'crosshair', category: 'stars' },
+  explosion:    { label: 'Explosion',    icon: 'bolt',            cursor: 'crosshair', category: 'stars' },
 };
 
 // ─── State ──────────────────────────────────────────────────────
@@ -502,8 +533,8 @@ function createShapeElement(data, pageContent) {
   appendSVGInner(svg, data);
   wrapper.appendChild(svg);
 
-  // For textbox type, add editable foreignObject
-  if (data.type === 'textbox') {
+  // For textbox/callout types, add editable text area
+  if (data.type === 'textbox' || data.type === 'callout' || data.type === 'calloutRect') {
     const fo = document.createElement('div');
     fo.className = 'shape-textbox-edit';
     fo.contentEditable = 'true';
@@ -764,6 +795,133 @@ export function deleteSelectedShape() {
 
 export function hasSelectedShape() {
   return selectedShapeIds.size > 0;
+}
+
+// ─── Z-Order Controls (M14.4) ───────────────────────────────────
+
+export function bringToFront() {
+  for (const sid of selectedShapeIds) {
+    const data = shapes.get(sid);
+    if (data && data._el) {
+      nextZIndex++;
+      data.zIndex = nextZIndex;
+      data._el.style.zIndex = nextZIndex;
+    }
+  }
+}
+
+export function sendToBack() {
+  for (const sid of selectedShapeIds) {
+    const data = shapes.get(sid);
+    if (data && data._el) {
+      data.zIndex = 0;
+      data._el.style.zIndex = 0;
+    }
+  }
+}
+
+export function bringForward() {
+  for (const sid of selectedShapeIds) {
+    const data = shapes.get(sid);
+    if (data && data._el) {
+      data.zIndex = (data.zIndex || 0) + 1;
+      data._el.style.zIndex = data.zIndex;
+      if (data.zIndex > nextZIndex) nextZIndex = data.zIndex;
+    }
+  }
+}
+
+export function sendBackward() {
+  for (const sid of selectedShapeIds) {
+    const data = shapes.get(sid);
+    if (data && data._el) {
+      data.zIndex = Math.max(0, (data.zIndex || 0) - 1);
+      data._el.style.zIndex = data.zIndex;
+    }
+  }
+}
+
+// ─── Connector Lines (M14.4) ────────────────────────────────────
+
+const connectors = new Map(); // connectorId → { fromShapeId, toShapeId, el }
+let connectorIdCounter = 0;
+
+/**
+ * Create a connector line between two shapes.
+ * @param {string} fromShapeId - source shape ID
+ * @param {string} toShapeId - target shape ID
+ */
+export function createConnector(fromShapeId, toShapeId) {
+  const fromData = shapes.get(fromShapeId);
+  const toData = shapes.get(toShapeId);
+  if (!fromData || !toData || !fromData._el || !toData._el) return null;
+
+  const page = fromData._el.closest('.page-content');
+  if (!page) return null;
+
+  const id = 'conn_' + (connectorIdCounter++);
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.className = 'shape-connector';
+  svg.style.cssText = 'position:absolute;inset:0;width:100%;height:100%;pointer-events:none;z-index:0;overflow:visible;';
+
+  const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  line.setAttribute('stroke', '#666');
+  line.setAttribute('stroke-width', '1.5');
+  line.setAttribute('marker-end', 'url(#connector-arrow)');
+
+  // Arrow marker
+  const defs = document.createElementNS('http://www.w3.org/2000/svg', 'defs');
+  const marker = document.createElementNS('http://www.w3.org/2000/svg', 'marker');
+  marker.setAttribute('id', 'connector-arrow');
+  marker.setAttribute('markerWidth', '8');
+  marker.setAttribute('markerHeight', '6');
+  marker.setAttribute('refX', '8');
+  marker.setAttribute('refY', '3');
+  marker.setAttribute('orient', 'auto');
+  const path = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+  path.setAttribute('d', 'M0,0 L8,3 L0,6 Z');
+  path.setAttribute('fill', '#666');
+  marker.appendChild(path);
+  defs.appendChild(marker);
+  svg.appendChild(defs);
+  svg.appendChild(line);
+  page.appendChild(svg);
+
+  const connData = { fromShapeId, toShapeId, el: svg, line };
+  connectors.set(id, connData);
+  updateConnector(id);
+  return id;
+}
+
+function updateConnector(connId) {
+  const conn = connectors.get(connId);
+  if (!conn) return;
+  const fromData = shapes.get(conn.fromShapeId);
+  const toData = shapes.get(conn.toShapeId);
+  if (!fromData?._el || !toData?._el) return;
+
+  const fromRect = fromData._el.getBoundingClientRect();
+  const toRect = toData._el.getBoundingClientRect();
+  const page = fromData._el.closest('.page-content');
+  if (!page) return;
+  const pageRect = page.getBoundingClientRect();
+
+  const x1 = fromRect.left + fromRect.width / 2 - pageRect.left;
+  const y1 = fromRect.top + fromRect.height / 2 - pageRect.top;
+  const x2 = toRect.left + toRect.width / 2 - pageRect.left;
+  const y2 = toRect.top + toRect.height / 2 - pageRect.top;
+
+  conn.line.setAttribute('x1', x1);
+  conn.line.setAttribute('y1', y1);
+  conn.line.setAttribute('x2', x2);
+  conn.line.setAttribute('y2', y2);
+}
+
+/** Update all connectors (call after shape move/resize). */
+export function updateAllConnectors() {
+  for (const id of connectors.keys()) {
+    updateConnector(id);
+  }
 }
 
 // ─── Properties Panel ───────────────────────────────────────────

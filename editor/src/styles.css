@@ -2659,6 +2659,14 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
   color: inherit !important;
 }
 
+/* Move tracking: double underline/strikethrough */
+.tc-display-markup ins[data-tc-type="moveTo"] {
+  text-decoration: underline double;
+}
+.tc-display-markup del[data-tc-type="moveFrom"] {
+  text-decoration: line-through double;
+}
+
 /* Per-reviewer colored marks (applied via JS) */
 .tc-display-markup ins[data-reviewer-color] {
   text-decoration-color: attr(data-reviewer-color);
@@ -2689,6 +2697,131 @@ mark.find-highlight.replace-preview{background:#f28b82;color:#fff;text-decoratio
 }
 .watermark-overlay.horizontal {
   transform: translate(-50%, -50%) rotate(0deg);
+}
+
+/* ── Form Controls ───────────────────────────────── */
+
+.form-checkbox {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.form-checkbox input[type="checkbox"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--accent);
+}
+.form-dropdown {
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  min-width: 120px;
+  background: white;
+}
+.form-text {
+  padding: 4px 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  min-width: 120px;
+  background: white;
+  outline: none;
+}
+.form-text:focus, .form-dropdown:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px rgba(26,115,232,0.15);
+}
+
+/* ── Side-by-Side Comparison View ─────────────────── */
+
+.side-by-side-container {
+  display: flex;
+  gap: 2px;
+  height: 100%;
+  overflow: hidden;
+}
+.side-by-side-pane {
+  flex: 1;
+  overflow-y: auto;
+  border-right: 1px solid var(--border-light);
+  position: relative;
+}
+.side-by-side-pane:last-child {
+  border-right: none;
+}
+.side-by-side-header {
+  position: sticky;
+  top: 0;
+  background: var(--bg-toolbar);
+  padding: 6px 12px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-light);
+  z-index: 10;
+}
+
+/* ── Multipage View ──────────────────────────────── */
+
+#pageContainer.multipage-view {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: flex-start;
+  gap: 20px;
+  padding: 20px;
+}
+#pageContainer.multipage-view .doc-page,
+#pageContainer.multipage-view .s1-canvas-page-wrapper {
+  flex-shrink: 0;
+}
+
+/* ── Line Numbering ──────────────────────────────── */
+
+.line-numbers-enabled .page-content {
+  counter-reset: line-number;
+}
+.line-numbers-enabled .page-content p,
+.line-numbers-enabled .page-content h1,
+.line-numbers-enabled .page-content h2,
+.line-numbers-enabled .page-content h3,
+.line-numbers-enabled .page-content h4 {
+  counter-increment: line-number;
+  position: relative;
+}
+.line-numbers-enabled .page-content p::before,
+.line-numbers-enabled .page-content h1::before,
+.line-numbers-enabled .page-content h2::before,
+.line-numbers-enabled .page-content h3::before,
+.line-numbers-enabled .page-content h4::before {
+  content: counter(line-number);
+  position: absolute;
+  left: -40px;
+  width: 32px;
+  text-align: right;
+  font-size: 9px;
+  color: #999;
+  font-family: 'Courier New', monospace;
+  line-height: inherit;
+  pointer-events: none;
+  user-select: none;
+}
+
+/* ── Drop Cap ────────────────────────────────────── */
+
+.drop-cap::first-letter {
+  float: left;
+  font-size: 3.2em;
+  line-height: 0.8;
+  padding-right: 6px;
+  padding-top: 4px;
+  font-weight: bold;
+  color: inherit;
 }
 
 /* ── Footnote Popup Preview ───────────────────────── */
@@ -5998,6 +6131,20 @@ body.drawing-mode .page-content *{
 .editor-shape.shape-selected{
   outline:2px solid var(--accent, #1a73e8);
   outline-offset:2px;
+}
+
+/* M14.4: Shape effects */
+.editor-shape.effect-shadow {
+  filter: drop-shadow(3px 3px 6px rgba(0,0,0,0.3));
+}
+.editor-shape.effect-shadow-heavy {
+  filter: drop-shadow(5px 5px 10px rgba(0,0,0,0.5));
+}
+.editor-shape.effect-glow {
+  filter: drop-shadow(0 0 8px rgba(66,133,244,0.6));
+}
+.editor-shape.effect-reflection {
+  -webkit-box-reflect: below 2px linear-gradient(transparent, rgba(0,0,0,0.15));
 }
 
 /* ─── Shape Resize Handles ─── */

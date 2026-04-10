@@ -18,6 +18,23 @@ let _scenePageCache = new Map(); // Map<pageIndex, { revision, scene }>
 let _caretState = null; // { pageIndex, x, y, width, height }
 let _selectionRects = []; // Array of { pageIndex, x, y, width, height }
 
+// M13.1.3: Glyph/text measurement LRU cache
+// Key: "fontSpec|text" → { width }
+const GLYPH_CACHE_MAX = 5000;
+const _glyphCache = new Map();
+function cachedMeasure(ctx, text, fontSpec) {
+  const key = fontSpec + '|' + text;
+  if (_glyphCache.has(key)) return _glyphCache.get(key);
+  const width = ctx.measureText(text).width;
+  if (_glyphCache.size >= GLYPH_CACHE_MAX) {
+    // Evict oldest entry (first inserted)
+    const firstKey = _glyphCache.keys().next().value;
+    _glyphCache.delete(firstKey);
+  }
+  _glyphCache.set(key, width);
+  return width;
+}
+
 // -------------------------------------------------------
 // Public API
 // -------------------------------------------------------
@@ -48,6 +65,33 @@ export function setCanvasMode(enabled) {
  * Initialize the canvas renderer. Restores the saved preference.
  * @param {HTMLElement} _container - The scroll container (not used yet, reserved)
  */
+// M13.1.6: Hidden DOM layer for screen reader accessibility
+let _a11yContainer = null;
+
+function ensureA11yLayer() {
+  if (_a11yContainer) return;
+  _a11yContainer = document.createElement('div');
+  _a11yContainer.id = 's1-a11y-layer';
+  _a11yContainer.setAttribute('role', 'document');
+  _a11yContainer.setAttribute('aria-label', 'Document content (screen reader)');
+  // Visually hidden but accessible to screen readers
+  _a11yContainer.style.cssText = 'position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);border:0;';
+  document.body.appendChild(_a11yContainer);
+}
+
+export function updateA11yLayer() {
+  if (!_canvasMode) return;
+  ensureA11yLayer();
+  const { doc } = state;
+  if (!doc) return;
+  try {
+    const text = doc.to_plain_text();
+    // Split into paragraphs for semantic structure
+    const paras = text.split('\n').filter(p => p.trim());
+    _a11yContainer.innerHTML = paras.map(p => `<p>${p.replace(/</g, '&lt;')}</p>`).join('');
+  } catch (_) {}
+}
+
 export function initCanvasRenderer(_container) {
   try {
     const stored = localStorage.getItem('s1-canvas-mode');
@@ -87,6 +131,8 @@ export function renderDocumentCanvas(container) {
 
   _lastLayoutJson = layoutJson;
   renderLayoutToCanvas(layoutJson, container);
+  // M13.1.6: Update accessibility layer after canvas render
+  updateA11yLayer();
   return true;
 }
 

@@ -505,6 +505,8 @@ pub enum AttributeKey {
     ImagePositionType,
     /// Text wrap style: "none", "square", "tight", "topAndBottom", "behind", "inFront"
     ImageWrapType,
+    /// Wrap side: "bothSides", "left", "right", "largest" (default: "bothSides")
+    ImageWrapSide,
     /// Horizontal offset in EMUs from anchor (for floating images)
     ImageHorizontalOffset,
     /// Vertical offset in EMUs from anchor (for floating images)

@@ -365,12 +365,14 @@ pub enum WrapType {
 }
 
 /// A floating image's exclusion zone for text wrapping.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct FloatingImageRect {
     /// Absolute bounds on the page (in points).
     pub bounds: Rect,
     /// Wrap type.
     pub wrap_type: WrapType,
+    /// Wrap side: "bothSides", "left", "right", "largest"
+    pub wrap_side: String,
     /// Distance from text — top, in points.
     pub dist_top: f64,
     /// Distance from text — bottom, in points.

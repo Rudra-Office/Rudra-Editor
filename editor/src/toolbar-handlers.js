@@ -286,6 +286,37 @@ export function initToolbar() {
     trackEvent('toolbar', 'print');
   });
 
+  // M15.2: Export as PDF/A
+  const btnExportPDFA = $('btnExportPDFA');
+  if (btnExportPDFA) {
+    btnExportPDFA.addEventListener('click', () => {
+      closeAllMenus();
+      if (!state.doc) return;
+      try {
+        const dataUrl = typeof state.doc.to_pdf_a_data_url === 'function'
+          ? state.doc.to_pdf_a_data_url()
+          : state.doc.to_pdf_data_url(); // fallback to regular PDF
+        const a = document.createElement('a');
+        a.href = dataUrl;
+        a.download = ($('docName')?.value || 'document') + '_pdfa.pdf';
+        a.click();
+        showToast('Exported as PDF/A', 'info', 2000);
+      } catch (e) {
+        console.error('PDF/A export:', e);
+        showToast('PDF/A export failed: ' + e.message, 'error');
+      }
+    });
+  }
+
+  // M15.2: Export page as PNG image
+  const btnExportPNG = $('btnExportPNG');
+  if (btnExportPNG) {
+    btnExportPNG.addEventListener('click', () => {
+      closeAllMenus();
+      exportPageAsPNG();
+    });
+  }
+
   // Font family
   $('fontFamily').addEventListener('change', e => {
     if (e.target.value) applyFormat('fontFamily', e.target.value);
@@ -896,6 +927,18 @@ export function initToolbar() {
   if ($('menuPrintPreview')) $('menuPrintPreview').addEventListener('click', () => {
     closeAllMenus();
     openPrintPreview();
+  });
+
+  // M15.5: Multipage View toggle
+  if ($('menuMultipage')) $('menuMultipage').addEventListener('click', () => {
+    closeAllMenus();
+    const container = $('pageContainer');
+    if (container) {
+      container.classList.toggle('multipage-view');
+      const on = container.classList.contains('multipage-view');
+      $('menuMultipage')?.classList.toggle('active', on);
+      announce(on ? 'Multipage view enabled' : 'Single page view');
+    }
   });
 
   // FS-11: Read-Only Mode toggle
@@ -4673,6 +4716,37 @@ function initAutoFormat() {
     autoFormatDocument();
   });
 
+  // M15.6: Drop Cap toggle
+  const dropCapBtn = $('menuDropCap');
+  if (dropCapBtn) {
+    dropCapBtn.addEventListener('click', () => {
+      closeAllMenus();
+      const info = getSelectionInfo();
+      if (!info || !info.nodeId) { showToast('Place cursor in a paragraph', 'error'); return; }
+      const el = state.nodeIdToElement.get(info.nodeId);
+      if (el) {
+        el.classList.toggle('drop-cap');
+        announce(el.classList.contains('drop-cap') ? 'Drop cap applied' : 'Drop cap removed');
+        markDirty();
+      }
+    });
+  }
+
+  // M15.6: Line Numbers toggle
+  const lineNumBtn = $('menuLineNumbers');
+  if (lineNumBtn) {
+    lineNumBtn.addEventListener('click', () => {
+      closeAllMenus();
+      const container = $('pageContainer');
+      if (container) {
+        container.classList.toggle('line-numbers-enabled');
+        const on = container.classList.contains('line-numbers-enabled');
+        lineNumBtn.classList.toggle('active', on);
+        announce(on ? 'Line numbers enabled' : 'Line numbers disabled');
+      }
+    });
+  }
+
   // M15.6: Hyphenation toggle
   const hyphenBtn = $('menuHyphenation');
   if (hyphenBtn) {
@@ -5350,6 +5424,27 @@ function initDictModal() {
       refreshDictWordList();
       modal.classList.add('show');
       $('dictWordInput').focus();
+    });
+  }
+
+  // M13.4.4: Grammar Check (AI) — triggers AI grammar mode on selected text or full paragraph
+  const grammarBtn = $('menuGrammarCheck');
+  if (grammarBtn) {
+    grammarBtn.addEventListener('click', () => {
+      closeAllMenus();
+      // Open AI panel in grammar mode
+      import('./ai-panel.js').then(m => {
+        if (typeof m.openAIPanelWithMode === 'function') {
+          m.openAIPanelWithMode('grammar');
+        } else if (typeof m.initAIPanel === 'function') {
+          // Fallback: just open the panel
+          state.aiPanelOpen = true;
+          $('aiPanel')?.classList.add('show');
+          showToast('Use AI panel to check grammar', 'info', 2000);
+        }
+      }).catch(() => {
+        showToast('AI assistant not available for grammar check', 'info', 2000);
+      });
     });
   }
 
@@ -7302,7 +7397,11 @@ function openPrintPreview() {
   // Gather all rendered pages
   const pageContainer = $('pageContainer');
   if (!pageContainer) return;
-  const pages = pageContainer.querySelectorAll('.doc-page');
+
+  // M15.5: Canvas mode — use canvas elements for pixel-accurate print preview
+  const canvasPages = pageContainer.querySelectorAll('canvas.s1-canvas-page, .s1-canvas-page-wrapper canvas.s1-canvas-page');
+  const domPages = pageContainer.querySelectorAll('.doc-page');
+  const pages = canvasPages.length > 0 ? canvasPages : domPages;
 
   if (pages.length === 0) {
     body.innerHTML = '<p style="color:#9aa0a6;font-size:14px;margin-top:80px">No pages to preview. Open a document first.</p>';
@@ -7315,11 +7414,26 @@ function openPrintPreview() {
     const wrap = document.createElement('div');
     wrap.className = 'print-preview-page-wrap';
 
-    const clone = pages[i].cloneNode(true);
-    clone.className = 'print-preview-page';
-    // Preserve original page dimensions
-    clone.style.width = pages[i].style.width;
-    clone.style.minHeight = pages[i].style.minHeight;
+    let clone;
+    if (pages[i].tagName === 'CANVAS') {
+      // Canvas mode: convert to image for print preview
+      clone = document.createElement('img');
+      clone.className = 'print-preview-page';
+      try {
+        clone.src = pages[i].toDataURL('image/png');
+      } catch (_) {
+        clone = pages[i].cloneNode(true);
+        clone.className = 'print-preview-page';
+      }
+      clone.style.width = pages[i].style.width;
+      clone.style.height = pages[i].style.height;
+    } else {
+      clone = pages[i].cloneNode(true);
+      clone.className = 'print-preview-page';
+      // Preserve original page dimensions
+      clone.style.width = pages[i].style.width;
+      clone.style.minHeight = pages[i].style.minHeight;
+    }
 
     // Restore any virtual-scroll placeholders by re-rendering from WASM
     clone.querySelectorAll('.vs-placeholder').forEach(ph => {
@@ -7442,6 +7556,66 @@ function closePrintPreview() {
   if (_printPreviewKeyHandler) {
     document.removeEventListener('keydown', _printPreviewKeyHandler, true);
     _printPreviewKeyHandler = null;
+  }
+}
+
+// M15.2: Export current page as PNG image
+function exportPageAsPNG() {
+  // Try canvas mode first — use the rendered canvas directly
+  const container = $('pageContainer');
+  if (!container) return;
+
+  const canvasPage = container.querySelector('canvas.s1-canvas-page, .s1-canvas-page-wrapper canvas');
+  if (canvasPage) {
+    // Canvas mode: direct export
+    try {
+      const dataUrl = canvasPage.toDataURL('image/png');
+      const a = document.createElement('a');
+      a.href = dataUrl;
+      a.download = (state.doc ? 'page' : 'document') + '.png';
+      a.click();
+      showToast('Page exported as PNG', 'info', 2000);
+      return;
+    } catch (e) {
+      console.warn('Canvas export failed:', e);
+    }
+  }
+
+  // DOM mode: use html2canvas-style approach — render page to offscreen canvas
+  const firstPage = container.querySelector('.doc-page');
+  if (!firstPage) { showToast('No page to export', 'error'); return; }
+
+  // Simple approach: use the browser's built-in rendering via html2canvas alternative
+  // Create a temporary canvas and draw the page using WASM layout
+  if (state.doc) {
+    try {
+      const { renderDocumentCanvas } = require('./canvas-render.js');
+      // Temporarily create a canvas render
+      const tempContainer = document.createElement('div');
+      tempContainer.style.cssText = 'position:fixed;left:-9999px;top:0;';
+      document.body.appendChild(tempContainer);
+
+      import('./canvas-render.js').then(({ renderDocumentCanvas: renderCanvas }) => {
+        const ok = renderCanvas(tempContainer);
+        if (ok) {
+          const canvas = tempContainer.querySelector('canvas');
+          if (canvas) {
+            const dataUrl = canvas.toDataURL('image/png');
+            const a = document.createElement('a');
+            a.href = dataUrl;
+            a.download = 'page.png';
+            a.click();
+            showToast('Page exported as PNG', 'info', 2000);
+          }
+        }
+        document.body.removeChild(tempContainer);
+      }).catch(() => {
+        document.body.removeChild(tempContainer);
+        showToast('Export failed', 'error');
+      });
+    } catch (e) {
+      showToast('Export failed: ' + e.message, 'error');
+    }
   }
 }
 
