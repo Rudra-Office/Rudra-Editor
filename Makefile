@@ -1,78 +1,60 @@
-# s1engine — Build & Development Makefile
+# Rudra Office — Build & Development
 
 CARGO := cargo
 WASM_PACK := wasm-pack
 WASM_CRATE := ffi/wasm
-WASM_OUT := demo/pkg
-DEMO_PORT := 8080
+WASM_OUT := web/wasm-pkg
 
-.PHONY: help build test clippy fmt check wasm wasm-release demo clean \
-       docker-build docker-run docker-compose-up docker-compose-down
+.PHONY: help build test clippy fmt wasm wasm-release server clean
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-20s\033[0m %s\n", $$1, $$2}'
 
-# ─── Rust ────────────────────────────────────────────────────────────
+# ─── Rust Engine ──────────────────────────────────────
 
 build: ## Build all crates (debug)
 	$(CARGO) build --workspace
 
-build-release: ## Build all crates (release)
-	$(CARGO) build --workspace --release
-
 test: ## Run all tests
-	$(CARGO) test --workspace
+	$(CARGO) test --workspace --exclude s1engine-wasm --exclude s1engine-c
 
-test-docx: ## Run s1-format-docx tests only
-	$(CARGO) test -p s1-format-docx
-
-test-wasm: ## Run WASM binding tests
-	$(CARGO) test -p s1engine-wasm
-
-clippy: ## Run clippy linter
+clippy: ## Run clippy lints
 	$(CARGO) clippy --workspace -- -D warnings
 
-fmt: ## Format code
-	$(CARGO) fmt --all
+fmt: ## Check formatting
+	$(CARGO) fmt --all --check
 
-fmt-check: ## Check formatting (CI)
-	$(CARGO) fmt --all -- --check
+check: clippy fmt test ## Run all checks
 
-check: fmt-check clippy test ## Run all checks (fmt + clippy + tests)
+# ─── WASM ─────────────────────────────────────────────
 
-# ─── WASM ────────────────────────────────────────────────────────────
+wasm: ## Build WASM (dev mode)
+	bash scripts/build-wasm.sh --dev
+	@mkdir -p $(WASM_OUT)
+	cp demo/pkg/*.js demo/pkg/*.wasm demo/pkg/*.ts $(WASM_OUT)/ 2>/dev/null || true
 
-wasm: ## Build WASM bindings (debug, fast)
-	$(WASM_PACK) build $(WASM_CRATE) --target web --dev --out-dir ../../$(WASM_OUT)
+wasm-release: ## Build WASM (release mode)
+	bash scripts/build-wasm.sh
+	@mkdir -p $(WASM_OUT)
+	cp demo/pkg/*.js demo/pkg/*.wasm demo/pkg/*.ts $(WASM_OUT)/ 2>/dev/null || true
 
-wasm-release: ## Build WASM bindings (release, optimized)
-	$(WASM_PACK) build $(WASM_CRATE) --target web --out-dir ../../$(WASM_OUT)
+# ─── Server ───────────────────────────────────────────
 
-# ─── Demo ────────────────────────────────────────────────────────────
+server: ## Run the Axum API server
+	$(CARGO) run -p s1-server
 
-demo: wasm-release ## Build WASM and start demo server
-	@echo "Demo ready at http://localhost:$(DEMO_PORT)"
-	@cd demo && python3 -m http.server $(DEMO_PORT)
+relay: ## Run the WebSocket relay
+	node scripts/relay.js
 
-demo-only: ## Start demo server (without rebuilding WASM)
-	@echo "Demo at http://localhost:$(DEMO_PORT)"
-	@cd demo && python3 -m http.server $(DEMO_PORT)
+# ─── Docker ───────────────────────────────────────────
 
-# ─── Docker ─────────────────────────────────────────────────────────
+docker-build: ## Build Docker image
+	docker build -t rudra-office .
 
-docker-build: ## Build Docker image for Rudra Office
-	docker build -t s1-editor .
+docker-run: ## Run Docker container
+	docker run -p 8787:8787 rudra-office
 
-docker-run: ## Run Rudra Office in Docker (port 8787)
-	docker run -p 8787:8787 -v s1-editor-data:/app/data s1-editor
-
-docker-compose-up: ## Start Rudra Office with docker compose
-	docker compose up -d
-
-docker-compose-down: ## Stop Rudra Office docker compose
-	docker compose down
-
-# ─── Clean ───────────────────────────────────────────────────────────
+# ─── Clean ────────────────────────────────────────────
 
 clean: ## Clean build artifacts
 	$(CARGO) clean

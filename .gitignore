@@ -16,38 +16,26 @@ Thumbs.db
 *.orig
 *.bak
 
-# Editor build artifacts
-editor/dist/
-editor/node_modules/
-editor/.vite/
-editor/pkg/
+# WASM build output (generated)
+ffi/wasm/pkg/
+web/wasm-pkg/
 
-# WASM build output (generated, not source)
-editor/wasm-pkg/
-demo/pkg/
+# Node
+node_modules/
+dist/
+.vite/
 
-# Font files (downloaded, not source — regenerate via scripts/download-fonts.sh)
-# Uncomment the next line to track fonts in git (adds ~100MB):
-# !editor/public/fonts/
-editor/public/fonts/*.ttf
-
-# Fidelity artifacts (generated, not source)
-tests/fidelity/artifacts/
-
-# Relay server data (persisted room state)
+# Relay server data
 data/
 
-# Environment files (never commit secrets)
+# Environment files
 .env
 .env.local
 .env.production
 
 # Test results
-editor/test-results/
+test-results/
 
-# External projects
-docview/
-superdoc/
-
-# Vendor reference repos (OnlyOffice study)
-vendor/
+# Font files (downloaded)
+web/fonts/*.ttf
+web/fonts/*.woff2
