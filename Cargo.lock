@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "ab_glyph_rasterizer"
+version = "0.1.10"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "366ffbaa4442f4684d91e2cd7c5ea7c4ed8add41959a31447066e279e432b618"
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2067,6 +2073,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "s1-format-html"
+version = "1.0.1"
+dependencies = [
+ "pretty_assertions",
+ "s1-model",
+ "thiserror",
+]
+
+[[package]]
 name = "s1-format-md"
 version = "1.0.1"
 dependencies = [
@@ -2100,6 +2115,15 @@ dependencies = [
  "s1-model",
  "s1-text",
  "subsetter",
+ "thiserror",
+]
+
+[[package]]
+name = "s1-format-rtf"
+version = "1.0.1"
+dependencies = [
+ "pretty_assertions",
+ "s1-model",
  "thiserror",
 ]
 
@@ -2172,6 +2196,8 @@ dependencies = [
  "reqwest",
  "s1-convert",
  "s1-format-docx",
+ "s1-format-pdf",
+ "s1-text",
  "s1engine",
  "serde",
  "serde_json",
@@ -2190,6 +2216,7 @@ dependencies = [
 name = "s1-text"
 version = "1.0.1"
 dependencies = [
+ "ab_glyph_rasterizer",
  "fontdb",
  "hyphenation",
  "pretty_assertions",
@@ -2211,9 +2238,11 @@ dependencies = [
  "s1-convert",
  "s1-crdt",
  "s1-format-docx",
+ "s1-format-html",
  "s1-format-md",
  "s1-format-odt",
  "s1-format-pdf",
+ "s1-format-rtf",
  "s1-format-txt",
  "s1-layout",
  "s1-model",
@@ -2246,6 +2275,7 @@ dependencies = [
  "serde_json",
  "wasm-bindgen",
  "wasm-bindgen-test",
+ "zip",
 ]
 
 [[package]]

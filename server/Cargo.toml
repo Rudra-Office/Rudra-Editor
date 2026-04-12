@@ -16,6 +16,8 @@ path = "src/main.rs"
 s1engine = { workspace = true, features = ["pdf", "layout"] }
 s1-convert = { workspace = true }
 s1-format-docx = { workspace = true, features = ["crypto"] }
+s1-text = { workspace = true }
+s1-format-pdf = { workspace = true }
 
 # Web framework
 axum = { version = "0.8", features = ["multipart", "ws"] }

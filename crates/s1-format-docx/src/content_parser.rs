@@ -2703,8 +2703,8 @@ fn parse_field_instruction(instr: &str) -> FieldType {
         "DATE" | "CREATEDATE" | "SAVEDATE" | "PRINTDATE" => FieldType::Date,
         "TIME" | "EDITTIME" => FieldType::Time,
         // Document info
-        "FILENAME" | "TITLE" | "SUBJECT" | "KEYWORDS" | "COMMENTS" | "TEMPLATE"
-        | "DOCPROPERTY" | "INFO" | "NUMCHARS" | "NUMWORDS" => FieldType::FileName,
+        "FILENAME" | "TITLE" | "SUBJECT" | "KEYWORDS" | "COMMENTS" | "TEMPLATE" | "DOCPROPERTY"
+        | "INFO" | "NUMCHARS" | "NUMWORDS" => FieldType::FileName,
         "AUTHOR" | "LASTSAVEDBY" | "USERNAME" => FieldType::Author,
         // Table of contents / figures
         "TOC" | "TOA" => FieldType::TableOfContents,
@@ -2715,17 +2715,18 @@ fn parse_field_instruction(instr: &str) -> FieldType {
         // Sequential numbering
         "SEQ" | "AUTONUM" | "AUTONUMLGL" | "AUTONUMOUT" | "LISTNUM" => FieldType::Sequence,
         // Mail merge
-        "MERGEFIELD" | "MERGEREC" | "MERGESEQ" | "NEXT" | "NEXTIF" | "SKIPIF"
-        | "DATABASE" | "ASK" | "FILLIN" | "SET" => FieldType::MergeField,
+        "MERGEFIELD" | "MERGEREC" | "MERGESEQ" | "NEXT" | "NEXTIF" | "SKIPIF" | "DATABASE"
+        | "ASK" | "FILLIN" | "SET" => FieldType::MergeField,
         // Conditional
         "IF" | "COMPARE" => FieldType::Conditional,
         // Style references
         "STYLEREF" => FieldType::StyleRef,
         // Other recognized fields (map to Custom with preserved instruction)
-        "SYMBOL" | "ADVANCE" | "EQ" | "EMBED" | "LINK" | "INCLUDEPICTURE"
-        | "INCLUDETEXT" | "QUOTE" | "GOTOBUTTON" | "MACROBUTTON" | "PRINT"
-        | "RD" | "TA" | "TC" | "XE" | "INDEX" | "CITATION" | "BIBLIOGRAPHY"
-        | "BARCODE" | "DISPLAYBARCODE" | "MERGEBARCODE" => FieldType::Custom,
+        "SYMBOL" | "ADVANCE" | "EQ" | "EMBED" | "LINK" | "INCLUDEPICTURE" | "INCLUDETEXT"
+        | "QUOTE" | "GOTOBUTTON" | "MACROBUTTON" | "PRINT" | "RD" | "TA" | "TC" | "XE"
+        | "INDEX" | "CITATION" | "BIBLIOGRAPHY" | "BARCODE" | "DISPLAYBARCODE" | "MERGEBARCODE" => {
+            FieldType::Custom
+        }
         _ => FieldType::Custom,
     }
 }

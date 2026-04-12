@@ -1816,8 +1816,14 @@ mod tests {
         };
         let html = layout_to_html(&doc);
         assert!(html.contains("<ins"), "missing <ins> tag: {html}");
-        assert!(html.contains("data-tc-type=\"insert\""), "missing tc-type insert: {html}");
-        assert!(html.contains("data-tc-node-id="), "missing tc-node-id: {html}");
+        assert!(
+            html.contains("data-tc-type=\"insert\""),
+            "missing tc-type insert: {html}"
+        );
+        assert!(
+            html.contains("data-tc-node-id="),
+            "missing tc-node-id: {html}"
+        );
         assert!(html.contains("Author A"), "missing author: {html}");
         assert!(html.contains("inserted text"), "missing text: {html}");
     }
@@ -1899,8 +1905,14 @@ mod tests {
         };
         let html = layout_to_html(&doc);
         assert!(html.contains("<del"), "missing <del> tag: {html}");
-        assert!(html.contains("data-tc-type=\"delete\""), "missing tc-type delete: {html}");
-        assert!(html.contains("data-tc-node-id="), "missing tc-node-id: {html}");
+        assert!(
+            html.contains("data-tc-type=\"delete\""),
+            "missing tc-type delete: {html}"
+        );
+        assert!(
+            html.contains("data-tc-node-id="),
+            "missing tc-node-id: {html}"
+        );
         assert!(html.contains("Author B"), "missing author: {html}");
         assert!(html.contains("deleted text"), "missing text: {html}");
     }

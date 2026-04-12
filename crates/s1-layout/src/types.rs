@@ -401,6 +401,94 @@ impl FloatingImageRect {
     }
 }
 
+/// A wrap polygon for tight/through text wrapping around shapes.
+///
+/// Defined by a series of 2D points forming a closed outline.
+/// Used by the text wrapping engine to determine text exclusion zones
+/// with more precision than simple rectangular bounds.
+#[derive(Debug, Clone)]
+pub struct WrapPolygon {
+    /// Points defining the polygon outline, in document coordinates (points).
+    pub points: Vec<(f64, f64)>,
+}
+
+impl WrapPolygon {
+    /// Create a rectangular wrap polygon from bounds.
+    pub fn from_rect(rect: &Rect) -> Self {
+        Self {
+            points: vec![
+                (rect.x, rect.y),
+                (rect.x + rect.width, rect.y),
+                (rect.x + rect.width, rect.y + rect.height),
+                (rect.x, rect.y + rect.height),
+            ],
+        }
+    }
+
+    /// Scanline intersection: find the X range where a horizontal line at `y`
+    /// intersects this polygon.
+    ///
+    /// Returns `Some((min_x, max_x))` if the line intersects, `None` otherwise.
+    pub fn intersect_at_y(&self, y: f64) -> Option<(f64, f64)> {
+        if self.points.len() < 3 {
+            return None;
+        }
+
+        let mut min_x = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut hit = false;
+
+        let n = self.points.len();
+        for i in 0..n {
+            let (x0, y0) = self.points[i];
+            let (x1, y1) = self.points[(i + 1) % n];
+
+            // Check if edge crosses the horizontal scanline at y
+            if (y0 <= y && y1 > y) || (y1 <= y && y0 > y) {
+                // Linear interpolation to find X at this Y
+                let t = (y - y0) / (y1 - y0);
+                let x = x0 + t * (x1 - x0);
+                min_x = min_x.min(x);
+                max_x = max_x.max(x);
+                hit = true;
+            }
+        }
+
+        // Also check vertices that lie on the scanline
+        for &(px, py) in &self.points {
+            if (py - y).abs() < 0.01 {
+                min_x = min_x.min(px);
+                max_x = max_x.max(px);
+                hit = true;
+            }
+        }
+
+        if hit {
+            Some((min_x, max_x))
+        } else {
+            None
+        }
+    }
+
+    /// Get the bounding box of this polygon.
+    pub fn bounds(&self) -> Rect {
+        if self.points.is_empty() {
+            return Rect::new(0.0, 0.0, 0.0, 0.0);
+        }
+        let mut min_x = f64::MAX;
+        let mut min_y = f64::MAX;
+        let mut max_x = f64::MIN;
+        let mut max_y = f64::MIN;
+        for &(x, y) in &self.points {
+            min_x = min_x.min(x);
+            min_y = min_y.min(y);
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+        Rect::new(min_x, min_y, max_x - min_x, max_y - min_y)
+    }
+}
+
 /// A rectangle with position and size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Rect {

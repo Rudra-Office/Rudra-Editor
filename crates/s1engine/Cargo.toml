@@ -25,6 +25,8 @@ s1-convert = { workspace = true, optional = true }
 s1-crdt = { workspace = true, optional = true }
 s1-layout = { workspace = true, optional = true }
 s1-text = { workspace = true, optional = true }
+s1-format-html = { workspace = true, optional = true }
+s1-format-rtf = { workspace = true, optional = true }
 
 [features]
 default = ["docx", "odt", "txt", "md"]
@@ -33,6 +35,8 @@ odt = ["dep:s1-format-odt"]
 pdf = ["dep:s1-format-pdf", "layout"]
 txt = ["dep:s1-format-txt"]
 md = ["dep:s1-format-md"]
+html = ["dep:s1-format-html"]
+rtf = ["dep:s1-format-rtf"]
 convert = ["dep:s1-convert"]
 crdt = ["dep:s1-crdt"]
 layout = ["dep:s1-layout", "dep:s1-text"]
@@ -42,6 +46,8 @@ doc-legacy = ["convert"]
 pretty_assertions = { workspace = true }
 zip = { workspace = true }
 criterion = { workspace = true }
+s1-format-html = { workspace = true }
+s1-format-rtf = { workspace = true }
 
 [[bench]]
 name = "engine_bench"

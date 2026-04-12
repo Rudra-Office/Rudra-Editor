@@ -16,6 +16,8 @@ members = [
     "crates/s1-crdt",
     "crates/s1-format-md",
     "crates/s1-format-xlsx",
+    "crates/s1-format-html",
+    "crates/s1-format-rtf",
     "crates/s1engine",
     "ffi/wasm",
     "ffi/c",
@@ -46,6 +48,8 @@ s1-layout = { version = "1.0.1", path = "crates/s1-layout" }
 s1-text = { version = "1.0.1", path = "crates/s1-text" }
 s1-crdt = { version = "1.0.1", path = "crates/s1-crdt" }
 s1-format-xlsx = { version = "1.0.1", path = "crates/s1-format-xlsx" }
+s1-format-html = { version = "1.0.1", path = "crates/s1-format-html" }
+s1-format-rtf = { version = "1.0.1", path = "crates/s1-format-rtf" }
 s1engine = { version = "1.0.1", path = "crates/s1engine" }
 
 # External dependencies

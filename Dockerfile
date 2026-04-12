@@ -42,6 +42,9 @@ COPY crates/s1-text/Cargo.toml crates/s1-text/Cargo.toml
 COPY crates/s1-crdt/Cargo.toml crates/s1-crdt/Cargo.toml
 COPY crates/s1engine/Cargo.toml crates/s1engine/Cargo.toml
 COPY ffi/wasm/Cargo.toml ffi/wasm/Cargo.toml
+COPY crates/s1-format-xlsx/Cargo.toml crates/s1-format-xlsx/Cargo.toml
+COPY crates/s1-format-html/Cargo.toml crates/s1-format-html/Cargo.toml
+COPY crates/s1-format-rtf/Cargo.toml crates/s1-format-rtf/Cargo.toml
 COPY ffi/c/Cargo.toml ffi/c/Cargo.toml
 COPY server/Cargo.toml server/Cargo.toml
 
@@ -54,6 +57,9 @@ RUN for dir in \
       crates/s1-format-pdf/src \
       crates/s1-format-txt/src \
       crates/s1-format-md/src \
+      crates/s1-format-xlsx/src \
+      crates/s1-format-html/src \
+      crates/s1-format-rtf/src \
       crates/s1-convert/src \
       crates/s1-layout/src \
       crates/s1-text/src \

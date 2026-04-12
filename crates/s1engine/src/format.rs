@@ -31,6 +31,8 @@ pub enum Format {
     Ods,
     /// OpenDocument Presentation (`.odp`) — recognized but not yet editable
     Odp,
+    /// EPUB e-book format (`.epub`) — export only
+    Epub,
 }
 
 impl Format {
@@ -51,6 +53,7 @@ impl Format {
             "pptx" => Ok(Self::Pptx),
             "ods" => Ok(Self::Ods),
             "odp" => Ok(Self::Odp),
+            "epub" => Ok(Self::Epub),
             _ => Err(Error::UnsupportedFormat(format!(
                 "Unknown file extension: .{ext}"
             ))),
@@ -98,6 +101,7 @@ impl Format {
             Self::Pptx => "pptx",
             Self::Ods => "ods",
             Self::Odp => "odp",
+            Self::Epub => "epub",
         }
     }
 
@@ -117,6 +121,7 @@ impl Format {
             }
             Self::Ods => "application/vnd.oasis.opendocument.spreadsheet",
             Self::Odp => "application/vnd.oasis.opendocument.presentation",
+            Self::Epub => "application/epub+zip",
         }
     }
 
@@ -124,7 +129,7 @@ impl Format {
     pub fn is_document(&self) -> bool {
         matches!(
             self,
-            Self::Docx | Self::Odt | Self::Doc | Self::Txt | Self::Md
+            Self::Docx | Self::Odt | Self::Doc | Self::Txt | Self::Md | Self::Epub
         )
     }
 

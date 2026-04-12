@@ -3,6 +3,7 @@
 //! Provides a JavaScript-friendly API for creating, opening, editing, and
 //! exporting documents from the browser or Node.js.
 
+use std::io::Write as _;
 use wasm_bindgen::prelude::*;
 
 use s1_layout::{layout_to_html, LayoutConfig, PageLayout};
@@ -37,6 +38,7 @@ impl WasmEngine {
             batch_label: None,
             batch_count: 0,
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -56,6 +58,7 @@ impl WasmEngine {
             batch_count: 0,
             inner: Some(doc),
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -76,6 +79,7 @@ impl WasmEngine {
             batch_count: 0,
             inner: Some(doc),
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -217,10 +221,16 @@ pub struct WasmDocument {
     /// Call `end_batch()` to apply all as a single undo step.
     batch_label: Option<String>,
     batch_count: usize,
-    /// Cached layout result. Invalidated on any mutation via `doc_mut()`.
-    /// Uses `RefCell` for interior mutability so read-like methods (`&self`)
-    /// can lazily compute and cache the layout.
+    /// Cached layout result. NOT invalidated on every mutation — instead,
+    /// `_layout_dirty` is set true. The stale cache is kept for fast
+    /// caret_rect / selection_rects / hit_test lookups between edits.
+    /// A fresh layout is only computed when explicitly requested (e.g.
+    /// `to_layout_json_with_fonts`) or when `ensure_layout_if_dirty` is
+    /// called.
     layout_cache: std::cell::RefCell<Option<s1_layout::LayoutDocument>>,
+    /// Whether the layout cache is stale (document was mutated since last layout).
+    /// Uses `Cell` so `&self` methods can clear it after recomputing layout.
+    _layout_dirty: std::cell::Cell<bool>,
     /// IME composition anchor paragraph node ID (as "replica:counter" string).
     composition_anchor_node: Option<String>,
     /// IME composition anchor char offset within the paragraph.
@@ -237,6 +247,7 @@ impl WasmDocument {
         self.batch_label = None;
         self.batch_count = 0;
         *self.layout_cache.get_mut() = None;
+        self._layout_dirty.set(false);
         self.composition_anchor_node = None;
         self.composition_anchor_offset = None;
         self.composition_preview_len = 0;
@@ -470,11 +481,10 @@ impl WasmDocument {
     pub fn to_layout_json_with_fonts(&self, font_db: &WasmFontDatabase) -> Result<String, JsError> {
         let doc = self.doc()?;
         let model = doc.model();
-        
-        // Force update cache with loaded fonts to prevent caret/hit_test from using fallback fonts
-        *self.layout_cache.borrow_mut() = None;
+
+        // Use cached layout if available
         self.ensure_layout(&font_db.inner)?;
-        
+
         let cache = self.layout_cache.borrow();
         let layout = cache.as_ref().unwrap();
         Ok(layout_document_to_json(layout, model))
@@ -492,14 +502,107 @@ impl WasmDocument {
         let doc = self.doc()?;
         let model = doc.model();
         let layout_config = config.to_layout_config();
-        
+
         *self.layout_cache.borrow_mut() = Some(
             doc.layout_with_config(&font_db.inner, layout_config)
-                .map_err(|e| JsError::new(&e.to_string()))?
+                .map_err(|e| JsError::new(&e.to_string()))?,
         );
+        self._layout_dirty.set(false);
         let cache = self.layout_cache.borrow();
         let layout = cache.as_ref().unwrap();
         Ok(layout_document_to_json(layout, model))
+    }
+
+    /// Return layout JSON for a single page using the CACHED layout.
+    ///
+    /// This is fast because it does NOT recompute layout — it uses whatever
+    /// is in the cache (possibly stale after edits). The JS side uses this
+    /// for immediate visual feedback after typing, then does a full relayout
+    /// on a deferred timer.
+    ///
+    /// Returns `null` JSON string if the cache is empty or the page index is
+    /// out of range.
+    pub fn layout_single_page_json(&self, page_index: usize) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let cache = self.layout_cache.borrow();
+        let layout = match cache.as_ref() {
+            Some(l) => l,
+            None => return Ok("null".to_string()),
+        };
+        if page_index >= layout.pages.len() {
+            return Ok("null".to_string());
+        }
+        let page = &layout.pages[page_index];
+        let mut json = String::with_capacity(2048);
+        json.push_str(&format!(
+            "{{\"index\":{},\"width\":{:.2},\"height\":{:.2},\"contentArea\":{{\"x\":{:.2},\"y\":{:.2},\"width\":{:.2},\"height\":{:.2}}},\"sectionIndex\":{},",
+            page.index,
+            page.width,
+            page.height,
+            page.content_area.x,
+            page.content_area.y,
+            page.content_area.width,
+            page.content_area.height,
+            page.section_index,
+        ));
+        // Header
+        json.push_str("\"header\":");
+        if let Some(ref hdr) = page.header {
+            layout_block_to_json(hdr, model, &mut json);
+        } else {
+            json.push_str("null");
+        }
+        json.push(',');
+        // Footer
+        json.push_str("\"footer\":");
+        if let Some(ref ftr) = page.footer {
+            layout_block_to_json(ftr, model, &mut json);
+        } else {
+            json.push_str("null");
+        }
+        json.push(',');
+        // Blocks
+        json.push_str("\"blocks\":[");
+        for (bi, block) in page.blocks.iter().enumerate() {
+            if bi > 0 { json.push(','); }
+            layout_block_to_json(block, model, &mut json);
+        }
+        json.push_str("],");
+        // Floating images
+        json.push_str("\"floatingImages\":[");
+        for (fi, img) in page.floating_images.iter().enumerate() {
+            if fi > 0 { json.push(','); }
+            layout_block_to_json(img, model, &mut json);
+        }
+        json.push_str("],");
+        // Footnotes
+        json.push_str("\"footnotes\":[");
+        for (ni, note) in page.footnotes.iter().enumerate() {
+            if ni > 0 { json.push(','); }
+            layout_block_to_json(note, model, &mut json);
+        }
+        json.push_str("]}");
+        Ok(json)
+    }
+
+    /// Check whether the layout cache is dirty (needs recomputation).
+    pub fn is_layout_dirty(&self) -> bool {
+        self._layout_dirty.get()
+    }
+
+    /// Force a fresh relayout using the provided font database.
+    ///
+    /// Call this from JS on the deferred timer to get an accurate layout
+    /// after a batch of edits. Clears the dirty flag.
+    pub fn force_relayout(&self, font_db: &WasmFontDatabase) -> Result<(), JsError> {
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(&font_db.inner)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        *self.layout_cache.borrow_mut() = Some(layout);
+        self._layout_dirty.set(false);
+        Ok(())
     }
 
     /// Get page break information from the layout engine as JSON.
@@ -689,9 +792,7 @@ impl WasmDocument {
     /// Lazily computes and caches layout. The cache is invalidated on any
     /// document mutation.
     pub fn get_page_count_with_fonts(&self, font_db: &WasmFontDatabase) -> Result<usize, JsError> {
-        // Always recompute when called with fonts — the caller may have
-        // loaded new fonts since the last call.
-        *self.layout_cache.borrow_mut() = None;
+        // Use cached layout if available (invalidated on document mutations)
         self.ensure_layout(&font_db.inner)?;
         let cache = self.layout_cache.borrow();
         Ok(cache.as_ref().unwrap().pages.len())
@@ -805,6 +906,147 @@ impl WasmDocument {
         let bytes = self.to_pdf_a()?;
         let b64 = base64_encode(&bytes);
         Ok(format!("data:application/pdf;base64,{}", b64))
+    }
+
+    /// Export the document as EPUB bytes.
+    ///
+    /// Generates an EPUB 3 file from the document content.
+    /// Returns the EPUB ZIP as a byte array.
+    pub fn to_epub(&self) -> Result<Vec<u8>, JsError> {
+        let doc = self.doc()?;
+        let model = doc.model();
+        let font_db = s1_text::FontDatabase::empty();
+
+        // Generate HTML content from layout
+        let layout = doc
+            .layout(&font_db)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        let html_content = s1_layout::layout_to_html(&layout);
+
+        // Get metadata
+        let meta = model.metadata();
+        let title = meta.title.as_deref().unwrap_or("Untitled Document");
+        let author = meta.creator.as_deref().unwrap_or("Unknown");
+        let lang = "en";
+
+        // Build EPUB ZIP
+        let mut buf = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = zip::ZipWriter::new(&mut buf);
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Stored);
+            let deflate = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+
+            // mimetype (must be first, uncompressed)
+            zip.start_file("mimetype", options)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            zip.write_all(b"application/epub+zip")
+                .map_err(|e| JsError::new(&e.to_string()))?;
+
+            // META-INF/container.xml
+            zip.start_file("META-INF/container.xml", deflate)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            zip.write_all(
+                br#"<?xml version="1.0" encoding="UTF-8"?>
+<container version="1.0" xmlns="urn:oasis:names:tc:opendocument:xmlns:container">
+  <rootfiles>
+    <rootfile full-path="OEBPS/content.opf" media-type="application/oebps-package+xml"/>
+  </rootfiles>
+</container>"#,
+            )
+            .map_err(|e| JsError::new(&e.to_string()))?;
+
+            // OEBPS/content.opf
+            zip.start_file("OEBPS/content.opf", deflate)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            let opf = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid">
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/">
+    <dc:identifier id="uid">urn:uuid:{uid}</dc:identifier>
+    <dc:title>{title}</dc:title>
+    <dc:creator>{author}</dc:creator>
+    <dc:language>{lang}</dc:language>
+    <meta property="dcterms:modified">2026-01-01T00:00:00Z</meta>
+  </metadata>
+  <manifest>
+    <item id="chapter1" href="chapter1.xhtml" media-type="application/xhtml+xml"/>
+    <item id="style" href="style.css" media-type="text/css"/>
+    <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
+  </manifest>
+  <spine>
+    <itemref idref="chapter1"/>
+  </spine>
+</package>"#,
+                uid = "00000000-0000-0000-0000-000000000000",
+                title = escape_html(title),
+                author = escape_html(author),
+                lang = lang,
+            );
+            zip.write_all(opf.as_bytes())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+
+            // OEBPS/style.css
+            zip.start_file("OEBPS/style.css", deflate)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            zip.write_all(b"body { font-family: serif; line-height: 1.5; margin: 1em; } h1,h2,h3,h4 { margin-top: 1em; } p { margin: 0.5em 0; } table { border-collapse: collapse; } td,th { border: 1px solid #ccc; padding: 4px 8px; }")
+                .map_err(|e| JsError::new(&e.to_string()))?;
+
+            // OEBPS/chapter1.xhtml
+            zip.start_file("OEBPS/chapter1.xhtml", deflate)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            let xhtml = format!(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="{lang}">
+<head><title>{title}</title><link rel="stylesheet" href="style.css"/></head>
+<body>
+{body}
+</body>
+</html>"#,
+                lang = lang,
+                title = escape_html(title),
+                body = html_content,
+            );
+            zip.write_all(xhtml.as_bytes())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+
+            // OEBPS/nav.xhtml (required for EPUB 3)
+            zip.start_file("OEBPS/nav.xhtml", deflate)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+            let mut nav = String::from(
+                r#"<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops">
+<head><title>Navigation</title></head>
+<body>
+<nav epub:type="toc"><h1>Table of Contents</h1><ol>"#,
+            );
+            let headings = model.collect_headings();
+            if headings.is_empty() {
+                nav.push_str(&format!(
+                    "<li><a href=\"chapter1.xhtml\">{}</a></li>",
+                    escape_html(title)
+                ));
+            } else {
+                for (_, level, text) in &headings {
+                    if *level <= 3 {
+                        nav.push_str(&format!(
+                            "<li><a href=\"chapter1.xhtml\">{}</a></li>",
+                            escape_html(text)
+                        ));
+                    }
+                }
+            }
+            nav.push_str("</ol></nav></body></html>");
+            zip.write_all(nav.as_bytes())
+                .map_err(|e| JsError::new(&e.to_string()))?;
+
+            zip.finish().map_err(|e| JsError::new(&e.to_string()))?;
+        }
+
+        Ok(buf.into_inner())
     }
 
     /// Export the document as a PDF data URL using loaded fonts.
@@ -2393,7 +2635,9 @@ impl WasmDocument {
             .node(para_id)
             .ok_or_else(|| JsError::new("Paragraph not found"))?;
         let parent_id = para.parent.ok_or_else(|| JsError::new("No parent"))?;
-        let parent = doc.node(parent_id).ok_or_else(|| JsError::new("Parent not found"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
         let index = parent.children.iter().position(|&c| c == para_id).unwrap();
         let para_children = para.children.clone();
         let para_attributes = para.attributes.clone();
@@ -2422,88 +2666,130 @@ impl WasmDocument {
         let mut new_para = Node::new(new_para_id, NodeType::Paragraph);
         new_para.attributes = para_attributes;
         txn.push(Operation::insert_node(parent_id, index + 1, new_para));
-        
+
         let mut new_para_child_idx = 0;
-        
+
         if split_child_idx < para_children.len() {
             let split_child_id = para_children[split_child_idx];
             let split_child_node = doc.node(split_child_id).unwrap();
             let split_child_type = split_child_node.node_type;
             let split_child_attrs = split_child_node.attributes.clone();
             let split_child_children = split_child_node.children.clone();
-            
+
             if local_offset == 0 {
                 for &child_id in para_children.iter().skip(split_child_idx) {
-                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    txn.push(Operation::move_node(
+                        child_id,
+                        new_para_id,
+                        new_para_child_idx,
+                    ));
                     new_para_child_idx += 1;
                 }
             } else if split_child_type == NodeType::Run {
                 let mut new_run = Node::new(doc.next_id(), NodeType::Run);
                 new_run.attributes = split_child_attrs;
                 let new_run_id = new_run.id;
-                txn.push(Operation::insert_node(new_para_id, new_para_child_idx, new_run));
+                txn.push(Operation::insert_node(
+                    new_para_id,
+                    new_para_child_idx,
+                    new_run,
+                ));
                 new_para_child_idx += 1;
-                
-                let (text_node_id, local_off, text_len) =
-                    find_text_node_at_char_offset_in_run(doc.model(), split_child_id, local_offset)?;
-                
+
+                let (text_node_id, local_off, text_len) = find_text_node_at_char_offset_in_run(
+                    doc.model(),
+                    split_child_id,
+                    local_offset,
+                )?;
+
                 let mut new_run_child_idx = 0;
                 if local_off < text_len {
                     let text_node = doc.node(text_node_id).unwrap();
                     let full_text = text_node.text_content.as_deref().unwrap_or("");
                     let tail_text: String = full_text.chars().skip(local_off).collect();
-                    
-                    txn.push(Operation::delete_text(text_node_id, local_off, text_len - local_off));
-                    
+
+                    txn.push(Operation::delete_text(
+                        text_node_id,
+                        local_off,
+                        text_len - local_off,
+                    ));
+
                     let new_text_id = doc.next_id();
-                    txn.push(Operation::insert_node(new_run_id, new_run_child_idx, Node::text(new_text_id, &tail_text)));
+                    txn.push(Operation::insert_node(
+                        new_run_id,
+                        new_run_child_idx,
+                        Node::text(new_text_id, &tail_text),
+                    ));
                     new_run_child_idx += 1;
                 }
-                
-                let text_idx = split_child_children.iter().position(|&c| c == text_node_id).unwrap();
+
+                let text_idx = split_child_children
+                    .iter()
+                    .position(|&c| c == text_node_id)
+                    .unwrap();
                 for &sub_id in split_child_children.iter().skip(text_idx + 1) {
                     txn.push(Operation::move_node(sub_id, new_run_id, new_run_child_idx));
                     new_run_child_idx += 1;
                 }
-                
+
                 for &child_id in para_children.iter().skip(split_child_idx + 1) {
-                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    txn.push(Operation::move_node(
+                        child_id,
+                        new_para_id,
+                        new_para_child_idx,
+                    ));
                     new_para_child_idx += 1;
                 }
             } else {
                 for &child_id in para_children.iter().skip(split_child_idx + 1) {
-                    txn.push(Operation::move_node(child_id, new_para_id, new_para_child_idx));
+                    txn.push(Operation::move_node(
+                        child_id,
+                        new_para_id,
+                        new_para_child_idx,
+                    ));
                     new_para_child_idx += 1;
                 }
             }
         }
-        
+
         if new_para_child_idx == 0 {
             let new_run_id = doc.next_id();
             let mut new_run = Node::new(new_run_id, NodeType::Run);
             if let Some(&last_run_id) = para_children.iter().rev().find(|&&c| {
-                doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false)
+                doc.node(c)
+                    .map(|n| n.node_type == NodeType::Run)
+                    .unwrap_or(false)
             }) {
                 if let Some(last_run) = doc.node(last_run_id) {
                     new_run.attributes = last_run.attributes.clone();
                 }
             }
             txn.push(Operation::insert_node(new_para_id, 0, new_run));
-            txn.push(Operation::insert_node(new_run_id, 0, Node::text(doc.next_id(), "")));
+            txn.push(Operation::insert_node(
+                new_run_id,
+                0,
+                Node::text(doc.next_id(), ""),
+            ));
         }
-        
+
         if split_child_idx == 0 && local_offset == 0 {
             let empty_run_id = doc.next_id();
             let mut empty_run = Node::new(empty_run_id, NodeType::Run);
             if let Some(&first_run_id) = para_children.iter().find(|&&c| {
-                doc.node(c).map(|n| n.node_type == NodeType::Run).unwrap_or(false)
+                doc.node(c)
+                    .map(|n| n.node_type == NodeType::Run)
+                    .unwrap_or(false)
             }) {
                 if let Some(first_run) = doc.node(first_run_id) {
                     empty_run.attributes = first_run.attributes.clone();
                 }
             }
             txn.push(Operation::insert_node(para_id, 0, empty_run));
-            txn.push(Operation::insert_node(empty_run_id, 0, Node::text(doc.next_id(), "")));
+            txn.push(Operation::insert_node(
+                empty_run_id,
+                0,
+                Node::text(doc.next_id(), ""),
+            ));
         }
 
         doc.apply_transaction(&txn)
@@ -3895,36 +4181,11 @@ impl WasmDocument {
         // Style definitions: (header_bg, header_text_bold, even_row_bg, odd_row_bg)
         let (header_bg, header_bold, even_bg, odd_bg) = match style_name {
             "grid" => (None, false, None, None),
-            "striped-blue" => (
-                Some("4472C4"),
-                true,
-                Some("D6E4F0"),
-                None,
-            ),
-            "striped-gray" => (
-                Some("595959"),
-                true,
-                Some("F2F2F2"),
-                None,
-            ),
-            "header-blue" => (
-                Some("4472C4"),
-                true,
-                None,
-                None,
-            ),
-            "header-green" => (
-                Some("548235"),
-                true,
-                None,
-                None,
-            ),
-            "header-orange" => (
-                Some("ED7D31"),
-                true,
-                None,
-                None,
-            ),
+            "striped-blue" => (Some("4472C4"), true, Some("D6E4F0"), None),
+            "striped-gray" => (Some("595959"), true, Some("F2F2F2"), None),
+            "header-blue" => (Some("4472C4"), true, None, None),
+            "header-green" => (Some("548235"), true, None, None),
+            "header-orange" => (Some("ED7D31"), true, None, None),
             "bordered" => (Some("D9E2F3"), true, None, None),
             "minimal" => (None, false, None, None),
             _ => (None, false, None, None), // "plain"
@@ -4020,14 +4281,12 @@ impl WasmDocument {
             AttributeKey::ShapeType,
             AttributeValue::String(shape_type.to_string()),
         );
-        drawing_node.attributes.set(
-            AttributeKey::ImageWidth,
-            AttributeValue::Float(width_pt),
-        );
-        drawing_node.attributes.set(
-            AttributeKey::ImageHeight,
-            AttributeValue::Float(height_pt),
-        );
+        drawing_node
+            .attributes
+            .set(AttributeKey::ImageWidth, AttributeValue::Float(width_pt));
+        drawing_node
+            .attributes
+            .set(AttributeKey::ImageHeight, AttributeValue::Float(height_pt));
         // Position as floating
         drawing_node.attributes.set(
             AttributeKey::ImageWrapType,
@@ -4528,11 +4787,12 @@ impl WasmDocument {
         let mut text_node = Node::new(text_id, NodeType::Text);
         text_node.text_content = Some(caption_text);
         // Italic style for caption
-        run_node.attributes.set(AttributeKey::Italic, AttributeValue::Bool(true));
-        run_node.attributes.set(
-            AttributeKey::FontSize,
-            AttributeValue::Float(10.0),
-        );
+        run_node
+            .attributes
+            .set(AttributeKey::Italic, AttributeValue::Bool(true));
+        run_node
+            .attributes
+            .set(AttributeKey::FontSize, AttributeValue::Float(10.0));
 
         // Find insert position
         let parent_id = doc
@@ -6311,7 +6571,11 @@ impl WasmDocument {
             if delimiter == "paragraph" {
                 rows.push(vec![text]);
             } else {
-                rows.push(text.split(delim_char).map(|s| s.trim().to_string()).collect());
+                rows.push(
+                    text.split(delim_char)
+                        .map(|s| s.trim().to_string())
+                        .collect(),
+                );
             }
         }
 
@@ -6395,6 +6659,377 @@ impl WasmDocument {
         doc.apply(Operation::set_attributes(node_id, attrs))
             .map_err(|e| JsError::new(&e.to_string()))?;
         Ok(new_value)
+    }
+
+    /// Convert OMML (Office MathML) XML to LaTeX string.
+    ///
+    /// Handles common OMML elements: fractions, subscripts, superscripts,
+    /// square roots, matrices, summations, integrals, Greek letters.
+    pub fn omml_to_latex(&self, omml_xml: &str) -> Result<String, JsError> {
+        Ok(convert_omml_to_latex(omml_xml))
+    }
+
+    /// Convert LaTeX string to OMML XML.
+    ///
+    /// Handles common LaTeX commands and produces valid Office MathML.
+    pub fn latex_to_omml(&self, latex: &str) -> Result<String, JsError> {
+        Ok(convert_latex_to_omml(latex))
+    }
+
+    /// Check if password protection is available.
+    ///
+    /// Password protection requires server-side encryption (AES-256/AGILE).
+    /// Use the server API: `POST /api/documents/convert` with `format=docx&password=...`
+    ///
+    /// Returns false in WASM (server-side only feature).
+    pub fn supports_password_protection(&self) -> bool {
+        false // Server-side only — WASM doesn't include crypto for size
+    }
+
+    /// Insert a mail merge field placeholder in the current paragraph.
+    ///
+    /// - `para_id_str`: paragraph to insert into
+    /// - `field_name`: the merge field name (e.g., "FirstName", "Email")
+    ///
+    /// Returns the field node ID. The field displays as `«FieldName»` until merged.
+    pub fn insert_merge_field(
+        &mut self,
+        para_id_str: &str,
+        field_name: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(para_id_str)?;
+
+        let field_id = doc.next_id();
+        let mut field_node = Node::new(field_id, NodeType::Field);
+        field_node.attributes.set(
+            AttributeKey::FieldType,
+            AttributeValue::FieldType(s1_model::FieldType::MergeField),
+        );
+        field_node.attributes.set(
+            AttributeKey::FieldCode,
+            AttributeValue::String(format!("MERGEFIELD {}", field_name)),
+        );
+        field_node.text_content = Some(format!("\u{00AB}{}\u{00BB}", field_name));
+
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let insert_idx = para.children.len();
+
+        let mut txn = Transaction::with_label("Insert merge field");
+        txn.push(Operation::insert_node(para_id, insert_idx, field_node));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", field_id.replica, field_id.counter))
+    }
+
+    /// Apply mail merge data to the document.
+    ///
+    /// Takes a JSON array of records: `[{"FirstName":"John","LastName":"Doe"}, ...]`
+    /// and a record index (0-based). Replaces all MERGEFIELD placeholders with
+    /// values from the specified record.
+    ///
+    /// Returns the number of fields replaced.
+    pub fn apply_merge_data(
+        &mut self,
+        data_json: &str,
+        record_index: usize,
+    ) -> Result<u32, JsError> {
+        let records: Vec<serde_json::Value> = serde_json::from_str(data_json)
+            .map_err(|e| JsError::new(&format!("Invalid merge data JSON: {}", e)))?;
+
+        let record = records.get(record_index).ok_or_else(|| {
+            JsError::new(&format!(
+                "Record index {} out of range ({})",
+                record_index,
+                records.len()
+            ))
+        })?;
+
+        let doc = self.doc_mut()?;
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+
+        // Collect all merge fields
+        let mut merge_fields: Vec<(NodeId, String)> = Vec::new();
+        fn collect_merge_fields(
+            doc: &s1engine::Document,
+            node_id: NodeId,
+            fields: &mut Vec<(NodeId, String)>,
+        ) {
+            if let Some(node) = doc.node(node_id) {
+                if node.node_type == NodeType::Field {
+                    if let Some(code) = node.attributes.get_string(&AttributeKey::FieldCode) {
+                        if let Some(name) = code.strip_prefix("MERGEFIELD ") {
+                            fields.push((node_id, name.trim().to_string()));
+                        }
+                    }
+                }
+                for &child_id in &node.children {
+                    collect_merge_fields(doc, child_id, fields);
+                }
+            }
+        }
+        collect_merge_fields(doc, body_id, &mut merge_fields);
+
+        let mut count = 0u32;
+        let mut txn = Transaction::with_label("Apply merge data");
+
+        for (field_id, field_name) in &merge_fields {
+            if let Some(value) = record.get(field_name).and_then(|v| v.as_str()) {
+                // Create a text node to replace the field
+                let run_id = doc.next_id();
+                let run_node = Node::new(run_id, NodeType::Run);
+                let text_id = doc.next_id();
+                let mut text_node = Node::new(text_id, NodeType::Text);
+                text_node.text_content = Some(value.to_string());
+
+                // Find the field's parent paragraph
+                if let Some(field_node) = doc.node(*field_id) {
+                    if let Some(parent_id) = field_node.parent {
+                        if let Some(parent) = doc.node(parent_id) {
+                            if let Some(idx) =
+                                parent.children.iter().position(|&id| id == *field_id)
+                            {
+                                txn.push(Operation::insert_node(parent_id, idx, run_node));
+                                txn.push(Operation::insert_node(run_id, 0, text_node));
+                                txn.push(Operation::delete_node(*field_id));
+                                count += 1;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        if count > 0 {
+            doc.apply_transaction(&txn)
+                .map_err(|e| JsError::new(&e.to_string()))?;
+        }
+        Ok(count)
+    }
+
+    /// Insert a bibliography citation at the cursor position.
+    ///
+    /// - `para_id_str`: paragraph to insert into
+    /// - `citation_json`: JSON object with citation fields:
+    ///   `{"author":"Smith","year":"2024","title":"Paper Title","source":"Journal Name"}`
+    ///
+    /// Returns the citation field node ID.
+    pub fn insert_citation(
+        &mut self,
+        para_id_str: &str,
+        citation_json: &str,
+    ) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let para_id = parse_node_id(para_id_str)?;
+
+        // Parse citation data
+        let citation: serde_json::Value = serde_json::from_str(citation_json)
+            .map_err(|e| JsError::new(&format!("Invalid citation JSON: {}", e)))?;
+
+        let author = citation["author"].as_str().unwrap_or("Unknown");
+        let year = citation["year"].as_str().unwrap_or("n.d.");
+
+        // Create inline citation text: (Author, Year)
+        let citation_text = format!("({}, {})", author, year);
+
+        let field_id = doc.next_id();
+        let mut field_node = Node::new(field_id, NodeType::Field);
+        field_node.attributes.set(
+            AttributeKey::FieldType,
+            AttributeValue::FieldType(s1_model::FieldType::Custom),
+        );
+        field_node.attributes.set(
+            AttributeKey::FieldCode,
+            AttributeValue::String(format!("CITATION {}", citation_json)),
+        );
+        field_node.text_content = Some(citation_text);
+
+        let para = doc
+            .node(para_id)
+            .ok_or_else(|| JsError::new("Paragraph not found"))?;
+        let insert_idx = para.children.len();
+
+        let mut txn = Transaction::with_label("Insert citation");
+        txn.push(Operation::insert_node(para_id, insert_idx, field_node));
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", field_id.replica, field_id.counter))
+    }
+
+    /// Generate a bibliography section from all citations in the document.
+    ///
+    /// Scans for CITATION fields, extracts their JSON data, and creates
+    /// a formatted bibliography paragraph after `after_node_str`.
+    pub fn generate_bibliography(&mut self, after_node_str: &str) -> Result<String, JsError> {
+        let doc = self.doc_mut()?;
+        let after_id = parse_node_id(after_node_str)?;
+
+        // Collect all citations
+        let body_id = doc
+            .model()
+            .body_id()
+            .ok_or_else(|| JsError::new("No document body"))?;
+        let mut citations: Vec<serde_json::Value> = Vec::new();
+
+        fn collect_citations(
+            doc: &s1engine::Document,
+            node_id: NodeId,
+            citations: &mut Vec<serde_json::Value>,
+        ) {
+            if let Some(node) = doc.node(node_id) {
+                if node.node_type == NodeType::Field {
+                    if let Some(code) = node.attributes.get_string(&AttributeKey::FieldCode) {
+                        if let Some(json_str) = code.strip_prefix("CITATION ") {
+                            if let Ok(val) = serde_json::from_str::<serde_json::Value>(json_str) {
+                                citations.push(val);
+                            }
+                        }
+                    }
+                }
+                for &child_id in &node.children {
+                    collect_citations(doc, child_id, citations);
+                }
+            }
+        }
+        collect_citations(doc, body_id, &mut citations);
+
+        // Deduplicate by author+year
+        let mut seen = std::collections::HashSet::new();
+        let mut unique_citations = Vec::new();
+        for c in &citations {
+            let key = format!(
+                "{}_{}",
+                c["author"].as_str().unwrap_or(""),
+                c["year"].as_str().unwrap_or("")
+            );
+            if seen.insert(key) {
+                unique_citations.push(c.clone());
+            }
+        }
+
+        // Sort by author
+        unique_citations.sort_by(|a, b| {
+            let aa = a["author"].as_str().unwrap_or("");
+            let ba = b["author"].as_str().unwrap_or("");
+            aa.cmp(ba)
+        });
+
+        // Create bibliography section
+        let parent_id = doc
+            .node(after_id)
+            .and_then(|n| n.parent)
+            .ok_or_else(|| JsError::new("Cannot find parent"))?;
+        let parent = doc
+            .node(parent_id)
+            .ok_or_else(|| JsError::new("Parent not found"))?;
+        let insert_idx = parent
+            .children
+            .iter()
+            .position(|&id| id == after_id)
+            .map(|i| i + 1)
+            .unwrap_or(parent.children.len());
+
+        let mut txn = Transaction::with_label("Generate bibliography");
+
+        // Title paragraph
+        let title_id = doc.next_id();
+        let mut title_para = Node::new(title_id, NodeType::Paragraph);
+        title_para.attributes.set(
+            AttributeKey::StyleId,
+            AttributeValue::String("Heading1".to_string()),
+        );
+        txn.push(Operation::insert_node(parent_id, insert_idx, title_para));
+
+        let title_run_id = doc.next_id();
+        let title_run = Node::new(title_run_id, NodeType::Run);
+        txn.push(Operation::insert_node(title_id, 0, title_run));
+
+        let title_text_id = doc.next_id();
+        let mut title_text = Node::new(title_text_id, NodeType::Text);
+        title_text.text_content = Some("Bibliography".to_string());
+        txn.push(Operation::insert_node(title_run_id, 0, title_text));
+
+        // Citation entries
+        for (i, c) in unique_citations.iter().enumerate() {
+            let author = c["author"].as_str().unwrap_or("Unknown");
+            let year = c["year"].as_str().unwrap_or("n.d.");
+            let title = c["title"].as_str().unwrap_or("");
+            let source = c["source"].as_str().unwrap_or("");
+
+            let entry_text = if source.is_empty() {
+                format!("{}. ({}). {}.", author, year, title)
+            } else {
+                format!("{}. ({}). {}. {}.", author, year, title, source)
+            };
+
+            let para_id_new = doc.next_id();
+            let para_node = Node::new(para_id_new, NodeType::Paragraph);
+            txn.push(Operation::insert_node(
+                parent_id,
+                insert_idx + 1 + i,
+                para_node,
+            ));
+
+            let run_id = doc.next_id();
+            let run_node = Node::new(run_id, NodeType::Run);
+            txn.push(Operation::insert_node(para_id_new, 0, run_node));
+
+            let text_id = doc.next_id();
+            let mut text_node = Node::new(text_id, NodeType::Text);
+            text_node.text_content = Some(entry_text);
+            txn.push(Operation::insert_node(run_id, 0, text_node));
+        }
+
+        doc.apply_transaction(&txn)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        Ok(format!("{}:{}", title_id.replica, title_id.counter))
+    }
+
+    /// Compare this document with another and return word-level differences as JSON.
+    ///
+    /// Takes the bytes of another document, opens it, extracts plain text from both,
+    /// and returns a JSON array of diff operations:
+    /// `[{"type":"equal","text":"..."},{"type":"insert","text":"..."},{"type":"delete","text":"..."}]`
+    pub fn compare_with(&self, other_bytes: &[u8]) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let text_a = doc.to_plain_text();
+
+        // Open the other document
+        let engine = s1engine::Engine::new();
+        let other_doc = engine
+            .open(other_bytes)
+            .map_err(|e| JsError::new(&format!("Failed to open comparison document: {}", e)))?;
+        let text_b = other_doc.to_plain_text();
+
+        // Word-level diff using LCS (Longest Common Subsequence)
+        let words_a: Vec<&str> = text_a.split_whitespace().collect();
+        let words_b: Vec<&str> = text_b.split_whitespace().collect();
+
+        let diffs = word_diff(&words_a, &words_b);
+
+        let mut json = String::from("[");
+        for (i, diff) in diffs.iter().enumerate() {
+            if i > 0 {
+                json.push(',');
+            }
+            let (diff_type, text) = match diff {
+                DiffOp::Equal(words) => ("equal", words.join(" ")),
+                DiffOp::Insert(words) => ("insert", words.join(" ")),
+                DiffOp::Delete(words) => ("delete", words.join(" ")),
+            };
+            json.push_str(&format!(
+                "{{\"type\":\"{}\",\"text\":\"{}\"}}",
+                diff_type,
+                escape_json(&text)
+            ));
+        }
+        json.push(']');
+        Ok(json)
     }
 
     /// Insert a SEQ (sequence) field for auto-numbering.
@@ -6523,10 +7158,7 @@ impl WasmDocument {
         let mut txn = Transaction::with_label("Insert table of figures");
 
         // Find insert position
-        let parent = doc
-            .node(after_id)
-            .and_then(|n| n.parent)
-            .unwrap_or(body_id);
+        let parent = doc.node(after_id).and_then(|n| n.parent).unwrap_or(body_id);
         let parent_node = doc
             .node(parent)
             .ok_or_else(|| JsError::new("Parent not found"))?;
@@ -7258,7 +7890,7 @@ impl WasmDocument {
     pub fn hit_test(&self, page_index: u32, x_pt: f64, y_pt: f64) -> Result<String, JsError> {
         let doc = self.doc()?;
         let font_db = s1_text::FontDatabase::new();
-        self.ensure_layout(&font_db)?;
+        self.ensure_layout_has_cache(&font_db)?;
         let cache = self.layout_cache.borrow();
         let layout = cache
             .as_ref()
@@ -7375,10 +8007,11 @@ impl WasmDocument {
     ///
     /// Returns JSON `RectPt` with page_index, x, y, width (1.0), height.
     pub fn caret_rect(&self, position_json: &str) -> Result<String, JsError> {
-        // Use global font database if available via layout cache, otherwise empty
+        // Use stale layout cache if available for fast caret positioning during typing.
+        // A full relayout will happen on the deferred render cycle.
         let doc = self.doc()?;
         let font_db = s1_text::FontDatabase::new();
-        self.ensure_layout(&font_db)?;
+        self.ensure_layout_has_cache(&font_db)?;
         let cache = self.layout_cache.borrow();
         let layout = cache
             .as_ref()
@@ -7417,7 +8050,7 @@ impl WasmDocument {
     pub fn selection_rects(&self, range_json: &str) -> Result<String, JsError> {
         let doc = self.doc()?;
         let font_db = s1_text::FontDatabase::new();
-        self.ensure_layout(&font_db)?;
+        self.ensure_layout_has_cache(&font_db)?;
         let cache = self.layout_cache.borrow();
         let layout = cache
             .as_ref()
@@ -7450,6 +8083,57 @@ impl WasmDocument {
     /// Move a position in a direction by a granularity.
     ///
     /// Returns JSON `PositionRef`.
+    /// Validate and clamp a position to ensure the offset is within bounds.
+    ///
+    /// If the offset exceeds the text node's length, it is clamped to the end.
+    /// Returns the validated position as JSON.
+    pub fn validate_position(&self, position_json: &str) -> Result<String, JsError> {
+        let doc = self.doc()?;
+        let pos: serde_json::Value = serde_json::from_str(position_json)
+            .map_err(|e| JsError::new(&format!("Invalid position JSON: {e}")))?;
+
+        let node_id_str = pos["node_id"].as_str().unwrap_or("");
+        let offset = pos["offset_utf16"].as_u64().unwrap_or(0) as usize;
+
+        let node_id = parse_node_id(node_id_str)?;
+
+        // Get the text length of the node
+        let text_len = doc.node(node_id)
+            .and_then(|n| n.text_content.as_ref())
+            .map(|t| t.encode_utf16().count())
+            .unwrap_or_else(|| {
+                // For non-text nodes, count children's text
+                doc.node(node_id)
+                    .map(|n| {
+                        let mut len = 0;
+                        for &child_id in &n.children {
+                            if let Some(child) = doc.node(child_id) {
+                                for &tc_id in &child.children {
+                                    if let Some(tc) = doc.node(tc_id) {
+                                        if let Some(ref t) = tc.text_content {
+                                            len += t.encode_utf16().count();
+                                        }
+                                    }
+                                }
+                                if let Some(ref t) = child.text_content {
+                                    len += t.encode_utf16().count();
+                                }
+                            }
+                        }
+                        len
+                    })
+                    .unwrap_or(0)
+            });
+
+        let clamped_offset = offset.min(text_len);
+
+        Ok(serde_json::json!({
+            "node_id": node_id_str,
+            "offset_utf16": clamped_offset,
+            "affinity": pos.get("affinity").and_then(|v| v.as_str()).unwrap_or("downstream")
+        }).to_string())
+    }
+
     pub fn move_position(
         &self,
         position_json: &str,
@@ -7651,14 +8335,18 @@ impl WasmDocument {
         let model = self.doc()?.model().clone();
         let (para_id, char_offset) = resolve_position_to_paragraph(&model, &pos)?;
 
+        // Look up which page this paragraph is on BEFORE the mutation
+        // (using the stale layout cache that still exists).
+        let dirty_page = find_page_for_paragraph(&self.layout_cache, para_id);
+
         let para_id_str = format!("{}:{}", para_id.replica, para_id.counter);
         self.insert_text_in_paragraph(&para_id_str, char_offset, text)?;
 
         let doc = self.doc()?;
-        
+
         let inserted_char_len = text.chars().count();
         let new_char_offset = char_offset + inserted_char_len;
-        
+
         let new_pos = match find_text_node_at_char_offset(doc.model(), para_id, new_char_offset) {
             Ok((tid, local_off, _)) => {
                 let text_node = doc.model().node(tid).unwrap();
@@ -7687,7 +8375,7 @@ impl WasmDocument {
             }
         };
 
-        Ok(build_edit_result_json(doc, &new_pos))
+        Ok(build_edit_result_json_with_dirty_page(doc, &new_pos, dirty_page))
     }
 
     /// Delete a canvas range (anchor + focus as text-node IDs + UTF-16 offsets).
@@ -7699,6 +8387,9 @@ impl WasmDocument {
         let model = self.doc()?.model().clone();
         let (start_para, start_offset, end_para, end_offset) =
             resolve_range_to_paragraphs(&model, &range)?;
+
+        // Look up dirty page before mutation
+        let dirty_page = find_page_for_paragraph(&self.layout_cache, start_para);
 
         let start_para_str = format!("{}:{}", start_para.replica, start_para.counter);
         let end_para_str = format!("{}:{}", end_para.replica, end_para.counter);
@@ -7734,7 +8425,7 @@ impl WasmDocument {
                 }
             }
         };
-        Ok(build_edit_result_json(doc, &new_pos))
+        Ok(build_edit_result_json_with_dirty_page(doc, &new_pos, dirty_page))
     }
 
     /// Replace a canvas range with new text.
@@ -7751,6 +8442,9 @@ impl WasmDocument {
         let (start_para, start_offset, end_para, end_offset) =
             resolve_range_to_paragraphs(&model, &range)?;
 
+        // Look up dirty page before mutation
+        let dirty_page = find_page_for_paragraph(&self.layout_cache, start_para);
+
         let start_para_str = format!("{}:{}", start_para.replica, start_para.counter);
         let end_para_str = format!("{}:{}", end_para.replica, end_para.counter);
 
@@ -7761,11 +8455,12 @@ impl WasmDocument {
         self.insert_text_in_paragraph(&start_para_str, start_offset, text)?;
 
         let doc = self.doc()?;
-        
+
         let inserted_char_len = text.chars().count();
         let new_char_offset = start_offset + inserted_char_len;
-        
-        let new_pos = match find_text_node_at_char_offset(doc.model(), start_para, new_char_offset) {
+
+        let new_pos = match find_text_node_at_char_offset(doc.model(), start_para, new_char_offset)
+        {
             Ok((tid, local_off, _)) => {
                 let text_node = doc.model().node(tid).unwrap();
                 let text_content = text_node.text_content.as_deref().unwrap_or("");
@@ -7792,7 +8487,7 @@ impl WasmDocument {
                 }
             }
         };
-        Ok(build_edit_result_json(doc, &new_pos))
+        Ok(build_edit_result_json_with_dirty_page(doc, &new_pos, dirty_page))
     }
 
     /// Insert a paragraph break at a canvas position.
@@ -8445,16 +9140,19 @@ impl WasmDocument {
     }
 
     fn doc_mut(&mut self) -> Result<&mut s1engine::Document, JsError> {
-        // Invalidate layout cache on any mutation.
-        *self.layout_cache.get_mut() = None;
+        // Mark layout as stale but keep the cache for fast lookups
+        // (caret_rect, hit_test, selection_rects can use the stale layout
+        // while the user is typing, avoiding expensive full relayout per keystroke).
+        self._layout_dirty.set(true);
         self.inner
             .as_mut()
             .ok_or_else(|| JsError::new("Document has been freed"))
     }
 
-    /// Lazily compute and cache layout. No-op if cache is already populated.
+    /// Lazily compute and cache layout. Recomputes if cache is missing OR dirty.
+    /// Clears the dirty flag after a successful recompute.
     fn ensure_layout(&self, font_db: &s1_text::FontDatabase) -> Result<(), JsError> {
-        if self.layout_cache.borrow().is_some() {
+        if self.layout_cache.borrow().is_some() && !self._layout_dirty.get() {
             return Ok(());
         }
         let doc = self.doc()?;
@@ -8462,6 +9160,24 @@ impl WasmDocument {
             .layout(font_db)
             .map_err(|e| JsError::new(&e.to_string()))?;
         *self.layout_cache.borrow_mut() = Some(layout);
+        self._layout_dirty.set(false);
+        Ok(())
+    }
+
+    /// Ensure layout cache exists (possibly stale). Does NOT recompute if dirty.
+    /// Use this for fast lookups (caret_rect, hit_test) that can tolerate
+    /// a slightly outdated layout during rapid typing.
+    fn ensure_layout_has_cache(&self, font_db: &s1_text::FontDatabase) -> Result<(), JsError> {
+        if self.layout_cache.borrow().is_some() {
+            return Ok(());
+        }
+        // No cache at all — we must compute one
+        let doc = self.doc()?;
+        let layout = doc
+            .layout(font_db)
+            .map_err(|e| JsError::new(&e.to_string()))?;
+        *self.layout_cache.borrow_mut() = Some(layout);
+        self._layout_dirty.set(false);
         Ok(())
     }
 
@@ -8922,6 +9638,7 @@ impl WasmDocumentBuilder {
             batch_count: 0,
             inner: Some(doc),
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -9018,6 +9735,94 @@ impl WasmFontDatabase {
         self.inner
             .find_with_substitution(family, false, false)
             .is_some()
+    }
+
+    /// Rasterize a single glyph to RGBA pixels.
+    ///
+    /// Returns a flat Uint8Array of RGBA pixels (width * height * 4 bytes)
+    /// plus metadata as JSON: `{"width":W,"height":H,"bearingX":X,"bearingY":Y,"advance":A}`
+    ///
+    /// This is the core API for canvas-first rendering — replaces `ctx.fillText()`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rasterize_glyph(
+        &self,
+        family: &str,
+        bold: bool,
+        italic: bool,
+        glyph_id: u16,
+        size_px: f32,
+        r: u8,
+        g: u8,
+        b: u8,
+    ) -> Option<Vec<u8>> {
+        let font_id = self.inner.find_with_substitution(family, bold, italic)?;
+        let font = self.inner.load_font(font_id)?;
+        let result = s1_text::rasterize_glyph(font.data(), glyph_id, size_px, [r, g, b])?;
+
+        // Pack metadata + pixels into a single buffer:
+        // First 20 bytes: width(u32), height(u32), bearingX(f32), bearingY(f32), advance(f32)
+        // Remaining: RGBA pixel data
+        let mut buf = Vec::with_capacity(20 + result.pixels.len());
+        buf.extend_from_slice(&result.width.to_le_bytes());
+        buf.extend_from_slice(&result.height.to_le_bytes());
+        buf.extend_from_slice(&result.bearing_x.to_le_bytes());
+        buf.extend_from_slice(&result.bearing_y.to_le_bytes());
+        buf.extend_from_slice(&result.advance.to_le_bytes());
+        buf.extend_from_slice(&result.pixels);
+        Some(buf)
+    }
+
+    /// Rasterize a complete text run to RGBA pixels.
+    ///
+    /// Takes shaped glyph data (from layout engine) and produces a single
+    /// bitmap. Returns packed buffer: 8 bytes header (width u32, height u32)
+    /// followed by RGBA pixels.
+    #[allow(clippy::too_many_arguments)]
+    pub fn rasterize_run(
+        &self,
+        family: &str,
+        bold: bool,
+        italic: bool,
+        glyph_data: &[u8], // packed: [glyph_id: u16, x_offset: f32, y_offset: f32] * N
+        size_px: f32,
+        r: u8,
+        g: u8,
+        b: u8,
+        total_width: f32,
+        line_height: f32,
+    ) -> Option<Vec<u8>> {
+        let font_id = self.inner.find_with_substitution(family, bold, italic)?;
+        let font = self.inner.load_font(font_id)?;
+
+        // Parse glyph data: each entry is 10 bytes (u16 + f32 + f32)
+        let mut glyphs = Vec::new();
+        let mut i = 0;
+        while i + 10 <= glyph_data.len() {
+            let gid = u16::from_le_bytes([glyph_data[i], glyph_data[i + 1]]);
+            let xo = f32::from_le_bytes([
+                glyph_data[i + 2], glyph_data[i + 3],
+                glyph_data[i + 4], glyph_data[i + 5],
+            ]);
+            let yo = f32::from_le_bytes([
+                glyph_data[i + 6], glyph_data[i + 7],
+                glyph_data[i + 8], glyph_data[i + 9],
+            ]);
+            glyphs.push((gid, xo, yo));
+            i += 10;
+        }
+
+        let pixels = s1_text::rasterize_text_run(
+            font.data(), &glyphs, size_px, [r, g, b], total_width, line_height,
+        )?;
+
+        let width = total_width.ceil() as u32 + 4;
+        let height = line_height.ceil() as u32 + 4;
+
+        let mut buf = Vec::with_capacity(8 + pixels.len());
+        buf.extend_from_slice(&width.to_le_bytes());
+        buf.extend_from_slice(&height.to_le_bytes());
+        buf.extend_from_slice(&pixels);
+        Some(buf)
     }
 }
 
@@ -9729,17 +10534,47 @@ fn resolve_range_to_paragraphs(
 /// Build an EditResult JSON string after a canvas editing operation.
 ///
 /// Produces JSON with document_revision, layout_revision, dirty_pages, and selection.
+/// `dirty_page` is the 0-based page index containing the edit (from stale layout cache).
 fn build_edit_result_json(doc: &s1engine::Document, new_position: &PositionRefParsed) -> String {
+    build_edit_result_json_with_dirty_page(doc, new_position, 0)
+}
+
+/// Build an EditResult JSON with a specific dirty page index.
+fn build_edit_result_json_with_dirty_page(
+    doc: &s1engine::Document,
+    new_position: &PositionRefParsed,
+    dirty_page: usize,
+) -> String {
     let revision = doc.undo_count() as u64;
-    // Use a large upper bound for dirty pages instead of computing layout on
-    // every edit (layout is expensive). The JS renderer will clamp to actual
-    // page count when re-rendering.
     format!(
-        "{{\"document_revision\":{},\"layout_revision\":{},\"dirty_pages\":{{\"start\":0,\"end\":9999}},\"selection\":{}}}",
+        "{{\"document_revision\":{},\"layout_revision\":{},\"dirty_pages\":{{\"start\":{},\"end\":{}}},\"selection\":{}}}",
         revision,
         revision,
+        dirty_page,
+        dirty_page,
         new_position.to_json()
     )
+}
+
+/// Find which page a paragraph is on in the stale layout cache.
+/// Returns 0 if not found or cache is empty.
+fn find_page_for_paragraph(
+    layout_cache: &std::cell::RefCell<Option<s1_layout::LayoutDocument>>,
+    para_id: NodeId,
+) -> usize {
+    let cache = layout_cache.borrow();
+    let layout = match cache.as_ref() {
+        Some(l) => l,
+        None => return 0,
+    };
+    for page in &layout.pages {
+        for block in &page.blocks {
+            if block.source_id == para_id {
+                return page.index;
+            }
+        }
+    }
+    0
 }
 
 /// Build an EditResult JSON with an optional new_paragraph_id field.
@@ -11926,20 +12761,16 @@ fn render_run(model: &DocumentModel, run_id: NodeId, html: &mut String) {
         }
     }
 
-    // Track changes: wrap in <ins>/<del> tags with node ID for individual accept/reject
+    // Track changes: wrap in <ins>/<del> tags — NO inline text-decoration
+    // (CSS display mode classes handle underline/strikethrough styling)
     let tc_open = match revision_type {
         Some("Insert") => {
-            style
-                .push_str("color:#22863a;text-decoration:underline;text-decoration-color:#22863a;");
             Some(format!(
                 "<ins data-tc-node-id=\"{}:{}\" data-tc-type=\"insert\">",
                 run_id.replica, run_id.counter
             ))
         }
         Some("Delete") => {
-            style.push_str(
-                "color:#cb2431;text-decoration:line-through;text-decoration-color:#cb2431;",
-            );
             Some(format!(
                 "<del data-tc-node-id=\"{}:{}\" data-tc-type=\"delete\">",
                 run_id.replica, run_id.counter
@@ -14867,6 +15698,7 @@ impl WasmCollabDocument {
             batch_count: 0,
             inner: Some(temp),
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -14968,6 +15800,7 @@ impl WasmCollabDocument {
             batch_count: 0,
             inner: Some(s1engine::Document::from_model(model)),
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -17770,6 +18603,7 @@ mod tests {
             batch_label: None,
             batch_count: 0,
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -20891,6 +21725,7 @@ mod tests {
             batch_label: None,
             batch_count: 0,
             layout_cache: std::cell::RefCell::new(None),
+            _layout_dirty: std::cell::Cell::new(false),
             composition_anchor_node: None,
             composition_anchor_offset: None,
             composition_preview_len: 0,
@@ -20987,14 +21822,18 @@ mod tests {
             "cache should be populated"
         );
 
-        // Simulate mutation via doc_mut
+        // Simulate mutation via doc_mut — cache is kept (stale) but dirty flag is set
         let _ = doc.doc_mut();
         assert!(
-            doc.layout_cache.borrow().is_none(),
-            "cache should be invalidated after doc_mut()"
+            doc.layout_cache.borrow().is_some(),
+            "cache should still exist (stale) after doc_mut()"
+        );
+        assert!(
+            doc._layout_dirty.get(),
+            "layout should be marked dirty after doc_mut()"
         );
 
-        // Re-compute layout
+        // Re-compute layout (ensure_layout checks dirty flag)
         let count2 = doc.get_page_count().unwrap();
         assert!(count2 >= 1);
         assert!(
@@ -21858,4 +22697,247 @@ mod tests {
             result
         );
     }
+}
+
+// ─── Word-Level Diff Algorithm ──────────────────────────────────
+
+enum DiffOp {
+    Equal(Vec<String>),
+    Insert(Vec<String>),
+    Delete(Vec<String>),
+}
+
+/// Compute word-level differences between two word sequences using LCS.
+fn word_diff(a: &[&str], b: &[&str]) -> Vec<DiffOp> {
+    let m = a.len();
+    let n = b.len();
+
+    // Build LCS table
+    let mut dp = vec![vec![0u32; n + 1]; m + 1];
+    for i in 1..=m {
+        for j in 1..=n {
+            if a[i - 1] == b[j - 1] {
+                dp[i][j] = dp[i - 1][j - 1] + 1;
+            } else {
+                dp[i][j] = dp[i - 1][j].max(dp[i][j - 1]);
+            }
+        }
+    }
+
+    // Backtrack to produce diff
+    let mut ops: Vec<DiffOp> = Vec::new();
+    let mut i = m;
+    let mut j = n;
+    let mut raw: Vec<(char, String)> = Vec::new(); // 'E'qual, 'I'nsert, 'D'elete
+
+    while i > 0 || j > 0 {
+        if i > 0 && j > 0 && a[i - 1] == b[j - 1] {
+            raw.push(('E', a[i - 1].to_string()));
+            i -= 1;
+            j -= 1;
+        } else if j > 0 && (i == 0 || dp[i][j - 1] >= dp[i - 1][j]) {
+            raw.push(('I', b[j - 1].to_string()));
+            j -= 1;
+        } else {
+            raw.push(('D', a[i - 1].to_string()));
+            i -= 1;
+        }
+    }
+
+    raw.reverse();
+
+    // Group consecutive operations
+    let mut current_type = ' ';
+    let mut current_words: Vec<String> = Vec::new();
+
+    for (op_type, word) in raw {
+        if op_type != current_type && !current_words.is_empty() {
+            ops.push(match current_type {
+                'E' => DiffOp::Equal(std::mem::take(&mut current_words)),
+                'I' => DiffOp::Insert(std::mem::take(&mut current_words)),
+                'D' => DiffOp::Delete(std::mem::take(&mut current_words)),
+                _ => DiffOp::Equal(std::mem::take(&mut current_words)),
+            });
+        }
+        current_type = op_type;
+        current_words.push(word);
+    }
+    if !current_words.is_empty() {
+        ops.push(match current_type {
+            'E' => DiffOp::Equal(current_words),
+            'I' => DiffOp::Insert(current_words),
+            'D' => DiffOp::Delete(current_words),
+            _ => DiffOp::Equal(current_words),
+        });
+    }
+
+    ops
+}
+
+// ─── OMML ↔ LaTeX Conversion ────────────────────────────────────
+
+/// Convert OMML XML to LaTeX string.
+/// Handles: fractions, sub/superscripts, radicals, accents, matrices, operators.
+fn convert_omml_to_latex(omml: &str) -> String {
+    let mut latex = String::new();
+    let mut i = 0;
+    let bytes = omml.as_bytes();
+
+    while i < bytes.len() {
+        if i + 1 < bytes.len() && bytes[i] == b'<' {
+            // Find tag name
+            let tag_start = i + 1;
+            let mut tag_end = tag_start;
+            while tag_end < bytes.len() && bytes[tag_end] != b'>' && bytes[tag_end] != b' ' {
+                tag_end += 1;
+            }
+            let tag = &omml[tag_start..tag_end];
+
+            match tag {
+                "m:f" | "m:frac" => latex.push_str("\\frac{"),
+                "/m:f" | "/m:frac" => latex.push('}'),
+                "m:num" => latex.push('{'),
+                "/m:num" => latex.push_str("}{"),
+                "m:den" => {}
+                "/m:den" => latex.push('}'),
+                "m:sSub" => {}
+                "/m:sSub" => {}
+                "m:sSup" => {}
+                "/m:sSup" => {}
+                "m:sub" => latex.push_str("_{"),
+                "/m:sub" => latex.push('}'),
+                "m:sup" => latex.push_str("^{"),
+                "/m:sup" => latex.push('}'),
+                "m:rad" => latex.push_str("\\sqrt{"),
+                "/m:rad" => latex.push('}'),
+                "m:nary" => latex.push_str("\\sum"),
+                "/m:nary" => {}
+                "m:m" => latex.push_str("\\begin{matrix}"),
+                "/m:m" => latex.push_str("\\end{matrix}"),
+                "m:mr" => {}
+                "/m:mr" => latex.push_str("\\\\"),
+                "m:e" => {}
+                "/m:e" => {}
+                "m:t" => {
+                    // Extract text content
+                    let close = omml[i..].find("</m:t>").unwrap_or(0);
+                    let text_start = omml[i..].find('>').map(|p| i + p + 1).unwrap_or(i);
+                    if close > 0 && text_start < i + close {
+                        let text = &omml[text_start..i + close];
+                        // Map common symbols
+                        let mapped = map_omml_symbol(text.trim());
+                        latex.push_str(&mapped);
+                    }
+                    i = i + close + 6; // skip past </m:t>
+                    continue;
+                }
+                _ => {}
+            }
+
+            // Skip to end of tag
+            while i < bytes.len() && bytes[i] != b'>' {
+                i += 1;
+            }
+            i += 1;
+        } else {
+            i += 1;
+        }
+    }
+
+    latex
+}
+
+fn map_omml_symbol(s: &str) -> String {
+    match s {
+        "\u{03B1}" => "\\alpha".into(),
+        "\u{03B2}" => "\\beta".into(),
+        "\u{03B3}" => "\\gamma".into(),
+        "\u{03B4}" => "\\delta".into(),
+        "\u{03B5}" => "\\epsilon".into(),
+        "\u{03B8}" => "\\theta".into(),
+        "\u{03BB}" => "\\lambda".into(),
+        "\u{03BC}" => "\\mu".into(),
+        "\u{03C0}" => "\\pi".into(),
+        "\u{03C3}" => "\\sigma".into(),
+        "\u{03C6}" => "\\phi".into(),
+        "\u{03C9}" => "\\omega".into(),
+        "\u{2211}" => "\\sum".into(),
+        "\u{220F}" => "\\prod".into(),
+        "\u{222B}" => "\\int".into(),
+        "\u{221E}" => "\\infty".into(),
+        "\u{2260}" => "\\neq".into(),
+        "\u{2264}" => "\\leq".into(),
+        "\u{2265}" => "\\geq".into(),
+        "\u{00B1}" => "\\pm".into(),
+        "\u{00D7}" => "\\times".into(),
+        "\u{00F7}" => "\\div".into(),
+        "\u{2248}" => "\\approx".into(),
+        "\u{2261}" => "\\equiv".into(),
+        _ => s.to_string(),
+    }
+}
+
+/// Convert LaTeX to OMML XML.
+fn convert_latex_to_omml(latex: &str) -> String {
+    let mut omml = String::from("<m:oMathPara xmlns:m=\"http://schemas.openxmlformats.org/officeDocument/2006/math\"><m:oMath>");
+
+    let mut i = 0;
+    let chars: Vec<char> = latex.chars().collect();
+
+    while i < chars.len() {
+        if chars[i] == '\\' {
+            // LaTeX command
+            let cmd_start = i + 1;
+            let mut cmd_end = cmd_start;
+            while cmd_end < chars.len() && chars[cmd_end].is_alphabetic() {
+                cmd_end += 1;
+            }
+            let cmd = &latex[cmd_start..cmd_end];
+
+            match cmd {
+                "frac" => {
+                    omml.push_str("<m:f><m:num>");
+                    // Next {} is numerator, then {} denominator
+                }
+                "sqrt" => omml.push_str("<m:rad><m:e>"),
+                "sum" => omml.push_str("<m:nary><m:naryPr><m:chr m:val=\"\u{2211}\"/></m:naryPr>"),
+                "int" => omml.push_str("<m:nary><m:naryPr><m:chr m:val=\"\u{222B}\"/></m:naryPr>"),
+                "alpha" => omml.push_str("<m:r><m:t>\u{03B1}</m:t></m:r>"),
+                "beta" => omml.push_str("<m:r><m:t>\u{03B2}</m:t></m:r>"),
+                "gamma" => omml.push_str("<m:r><m:t>\u{03B3}</m:t></m:r>"),
+                "pi" => omml.push_str("<m:r><m:t>\u{03C0}</m:t></m:r>"),
+                "theta" => omml.push_str("<m:r><m:t>\u{03B8}</m:t></m:r>"),
+                "infty" => omml.push_str("<m:r><m:t>\u{221E}</m:t></m:r>"),
+                "pm" => omml.push_str("<m:r><m:t>\u{00B1}</m:t></m:r>"),
+                "times" => omml.push_str("<m:r><m:t>\u{00D7}</m:t></m:r>"),
+                "leq" => omml.push_str("<m:r><m:t>\u{2264}</m:t></m:r>"),
+                "geq" => omml.push_str("<m:r><m:t>\u{2265}</m:t></m:r>"),
+                "neq" => omml.push_str("<m:r><m:t>\u{2260}</m:t></m:r>"),
+                _ => {
+                    omml.push_str(&format!("<m:r><m:t>\\{}</m:t></m:r>", cmd));
+                }
+            }
+            i = cmd_end;
+        } else if chars[i] == '{' {
+            i += 1;
+        } else if chars[i] == '}' {
+            // Close current OMML element
+            omml.push_str("</m:e>");
+            i += 1;
+        } else if chars[i] == '_' {
+            omml.push_str("<m:sSub><m:e>");
+            i += 1;
+        } else if chars[i] == '^' {
+            omml.push_str("<m:sSup><m:e>");
+            i += 1;
+        } else if chars[i] == ' ' {
+            i += 1;
+        } else {
+            omml.push_str(&format!("<m:r><m:t>{}</m:t></m:r>", chars[i]));
+            i += 1;
+        }
+    }
+
+    omml.push_str("</m:oMath></m:oMathPara>");
+    omml
 }

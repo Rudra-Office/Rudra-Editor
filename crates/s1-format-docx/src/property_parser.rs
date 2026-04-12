@@ -100,20 +100,24 @@ fn parse_rpr_inner(reader: &mut Reader<&[u8]>, attrs: &mut AttributeMap) -> Resu
                         );
                     }
                     b"u" => {
-                        let style = match get_val(&e).as_deref() {
+                        let val = get_val(&e);
+                        let style = match val.as_deref() {
                             Some("single") => UnderlineStyle::Single,
                             Some("double") => UnderlineStyle::Double,
                             Some("thick") => UnderlineStyle::Thick,
                             Some("dotted") => UnderlineStyle::Dotted,
                             Some("dash") | Some("dashed") => UnderlineStyle::Dashed,
                             Some("wave") => UnderlineStyle::Wave,
-                            Some("none") => UnderlineStyle::None,
+                            Some("none") | None => UnderlineStyle::None,
                             _ => UnderlineStyle::Single,
                         };
-                        attrs.set(
-                            AttributeKey::Underline,
-                            AttributeValue::UnderlineStyle(style),
-                        );
+                        // Only set underline attribute if it's an actual underline style
+                        if !matches!(style, UnderlineStyle::None) {
+                            attrs.set(
+                                AttributeKey::Underline,
+                                AttributeValue::UnderlineStyle(style),
+                            );
+                        }
                     }
                     b"sz" => {
                         if let Some(val) = get_val(&e) {

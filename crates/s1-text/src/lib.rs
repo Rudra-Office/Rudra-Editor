@@ -25,6 +25,7 @@ pub mod font;
 pub mod font_db;
 pub mod hyphenation;
 pub mod linebreak;
+pub mod rasterizer;
 pub mod script;
 pub mod shaping;
 pub mod types;
@@ -36,6 +37,7 @@ pub use font::Font;
 pub use font_db::FontDatabase;
 pub use hyphenation::hyphenate_word;
 pub use linebreak::line_break_opportunities;
+pub use rasterizer::{rasterize_glyph, rasterize_text_run, RasterizedGlyph};
 pub use script::{default_shaping_features, split_by_script, ScriptRun};
 pub use shaping::{measure_shaped_width, shape_text};
 pub use types::{

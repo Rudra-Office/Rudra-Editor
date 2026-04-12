@@ -566,8 +566,9 @@ impl<'a> LayoutEngine<'a> {
                                     let is_short_orphan = page_blocks
                                         .last()
                                         .map(|b| {
-                                            if let LayoutBlockKind::Paragraph { ref lines, .. } =
-                                                b.kind
+                                            if let LayoutBlockKind::Paragraph {
+                                                ref lines, ..
+                                            } = b.kind
                                             {
                                                 lines.len() < min_orphan && lines.len() == 1
                                             } else {

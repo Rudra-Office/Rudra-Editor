@@ -380,26 +380,41 @@ pub async fn convert_document(
         .open(&data)
         .map_err(|e| (StatusCode::BAD_REQUEST, format!("Invalid document: {e}")))?;
 
-    let format = match target_format.as_str() {
-        "docx" => s1engine::Format::Docx,
-        "odt" => s1engine::Format::Odt,
-        "pdf" => s1engine::Format::Pdf,
-        "txt" => s1engine::Format::Txt,
-        "md" => s1engine::Format::Md,
-        other => {
-            return Err((
-                StatusCode::BAD_REQUEST,
-                format!("Unsupported target format: {other}"),
-            ))
+    // Handle special formats that need custom export paths
+    let bytes = match target_format.as_str() {
+        "pdfa" => {
+            let font_db = s1_text::FontDatabase::with_embedded_fallback();
+            doc.export_pdf_a(&font_db, s1_format_pdf::PdfAConformance::PdfA1b)
+                .map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        format!("PDF/A export failed: {e}"),
+                    )
+                })?
+        }
+        _ => {
+            let format = match target_format.as_str() {
+                "docx" => s1engine::Format::Docx,
+                "odt" => s1engine::Format::Odt,
+                "pdf" => s1engine::Format::Pdf,
+                "txt" => s1engine::Format::Txt,
+                "md" => s1engine::Format::Md,
+                "epub" => s1engine::Format::Epub,
+                other => {
+                    return Err((
+                        StatusCode::BAD_REQUEST,
+                        format!("Unsupported target format: {other}"),
+                    ))
+                }
+            };
+            doc.export(format).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Export failed: {e}"),
+                )
+            })?
         }
     };
-
-    let bytes = doc.export(format).map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Export failed: {e}"),
-        )
-    })?;
     let content_type = format_to_content_type(&target_format);
     Ok((
         [(
