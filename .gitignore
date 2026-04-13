@@ -39,3 +39,5 @@ test-results/
 # Font files (downloaded)
 web/fonts/*.ttf
 web/fonts/*.woff2
+web/fonts/*.ttf
+web/pkg/*.wasm
