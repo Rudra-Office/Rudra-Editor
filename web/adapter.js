@@ -104,8 +104,9 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
         var childInfo = JSON.parse(wasmDoc.node_info_json(paraInfo.children[i]));
         if (childInfo.type === 'Run') {
           var run = buildRun(para, wasmDoc, childInfo);
-          // Insert before the paragraph mark (last element)
-          para.AddToContentToEnd(run);
+          // Insert BEFORE the paragraph mark run (always last element)
+          var insertPos = Math.max(para.Content.length - 1, 0);
+          para.Internal_Content_Add(insertPos, run);
         }
       } catch (e) {
         // Skip unreadable nodes
