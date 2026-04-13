@@ -179,6 +179,13 @@ function buildRun(para, wasmDoc, runInfo) {
             if (c === 0x0A || c === 0x0D) continue;
             if (c === 0x09) {
               run.Add_ToContent(-1, new AscWord.CRunTab(), false);
+            } else if (c === 0x20) {
+              // CRITICAL: spaces must be CRunSpace, not CRunText(32).
+              // CRunSpace.IsSpace()=true triggers FlushWord in TextShaper,
+              // which marks word boundaries for line breaking.
+              // CRunText(32).IsText()=true stays part of the "word" —
+              // entire paragraph becomes one unbreakable word.
+              run.Add_ToContent(-1, new AscWord.CRunSpace(), false);
             } else {
               run.Add_ToContent(-1, new AscWord.CRunText(c), false);
             }
