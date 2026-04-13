@@ -105,16 +105,50 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
   para.Pr.WidowControl = paraInfo.widowControl !== false; // default true
 
   // Build runs from children (must call Correct_Content after all runs added)
+  // s1engine model has Run, LineBreak, Tab as paragraph-level children
   if (paraInfo.children && paraInfo.children.length > 0) {
+    var currentRun = null; // accumulate inline content into runs
+
     for (var i = 0; i < paraInfo.children.length; i++) {
       try {
         var childInfo = JSON.parse(wasmDoc.node_info_json(paraInfo.children[i]));
+        var insertPos;
+
         if (childInfo.type === 'Run') {
           var run = buildRun(para, wasmDoc, childInfo);
-          // Insert BEFORE the paragraph mark run (always last element)
-          var insertPos = Math.max(para.Content.length - 1, 0);
+          insertPos = Math.max(para.Content.length - 1, 0);
           para.Internal_Content_Add(insertPos, run);
+          currentRun = run;
+
+        } else if (childInfo.type === 'LineBreak') {
+          // Line break → CRunBreak(break_Line) inside a run
+          if (!currentRun) {
+            currentRun = new AscWord.ParaRun(para, false);
+            insertPos = Math.max(para.Content.length - 1, 0);
+            para.Internal_Content_Add(insertPos, currentRun);
+          }
+          currentRun.Add_ToContent(-1, new AscWord.CRunBreak(AscWord.break_Line), false);
+
+        } else if (childInfo.type === 'Tab') {
+          // Tab → CRunTab inside a run
+          if (!currentRun) {
+            currentRun = new AscWord.ParaRun(para, false);
+            insertPos = Math.max(para.Content.length - 1, 0);
+            para.Internal_Content_Add(insertPos, currentRun);
+          }
+          currentRun.Add_ToContent(-1, new AscWord.CRunTab(), false);
+
+        } else if (childInfo.type === 'PageBreak' || childInfo.type === 'ColumnBreak') {
+          // Page/column break → CRunBreak inside a run
+          if (!currentRun) {
+            currentRun = new AscWord.ParaRun(para, false);
+            insertPos = Math.max(para.Content.length - 1, 0);
+            para.Internal_Content_Add(insertPos, currentRun);
+          }
+          var breakType = childInfo.type === 'PageBreak' ? AscWord.break_Page : AscWord.break_Column;
+          currentRun.Add_ToContent(-1, new AscWord.CRunBreak(breakType), false);
         }
+        // Other node types (Table, Image, etc.) — skip for M3
       } catch (e) {
         // Skip unreadable nodes
       }

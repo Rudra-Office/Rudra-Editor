@@ -1,5 +1,7 @@
 //! Canvas rendering fidelity tests.
 //!
+//! Requires: `cargo test -p s1engine --features layout --test canvas_fidelity`
+//!
 //! Validates that the layout engine produces correct geometry for real documents:
 //! - Page dimensions match expected paper size
 //! - Content fits within page content area (no overflow)
