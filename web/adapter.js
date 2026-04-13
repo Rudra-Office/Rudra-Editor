@@ -245,25 +245,107 @@ export function saveDocx(api) {
   var logicDoc = api.WordControl.m_oLogicDocument;
   if (!logicDoc) throw new Error('No logic document');
 
-  // Extract paragraph text using sdkjs Paragraph.GetText API
-  var paragraphs = [];
+  var newDoc = wasmEngine.create();
+  var paraCount = 0;
+
   for (var i = 0; i < logicDoc.Content.length; i++) {
     var el = logicDoc.Content[i];
-    if (el && el.IsParagraph && el.IsParagraph()) {
-      paragraphs.push(el.GetText({ ParaSeparator: '' }) || '');
+    if (!el || !el.IsParagraph || !el.IsParagraph()) continue;
+
+    // Extract paragraph text and structure
+    var paraData = extractParagraph(el);
+    paraCount++;
+
+    // Create paragraph in s1engine
+    var paraId;
+    if (paraData.headingLevel > 0 && paraData.headingLevel <= 6) {
+      paraId = newDoc.append_heading(paraData.headingLevel, paraData.text);
+    } else {
+      paraId = newDoc.append_paragraph(paraData.text);
+    }
+
+    // Apply paragraph alignment
+    if (paraData.alignment && paraData.alignment !== 'left') {
+      try { newDoc.set_alignment(paraId, paraData.alignment); } catch(e) {}
+    }
+
+    // Insert line breaks at correct positions
+    // Process in reverse order so offsets stay valid
+    for (var b = paraData.breaks.length - 1; b >= 0; b--) {
+      var brk = paraData.breaks[b];
+      try {
+        if (brk.type === 'line') {
+          newDoc.insert_line_break(paraId, brk.offset);
+        } else if (brk.type === 'tab') {
+          newDoc.insert_tab(paraId, brk.offset);
+        }
+      } catch(e) {}
     }
   }
 
-  console.log('[adapter] save: ' + paragraphs.length + ' paragraphs');
-
-  // Build new s1engine document and export
-  var newDoc = wasmEngine.create();
-  for (var i = 0; i < paragraphs.length; i++) {
-    newDoc.append_paragraph(paragraphs[i]);
-  }
   var bytes = newDoc.export('docx');
-  console.log('[adapter] save: ' + bytes.length + ' bytes');
+  console.log('[adapter] save: ' + paraCount + ' paragraphs, ' + bytes.length + ' bytes');
   return bytes;
+}
+
+/**
+ * Extract structured data from an OnlyOffice Paragraph.
+ * Returns: { text, alignment, headingLevel, breaks: [{type, offset}] }
+ */
+function extractParagraph(para) {
+  var text = '';
+  var breaks = []; // {type: 'line'|'tab'|'page', offset: charIndex}
+  var alignment = 'left';
+  var headingLevel = 0;
+
+  // Get compiled paragraph properties
+  var compiledPr = para.Get_CompiledPr2 ? para.Get_CompiledPr2(false) : null;
+  var paraPr = compiledPr ? compiledPr.ParaPr : para.Pr;
+
+  // Alignment (sdkjs: 0=Right, 1=Left, 2=Center, 3=Justify)
+  if (paraPr && paraPr.Jc !== undefined) {
+    var alignMap = { 0: 'right', 1: 'left', 2: 'center', 3: 'justify' };
+    alignment = alignMap[paraPr.Jc] || 'left';
+  }
+
+  // Heading level from style
+  if (paraPr && paraPr.OutlineLvl !== undefined && paraPr.OutlineLvl >= 0) {
+    headingLevel = paraPr.OutlineLvl + 1; // OutlineLvl is 0-based
+  } else if (paraPr && paraPr.PStyle) {
+    var style = paraPr.PStyle;
+    var match = style.match(/[Hh]eading\s*(\d)/);
+    if (match) headingLevel = parseInt(match[1]);
+  }
+
+  // Extract runs
+  for (var j = 0; j < para.Content.length; j++) {
+    var run = para.Content[j];
+    if (!run || !run.Content) continue;
+
+    for (var k = 0; k < run.Content.length; k++) {
+      var item = run.Content[k];
+      if (!item) continue;
+
+      if (item.Value !== undefined && item.Value !== null) {
+        // CRunText or CRunSpace
+        text += String.fromCharCode(item.Value);
+      } else if (item.IsSpace && item.IsSpace()) {
+        text += ' ';
+      } else if (item.IsTab && item.IsTab()) {
+        breaks.push({ type: 'tab', offset: text.length });
+        text += '\t'; // placeholder
+      } else if (item.IsBreak && item.IsBreak()) {
+        if (item.BreakType === 1) { // break_Line
+          breaks.push({ type: 'line', offset: text.length });
+        } else if (item.BreakType === 2) { // break_Page
+          breaks.push({ type: 'page', offset: text.length });
+        }
+      }
+      // Skip paragraph mark and other non-text elements
+    }
+  }
+
+  return { text: text, alignment: alignment, headingLevel: headingLevel, breaks: breaks };
 }
 
 export function downloadFile(data, filename) {
