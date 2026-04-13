@@ -75,6 +75,12 @@ scripts/
   build-wasm.sh      WASM build script
 ```
 
+## Key Documents
+
+- **`docs/CODE_GRAPH.md`** — Dependency graph, line counts, test counts. Update after structural changes.
+- **`docs/INTEGRATION_MILESTONES.md`** — OnlyOffice integration plan. 7 milestones, each with: Analyse → Spec → Develop → Test → Verify → Mark Complete.
+- **`docs/ROADMAP.md`** — High-level phase overview.
+
 ## Architecture Rules (MUST Follow)
 
 ### 1. Document Model is Sacred

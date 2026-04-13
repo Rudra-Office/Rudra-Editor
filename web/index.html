@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Rudra Office</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { height: 100%; overflow: hidden; }
+    #editor_sdk { width: 100%; height: 100%; overflow: hidden; }
+    #file-input { position: fixed; top: 10px; right: 10px; z-index: 10000;
+      padding: 8px 16px; background: #1a73e8; color: white; border: none;
+      border-radius: 4px; cursor: pointer; font-size: 14px; }
+  </style>
+</head>
+<body>
+  <button id="file-input" onclick="document.getElementById('file-picker').click()">Open DOCX</button>
+  <input type="file" id="file-picker" accept=".docx" style="display:none">
+
+  <div id="editor_sdk" tabindex="-1"></div>
+
+  <script>
+    window['AscNotLoadAllScript'] = true;
+  </script>
+
+  <script src="onlyoffice-sdkjs/vendor/polyfill.js"></script>
+  <script src="onlyoffice-web-apps/vendor/jquery/jquery.min.js"></script>
+  <script src="onlyoffice-web-apps/vendor/xregexp/xregexp-all-min.js"></script>
+
+  <script>
+    var sdk_scripts = [];
+  </script>
+  <script src="onlyoffice-sdkjs/develop/sdkjs/word/scripts.js"></script>
+  <script>
+    var fixedScripts = sdk_scripts.map(function(s) {
+      return s.replace('../../../../sdkjs/', 'onlyoffice-sdkjs/');
+    });
+    fixedScripts.forEach(function(src) {
+      document.write('<script src="' + src + '"><\/script>');
+    });
+    document.write('<script src="onlyoffice-sdkjs/word/document/editor.js"><\/script>');
+  </script>
+
+  <script>
+    window.addEventListener('load', function() {
+      console.log('[rudra] Patching for offline mode...');
+
+      // Patch 1: Font name lookup — g_fonts_selection_bin is empty so GetFontFileWeb
+      // always returns ASCW3. Override to use g_map_font_index directly.
+      var origGetFontFileWeb = AscFonts.g_fontApplication.GetFontFileWeb;
+      AscFonts.g_fontApplication.GetFontFileWeb = function(name, lStyle) {
+        var idx = AscFonts.g_map_font_index[name];
+        if (idx !== undefined) {
+          var result = { m_wsFontName: name, m_wsFontPath: "", m_lIndex: 0 };
+          this.FontPickerMap[name] = result;
+          return result;
+        }
+        idx = AscFonts.g_map_font_index["Arial"];
+        if (idx !== undefined) {
+          var result = { m_wsFontName: "Arial", m_wsFontPath: "", m_lIndex: 0 };
+          this.FontPickerMap[name] = result;
+          return result;
+        }
+        return origGetFontFileWeb.call(this, name, lStyle);
+      };
+
+      // Patch 2: checkStreamSignature fails for strings (getEmpty returns string).
+      var origOpenDoc = Asc.asc_docs_api.prototype.openDocument;
+      Asc.asc_docs_api.prototype.openDocument = function(file) {
+        if (file && file.data && typeof file.data === 'string' && file.data.indexOf('DOCY') === 0) {
+          file.bSerFormat = true;
+        }
+        return origOpenDoc.call(this, file);
+      };
+
+      // Patch 3: Preload font files synchronously into the WASM engine
+      // so they're ready BEFORE document rendering.
+      function preloadFont(filename, fontFileLoader) {
+        var xhr = new XMLHttpRequest();
+        xhr.open('GET', 'fonts/' + filename, false); // synchronous
+        xhr.overrideMimeType('text/plain; charset=x-user-defined');
+        xhr.send();
+        if (xhr.status === 200 && xhr.responseText) {
+          var txt = xhr.responseText;
+          var len = txt.length;
+          var buf = new ArrayBuffer(len);
+          var arr = new Uint8Array(buf);
+          for (var j = 0; j < len; j++) {
+            arr[j] = txt.charCodeAt(j) & 0xff;
+          }
+          var streamIdx = AscFonts.g_fonts_streams.length;
+          AscFonts.g_fonts_streams[streamIdx] = new AscFonts.FontStream(buf, len);
+          fontFileLoader.SetStreamIndex(streamIdx);
+          fontFileLoader.Status = 0;
+          console.log('[rudra] Preloaded font: ' + filename + ' (' + len + ' bytes)');
+          return true;
+        }
+        console.warn('[rudra] Failed to preload: ' + filename);
+        return false;
+      }
+
+      // Debug: log font file status
+      var fontFiles = AscFonts.g_font_files;
+      console.log('[rudra] Font files registered:', fontFiles ? fontFiles.length : 0);
+      if (fontFiles) {
+        for (var i = 0; i < fontFiles.length; i++) {
+          if (fontFiles[i]) console.log('[rudra]   [' + i + '] ' + fontFiles[i].Id + ' Status=' + fontFiles[i].Status);
+        }
+      }
+      console.log('[rudra] Font infos:', AscFonts.g_font_infos ? AscFonts.g_font_infos.length : 0);
+      console.log('[rudra] Font map keys:', Object.keys(AscFonts.g_map_font_index).join(', '));
+
+      console.log('[rudra] Initializing editor...');
+
+      try {
+        var api = new Asc.asc_docs_api({ 'id-view': 'editor_sdk' });
+        window._api = api;
+        window.editor = api;
+
+        // Debug: intercept FT_Open_Face to see why it fails
+        var origFTOpenFace = AscFonts.FT_Open_Face;
+        if (origFTOpenFace) {
+          AscFonts.FT_Open_Face = function(library, stream, faceindex) {
+            var dataType = stream ? (stream.data ? stream.data.constructor.name : 'no data') : 'no stream';
+            console.log('[rudra] FT_Open_Face: lib=' + !!library + ' stream={marker:' + (stream?stream.asc_marker:'?') + ', dataType:' + dataType + ', len:' + (stream?stream.len:'?') + '} face=' + faceindex);
+            var result = origFTOpenFace(library, stream, faceindex);
+            console.log('[rudra] FT_Open_Face result:', result);
+            return result;
+          };
+        } else {
+          console.warn('[rudra] FT_Open_Face not available yet');
+        }
+
+        api.CoAuthoringApi.onFirstLoadChangesEnd = function() {
+          api.asyncServerIdEndLoaded();
+        };
+        api.CoAuthoringApi.onFirstConnect = function() {};
+
+        api.asc_registerCallback('asc_onDocumentContentReady', function() {
+          console.log('[rudra] Document content ready — editor is usable');
+        });
+        api.asc_registerCallback('asc_onError', function(id, level) {
+          console.warn('[rudra] Editor error:', id, 'level:', level);
+        });
+
+        var docInfo = new Asc.asc_CDocInfo();
+        docInfo.put_Id('rudra-doc-1');
+        docInfo.put_Title('New Document');
+        docInfo.put_Format('docx');
+        docInfo.put_OfflineApp(true);
+
+        api.asc_setDocInfo(docInfo);
+        api.asc_LoadDocument();
+        console.log('[rudra] asc_LoadDocument called');
+
+      } catch(e) {
+        console.error('[rudra] Init failed:', e);
+      }
+
+      document.getElementById('file-picker').addEventListener('change', function(e) {
+        var file = e.target.files[0];
+        if (!file) return;
+        alert('DOCX opening not yet available (requires sdkjs-ooxml addon).');
+      });
+    });
+  </script>
+</body>
+</html>
