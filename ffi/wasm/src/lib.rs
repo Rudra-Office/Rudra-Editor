@@ -11017,6 +11017,19 @@ fn node_to_json(model: &DocumentModel, nid: NodeId, node: &Node) -> String {
     if let Some(font) = node.attributes.get_string(&AttributeKey::FontFamily) {
         json.push_str(&format!(",\"fontFamily\":\"{}\"", escape_json(font)));
     }
+    // Paragraph layout properties
+    if node.attributes.get_bool(&AttributeKey::PageBreakBefore) == Some(true) {
+        json.push_str(",\"pageBreakBefore\":true");
+    }
+    if node.attributes.get_bool(&AttributeKey::KeepWithNext) == Some(true) {
+        json.push_str(",\"keepWithNext\":true");
+    }
+    if node.attributes.get_bool(&AttributeKey::KeepLinesTogether) == Some(true) {
+        json.push_str(",\"keepLinesTogether\":true");
+    }
+    if node.attributes.get_bool(&AttributeKey::WidowControl) == Some(true) {
+        json.push_str(",\"widowControl\":true");
+    }
     if let Some(AttributeValue::Color(c)) = node.attributes.get(&AttributeKey::Color) {
         json.push_str(&format!(",\"color\":\"#{:02x}{:02x}{:02x}\"", c.r, c.g, c.b));
     }

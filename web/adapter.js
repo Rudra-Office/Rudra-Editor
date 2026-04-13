@@ -97,6 +97,12 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
     para.Pr.PStyle = paraInfo.styleId;
   }
 
+  // Paragraph layout properties — control page break behavior
+  if (paraInfo.pageBreakBefore === true) para.Pr.PageBreakBefore = true;
+  if (paraInfo.keepWithNext === true) para.Pr.KeepNext = true;
+  if (paraInfo.keepLinesTogether === true) para.Pr.KeepLines = true;
+  if (paraInfo.widowControl === true) para.Pr.WidowControl = true;
+
   // Build runs from children (must call Correct_Content after all runs added)
   if (paraInfo.children && paraInfo.children.length > 0) {
     for (var i = 0; i < paraInfo.children.length; i++) {
@@ -119,6 +125,12 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
   // BinaryFileReader (Serialize2.js:11391) does this for every paragraph.
   if (para.Correct_Content) para.Correct_Content();
   if (para.MoveCursorToStartPos) para.MoveCursorToStartPos(false);
+
+  // Mark text as needing HarfBuzz shaping before line breaking.
+  // Without this, the layout engine treats text as individual characters
+  // and breaks lines at character boundaries instead of word boundaries.
+  // ShapeText() is called from Recalculate_Page(0) at Paragraph_Recalculate.js:432
+  if (para.RecalcInfo) para.RecalcInfo.NeedShapeText();
 
   return para;
 }
