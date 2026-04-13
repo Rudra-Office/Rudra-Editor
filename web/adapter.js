@@ -97,7 +97,7 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
     para.Pr.PStyle = paraInfo.styleId;
   }
 
-  // Build runs from children
+  // Build runs from children (must call Correct_Content after all runs added)
   if (paraInfo.children && paraInfo.children.length > 0) {
     for (var i = 0; i < paraInfo.children.length; i++) {
       try {
@@ -112,6 +112,12 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
       }
     }
   }
+
+  // Finalize paragraph structure — required by sdkjs layout engine.
+  // Ensures proper Run boundaries and paragraph mark placement.
+  // BinaryFileReader (Serialize2.js:11391) does this for every paragraph.
+  if (para.Correct_Content) para.Correct_Content();
+  if (para.MoveCursorToStartPos) para.MoveCursorToStartPos(false);
 
   return para;
 }
