@@ -1,95 +1,96 @@
 /* Rudra Office — Editor Styles */
 
-/* Material Symbols icon helper */
-.mso {
-  font-family: 'Material Symbols Outlined';
-  font-size: 18px;
-  font-variation-settings: 'FILL' 0;
-  line-height: 1;
-}
-.mso.filled { font-variation-settings: 'FILL' 1; }
-
-/* Reset */
 * { margin: 0; padding: 0; box-sizing: border-box; }
-html, body { height: 100%; overflow: hidden; }
+html, body { height: 100%; overflow: hidden; font-family: 'Google Sans', Roboto, -apple-system, BlinkMacSystemFont, sans-serif; }
 
-/* Toolbar */
-#toolbar {
-  position: fixed; top: 0; left: 0; right: 0;
-  background: #f8f9fa; border-bottom: 1px solid #dadce0;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-  font-size: 13px; z-index: 10000; user-select: none;
+/* ─── Title bar ─── */
+#titlebar {
+  position: fixed; top: 0; left: 0; right: 0; height: 48px;
+  display: flex; align-items: center; padding: 0 16px;
+  background: #fff; z-index: 10001;
 }
-.tb-row {
-  display: flex; align-items: center; gap: 2px; padding: 2px 8px;
-  flex-wrap: wrap;
+#titlebar .doc-icon { width: 24px; height: 24px; margin-right: 8px; }
+#titlebar .doc-name {
+  font-size: 18px; font-weight: 400; color: #202124;
+  border: none; outline: none; background: none; padding: 2px 4px;
+  border-radius: 4px; min-width: 100px;
 }
-.tb-row:first-child { border-bottom: 1px solid #eee; padding: 4px 8px; }
-.tb-group { display: flex; align-items: center; gap: 1px; }
-
-#toolbar button {
-  padding: 4px 6px; border: none; border-radius: 3px;
-  background: transparent; cursor: pointer; font-size: 13px; min-width: 26px;
-  height: 28px; display: flex; align-items: center; justify-content: center;
-  color: #444; font-family: inherit;
-}
-#toolbar button:hover { background: #e0e0e0; }
-#toolbar button.active { background: #d2e3fc; color: #1a73e8; }
-#toolbar button.tb-file { gap: 4px; padding: 4px 10px; font-size: 12px; }
-#toolbar button .mso { font-size: 18px; }
-
-#toolbar select {
-  padding: 3px 4px; border: 1px solid transparent; border-radius: 3px;
-  font-size: 12px; background: transparent; height: 28px;
-}
-#toolbar select:hover { border-color: #dadce0; background: #e8eaed; }
-
-#toolbar input[type="color"] {
-  width: 28px; height: 24px; border: 1px solid #dadce0; border-radius: 3px;
-  padding: 1px; cursor: pointer; background: transparent;
-}
-
-.sep { width: 1px; height: 20px; background: #dadce0; margin: 0 3px; }
-
-/* Menu bar */
+#titlebar .doc-name:hover { border: 1px solid #dadce0; padding: 1px 3px; }
 #menubar {
-  display: flex; align-items: center; height: 28px;
-  padding: 0 4px; background: #fff; border-bottom: 1px solid #eee;
-  font-size: 13px; user-select: none;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  display: flex; align-items: center; margin-left: 8px; gap: 0;
 }
 .menu-item {
   position: relative; padding: 4px 8px; border-radius: 4px;
-  cursor: pointer; color: #444; font-size: 13px;
+  cursor: pointer; color: #444; font-size: 14px; white-space: nowrap;
 }
 .menu-item:hover { background: #e8eaed; }
 .menu-dropdown {
-  position: absolute; top: 100%; left: 0; min-width: 240px;
-  background: #fff; border: 1px solid #dadce0; border-radius: 8px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 4px 0; z-index: 20000;
+  position: absolute; top: 100%; left: 0; min-width: 260px;
+  background: #fff; border-radius: 8px;
+  box-shadow: 0 2px 6px 2px rgba(60,64,67,.15), 0 1px 2px rgba(60,64,67,.3);
+  padding: 6px 0; z-index: 20000;
 }
 .menu-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 6px 12px; cursor: pointer; font-size: 13px; color: #333;
+  display: flex; align-items: center; gap: 10px;
+  padding: 6px 16px; cursor: pointer; font-size: 14px; color: #3c4043;
 }
-.menu-row:hover { background: #e8f0fe; }
+.menu-row:hover { background: #f1f3f4; }
 .menu-label { flex: 1; }
-.menu-shortcut { color: #999; font-size: 11px; }
-.menu-sep { height: 1px; background: #e0e0e0; margin: 4px 8px; }
+.menu-shortcut { color: #80868b; font-size: 12px; font-family: monospace; }
+.menu-sep { height: 1px; background: #e0e0e0; margin: 4px 0; }
+#titlebar .spacer { flex: 1; }
+#share-btn {
+  padding: 6px 20px; background: #c2e7ff; color: #001d35; border: none;
+  border-radius: 20px; font-size: 14px; font-weight: 500; cursor: pointer;
+  display: flex; align-items: center; gap: 6px;
+}
+#share-btn:hover { background: #a8d8ea; box-shadow: 0 1px 3px rgba(0,0,0,.2); }
 
-/* Editor canvas area */
-/* top: 28px (title) + 32px (row1) + 32px (row2) ≈ 92px */
+/* ─── Toolbar ─── */
+#toolbar {
+  position: fixed; top: 48px; left: 0; right: 0; height: 40px;
+  display: flex; align-items: center; gap: 2px; padding: 0 8px;
+  background: #edf2fa; border-radius: 0 0 0 0;
+  z-index: 10000; user-select: none; overflow-x: auto;
+}
+.tb { display: flex; align-items: center; gap: 1px; }
+
+#toolbar button, #toolbar .tb-btn {
+  width: 30px; height: 30px; border: none; border-radius: 4px;
+  background: transparent; cursor: pointer; display: flex;
+  align-items: center; justify-content: center; color: #444;
+  font-size: 14px; padding: 0; flex-shrink: 0;
+}
+#toolbar button:hover, #toolbar .tb-btn:hover { background: #d3e3fd; }
+#toolbar button.active { background: #c2d9f7; }
+
+#toolbar select {
+  height: 28px; padding: 2px 4px; border: 1px solid transparent;
+  border-radius: 4px; font-size: 13px; background: transparent;
+  cursor: pointer; color: #3c4043;
+}
+#toolbar select:hover { background: #d3e3fd; border-color: #c1c1c1; }
+#toolbar select:focus { outline: none; border-color: #1a73e8; }
+
+#toolbar input[type="color"] {
+  width: 24px; height: 24px; padding: 0; border: none;
+  cursor: pointer; background: transparent; border-radius: 3px;
+}
+
+.sep { width: 1px; height: 24px; background: #c1c7ce; margin: 0 4px; flex-shrink: 0; }
+
+/* ─── Editor ─── */
+/* top: 48px title + 40px toolbar = 88px */
 #editor_sdk {
-  position: fixed; top: 94px; left: 0; right: 0; bottom: 22px;
+  position: fixed; top: 88px; left: 0; right: 0; bottom: 20px;
   overflow: hidden;
 }
 
-/* Status bar */
+/* ─── Status bar ─── */
 #statusbar {
-  position: fixed; bottom: 0; left: 0; right: 0; height: 22px;
+  position: fixed; bottom: 0; left: 0; right: 0; height: 20px;
   background: #f8f9fa; border-top: 1px solid #dadce0;
   display: flex; align-items: center; padding: 0 12px;
-  font-size: 11px; color: #666; z-index: 10000;
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  font-size: 11px; color: #5f6368; z-index: 10000;
 }
 #statusbar span { margin-right: 16px; }
