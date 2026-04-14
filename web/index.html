@@ -65,16 +65,16 @@
     </div>
     <div class="sep"></div>
     <div class="tb">
-      <button id="tb-bold" onclick="window._api&&window._api.put_TextPrBold(undefined)" title="Bold (Ctrl+B)"><span class="mi">format_bold</span></button>
-      <button id="tb-italic" onclick="window._api&&window._api.put_TextPrItalic(undefined)" title="Italic (Ctrl+I)"><span class="mi">format_italic</span></button>
-      <button id="tb-underline" onclick="window._api&&window._api.put_TextPrUnderline(undefined)" title="Underline (Ctrl+U)"><span class="mi">format_underlined</span></button>
-      <label title="Font color" style="display:flex;align-items:center;cursor:pointer;position:relative"><span class="mi" style="font-size:18px">format_color_text</span><input type="color" value="#000000" onchange="window._api&&window._api.put_TextColor(AscCommon.CreateAscColor(parseInt(this.value.substr(1,2),16),parseInt(this.value.substr(3,2),16),parseInt(this.value.substr(5,2),16)))" style="position:absolute;bottom:-2px;left:2px;width:16px;height:6px;padding:0;border:none;cursor:pointer"></label>
-      <label title="Highlight" style="display:flex;align-items:center;cursor:pointer;position:relative"><span class="mi" style="font-size:18px">ink_highlighter</span><input type="color" value="#ffff00" onchange="if(window._api){var c=this.value;window._api.put_TextColor(AscCommon.CreateAscColor(parseInt(c.substr(1,2),16),parseInt(c.substr(3,2),16),parseInt(c.substr(5,2),16)))}" style="position:absolute;bottom:-2px;left:2px;width:16px;height:6px;padding:0;border:none;cursor:pointer"></label>
+      <button id="tb-bold" onclick="window._api&&window._api.put_TextPrBold(!window._fmtState.bold)" title="Bold (Ctrl+B)"><span class="mi">format_bold</span></button>
+      <button id="tb-italic" onclick="window._api&&window._api.put_TextPrItalic(!window._fmtState.italic)" title="Italic (Ctrl+I)"><span class="mi">format_italic</span></button>
+      <button id="tb-underline" onclick="window._api&&window._api.put_TextPrUnderline(!window._fmtState.underline)" title="Underline (Ctrl+U)"><span class="mi">format_underlined</span></button>
+      <label title="Font color" style="display:flex;align-items:center;cursor:pointer;position:relative"><span class="mi" style="font-size:18px">format_color_text</span><input type="color" value="#000000" onchange="if(window._api){var h=this.value;window._api.put_TextColor({r:parseInt(h.substr(1,2),16),g:parseInt(h.substr(3,2),16),b:parseInt(h.substr(5,2),16),Auto:false})}" style="position:absolute;bottom:-2px;left:2px;width:16px;height:6px;padding:0;border:none;cursor:pointer"></label>
+      <label title="Highlight color" style="display:flex;align-items:center;cursor:pointer;position:relative"><span class="mi" style="font-size:18px">ink_highlighter</span><input type="color" value="#ffff00" onchange="if(window._api){var h=this.value;window._api.put_LineHighLight(true,parseInt(h.substr(1,2),16),parseInt(h.substr(3,2),16),parseInt(h.substr(5,2),16))}" style="position:absolute;bottom:-2px;left:2px;width:16px;height:6px;padding:0;border:none;cursor:pointer"></label>
     </div>
     <div class="sep"></div>
     <div class="tb">
       <button onclick="var u=prompt('URL:');u&&window._api&&window._api.add_Hyperlink({Value:u,Text:u||'Link'})" title="Insert link (Ctrl+K)"><span class="mi">link</span></button>
-      <button onclick="window._api&&window._api.asc_addComment()" title="Add comment (Ctrl+Alt+M)"><span class="mi">add_comment</span></button>
+      <button onclick="if(window._api){var t=prompt('Comment:');if(t){var c=new Asc.asc_CCommentData();c.asc_putText(t);c.asc_putUserName('User');window._api.asc_addComment(c)}}" title="Add comment (Ctrl+Alt+M)"><span class="mi">add_comment</span></button>
       <button onclick="document.getElementById('img-picker').click()" title="Insert image"><span class="mi">image</span></button>
     </div>
     <div class="sep"></div>
@@ -111,6 +111,9 @@
 
   <script>
     window['AscNotLoadAllScript'] = true;
+
+    // Track current formatting state for toggle buttons
+    window._fmtState = { bold: false, italic: false, underline: false, strikeout: false };
 
     // Prevent toolbar/menubar clicks from stealing focus from editor canvas.
     // Without this, formatting buttons don't work because sdkjs needs canvas focus.
@@ -261,8 +264,37 @@
         });
 
         api.asc_registerCallback('asc_onError', function(id, level) {
-          if (id !== -25) // ignore non-critical CoAuth disconnect
-            console.warn('[rudra] Error:', id, 'level:', level);
+          if (id !== -25) console.warn('[rudra] Error:', id, 'level:', level);
+        });
+
+        // Track formatting state for toolbar toggle buttons
+        api.asc_registerCallback('asc_onBold', function(v) {
+          window._fmtState.bold = !!v;
+          var el = document.getElementById('tb-bold');
+          if (el) el.classList.toggle('active', !!v);
+        });
+        api.asc_registerCallback('asc_onItalic', function(v) {
+          window._fmtState.italic = !!v;
+          var el = document.getElementById('tb-italic');
+          if (el) el.classList.toggle('active', !!v);
+        });
+        api.asc_registerCallback('asc_onUnderline', function(v) {
+          window._fmtState.underline = !!v;
+          var el = document.getElementById('tb-underline');
+          if (el) el.classList.toggle('active', !!v);
+        });
+        api.asc_registerCallback('asc_onStrikeout', function(v) {
+          window._fmtState.strikeout = !!v;
+          var el = document.getElementById('tb-strike');
+          if (el) el.classList.toggle('active', !!v);
+        });
+        api.asc_registerCallback('asc_onFontFamily', function(f) {
+          var el = document.getElementById('tb-font');
+          if (el && f && f.get_Name) el.value = f.get_Name();
+        });
+        api.asc_registerCallback('asc_onFontSize', function(s) {
+          var el = document.getElementById('tb-size');
+          if (el && s) el.value = s;
         });
 
         // Open blank document in offline mode
