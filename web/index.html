@@ -136,17 +136,9 @@
       // --- Patches for standalone offline mode ---
 
       // Patch 0: Fix mouse-to-cursor coordinate sync.
-      // sdkjs caches the editor div position (checkBodyOffset) only on Resize.
-      // Our toolbar shifts the editor div down, but the cached offset stays stale.
-      // Force a full resize after API creation to recalculate all positions.
-      // Also refresh on every mousedown for safety.
-      var editorDiv = document.getElementById('editor_sdk');
-      editorDiv.addEventListener('mousedown', function() {
-        if (window._api && window._api.WordControl) {
-          var wc = window._api.WordControl;
-          if (wc.checkBodyOffset) wc.checkBodyOffset();
-        }
-      }, true);
+      // The toolbar shifts editor_sdk down. sdkjs caches position in
+      // checkBodyOffset() but only on Resize. We patch ConvertCoordsFromCursor2
+      // to always refresh the offset before conversion.
 
       // Patch 1: Font name lookup — g_fonts_selection_bin is empty so
       // GetFontFileWeb always returns ASCW3. Override to use g_map_font_index.
@@ -184,6 +176,17 @@
         var api = new Asc.asc_docs_api({ 'id-view': 'editor_sdk' });
         window._api = api;
         window.editor = api;
+
+        // Patch ConvertCoordsFromCursor2 to always refresh editor position.
+        // Without this, the toolbar offset makes click coordinates wrong.
+        var dd = api.WordControl.m_oDrawingDocument;
+        if (dd && dd.ConvertCoordsFromCursor2) {
+          var _origConvert = dd.ConvertCoordsFromCursor2.bind(dd);
+          dd.ConvertCoordsFromCursor2 = function(x, y, zoomVal, isRulers) {
+            api.WordControl.checkBodyOffset();
+            return _origConvert(x, y, zoomVal, isRulers);
+          };
+        }
 
         // Wire offline CoAuthoring callbacks
         api.CoAuthoringApi.onFirstLoadChangesEnd = function() {
