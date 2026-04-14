@@ -107,6 +107,7 @@ export function createMenuBar(api) {
       row.innerHTML = '<span class="mi" style="font-size:16px;width:20px">' + (item.icon || '') + '</span>' +
         '<span class="menu-label">' + item.label + '</span>' +
         (item.shortcut ? '<span class="menu-shortcut">' + item.shortcut + '</span>' : '');
+      row.onmousedown = function(e) { e.preventDefault(); }; // keep editor focus
       row.onclick = function(e) {
         e.stopPropagation();
         closeAllMenus();

@@ -112,6 +112,15 @@
   <script>
     window['AscNotLoadAllScript'] = true;
 
+    // Prevent toolbar/menubar clicks from stealing focus from editor canvas.
+    // Without this, formatting buttons don't work because sdkjs needs canvas focus.
+    document.getElementById('toolbar').addEventListener('mousedown', function(e) {
+      if (e.target.tagName !== 'SELECT' && e.target.tagName !== 'INPUT') e.preventDefault();
+    });
+    document.getElementById('titlebar').addEventListener('mousedown', function(e) {
+      if (e.target.tagName !== 'INPUT' && !e.target.classList.contains('doc-name')) e.preventDefault();
+    });
+
     // Fix Chrome passive event listener warnings from OnlyOffice mousewheel handler.
     // sdkjs sets document.body.onmousewheel which Chrome treats as passive,
     // then calls preventDefault() inside it, causing console spam.
