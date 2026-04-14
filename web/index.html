@@ -135,6 +135,17 @@
 
       // --- Patches for standalone offline mode ---
 
+      // Patch 0: Fix mouse-to-cursor coordinate sync.
+      // sdkjs caches the editor div position (checkBodyOffset) only on Resize.
+      // Our toolbar shifts the editor div down, but the cached offset stays at 0.
+      // Patch: refresh offset on every mousedown so coordinates are accurate.
+      var editorDiv = document.getElementById('editor_sdk');
+      editorDiv.addEventListener('mousedown', function() {
+        if (window._api && window._api.WordControl && window._api.WordControl.checkBodyOffset) {
+          window._api.WordControl.checkBodyOffset();
+        }
+      }, true); // capture phase — runs before sdkjs handler
+
       // Patch 1: Font name lookup — g_fonts_selection_bin is empty so
       // GetFontFileWeb always returns ASCW3. Override to use g_map_font_index.
       var origGetFontFileWeb = AscFonts.g_fontApplication.GetFontFileWeb;
