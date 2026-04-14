@@ -11030,6 +11030,13 @@ fn node_to_json(model: &DocumentModel, nid: NodeId, node: &Node) -> String {
     if node.attributes.get_bool(&AttributeKey::WidowControl) == Some(true) {
         json.push_str(",\"widowControl\":true");
     }
+    // Image dimensions
+    if let Some(w) = node.attributes.get_f64(&AttributeKey::ImageWidth) {
+        json.push_str(&format!(",\"imageWidth\":{}", w));
+    }
+    if let Some(h) = node.attributes.get_f64(&AttributeKey::ImageHeight) {
+        json.push_str(&format!(",\"imageHeight\":{}", h));
+    }
     if let Some(AttributeValue::Color(c)) = node.attributes.get(&AttributeKey::Color) {
         json.push_str(&format!(",\"color\":\"#{:02x}{:02x}{:02x}\"", c.r, c.g, c.b));
     }

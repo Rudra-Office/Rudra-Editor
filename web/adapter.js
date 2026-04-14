@@ -63,17 +63,18 @@ export async function openDocx(docxBytes, api) {
           contentIndex++;
         }
       }
-      // Other types (Image, Section, etc.) — skip for now
+      // Images inside paragraphs are handled at paragraph level
+      // Top-level images are not standard DOCX structure — skip
     } catch (e) {
       // Skip problematic elements
     }
   }
 
   // Ensure at least one paragraph exists
-  if (paraCount === 0) {
+  if (contentIndex === 0) {
     var emptyPara = new AscWord.Paragraph(logicDoc, false);
     logicDoc.Internal_Content_Add(0, emptyPara);
-    paraCount = 1;
+    contentIndex = 1;
   }
 
   // Re-enable and render
@@ -87,7 +88,14 @@ export async function openDocx(docxBytes, api) {
   logicDoc.Recalculate();
   api.Resize();
 
-  console.log('[adapter] open: ' + paraCount + ' paragraphs loaded');
+  // Sync cursor with canvas after recalculate
+  logicDoc.Document_UpdateSelectionState();
+  logicDoc.Document_UpdateInterfaceState();
+  if (api.WordControl.m_oDrawingDocument) {
+    api.WordControl.m_oDrawingDocument.UpdateTargetFromPaint = true;
+  }
+
+  console.log('[adapter] open: ' + contentIndex + ' elements loaded');
 }
 
 /**
@@ -149,6 +157,31 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
             para.Internal_Content_Add(insertPos, currentRun);
           }
           currentRun.Add_ToContent(-1, new AscWord.CRunTab(), false);
+
+        } else if (childInfo.type === 'Image') {
+          // Inline image — get data URL and dimensions from s1engine
+          try {
+            var imgDataUrl = wasmDoc.get_image_data_url(paraInfo.children[i]);
+            var imgW = childInfo.imageWidth || 100; // pt
+            var imgH = childInfo.imageHeight || 100;
+            // Convert pt to mm for sdkjs (1pt = 0.3528mm)
+            var wMm = imgW * 0.3528;
+            var hMm = imgH * 0.3528;
+            // Use sdkjs API to add inline image via a drawing
+            var drawDoc = logicDoc.DrawingDocument || logicDoc.Get_DrawingDocument();
+            if (drawDoc && api) {
+              // Create image via ParaDrawing
+              var drawing = new AscCommonWord.ParaDrawing(wMm, hMm, null, drawDoc, logicDoc, para);
+              var imageObj = AscFormat.CreateImage(imgDataUrl, 0, 0, wMm, hMm);
+              drawing.Set_GraphicObject(imageObj);
+              drawing.Set_DrawingType(1); // inline
+              insertPos = Math.max(para.Content.length - 1, 0);
+              para.Internal_Content_Add(insertPos, drawing);
+              currentRun = null;
+            }
+          } catch(imgErr) {
+            // Image loading failed — skip silently
+          }
 
         } else if (childInfo.type === 'PageBreak' || childInfo.type === 'ColumnBreak') {
           // Page/column break → CRunBreak inside a run
