@@ -320,7 +320,7 @@ Next actions:
 ---
 
 ## Milestone 5: Layout and Object Fidelity
-**Status**: IN PROGRESS
+**Status**: COMPLETE
 **Owner**: `web` + `engine` + `qa`
 
 Goal:
@@ -570,7 +570,7 @@ Next actions:
 | M2: Serve `web/` by default | COMPLETE | Server discovers `./web` first |
 | M3: Structural Import | COMPLETE | Paragraphs, runs, formatting, breaks, alignment, colors |
 | M4: Structural Export | COMPLETE | Paragraphs, alignment, headings, line breaks, tabs |
-| M5: Layout/Object Fidelity | IN PROGRESS | Run formatting export works; tables/images pending |
+| M5: Layout/Object Fidelity | COMPLETE | Run formatting, tables, images, hyperlinks |
 | M6: Editing Authority | COMPLETE | ADR-001: s1engine-first |
 | M7: Collaboration | NOT STARTED | Needs mapping to new web architecture |
 | M8: Fidelity Validation | COMPLETE | 29 tests, 2 fixture files, round-trip validation |
