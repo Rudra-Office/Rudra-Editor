@@ -11030,6 +11030,35 @@ fn node_to_json(model: &DocumentModel, nid: NodeId, node: &Node) -> String {
     if node.attributes.get_bool(&AttributeKey::WidowControl) == Some(true) {
         json.push_str(",\"widowControl\":true");
     }
+    // Indentation
+    if let Some(v) = node.attributes.get_f64(&AttributeKey::IndentLeft) {
+        json.push_str(&format!(",\"indentLeft\":{:.1}", v));
+    }
+    if let Some(v) = node.attributes.get_f64(&AttributeKey::IndentRight) {
+        json.push_str(&format!(",\"indentRight\":{:.1}", v));
+    }
+    if let Some(v) = node.attributes.get_f64(&AttributeKey::IndentFirstLine) {
+        json.push_str(&format!(",\"indentFirstLine\":{:.1}", v));
+    }
+    // Line spacing
+    if let Some(ls) = node.attributes.get_line_spacing(&AttributeKey::LineSpacing) {
+        let val = match ls {
+            s1_model::LineSpacing::Single => 1.0,
+            s1_model::LineSpacing::OnePointFive => 1.5,
+            s1_model::LineSpacing::Double => 2.0,
+            s1_model::LineSpacing::Multiple(v) => v as f64,
+            s1_model::LineSpacing::Exact(v) => v as f64,
+            s1_model::LineSpacing::AtLeast(v) => v as f64,
+            _ => 1.0,
+        };
+        json.push_str(&format!(",\"lineSpacing\":{:.2}", val));
+    }
+    if let Some(v) = node.attributes.get_f64(&AttributeKey::SpacingBefore) {
+        json.push_str(&format!(",\"spaceBefore\":{:.1}", v));
+    }
+    if let Some(v) = node.attributes.get_f64(&AttributeKey::SpacingAfter) {
+        json.push_str(&format!(",\"spaceAfter\":{:.1}", v));
+    }
     // List info
     if let Some(AttributeValue::ListInfo(li)) = node.attributes.get(&AttributeKey::ListInfo) {
         let fmt_name = match li.num_format {
