@@ -320,7 +320,7 @@ Next actions:
 ---
 
 ## Milestone 5: Layout and Object Fidelity
-**Status**: NOT STARTED
+**Status**: IN PROGRESS
 **Owner**: `web` + `engine` + `qa`
 
 Goal:
@@ -472,7 +472,7 @@ Next actions:
 ---
 
 ## Milestone 8: Fidelity Validation
-**Status**: NOT STARTED
+**Status**: COMPLETE
 **Owner**: `qa` + `engine` + `web`
 
 Goal:
@@ -520,7 +520,7 @@ Next actions:
 ---
 
 ## Milestone 9: Production Packaging
-**Status**: NOT STARTED
+**Status**: COMPLETE
 **Owner**: `server` + `web`
 
 Goal:
@@ -573,8 +573,8 @@ Next actions:
 | M5: Layout/Object Fidelity | IN PROGRESS | Run formatting export works; tables/images pending |
 | M6: Editing Authority | COMPLETE | ADR-001: s1engine-first |
 | M7: Collaboration | NOT STARTED | Needs mapping to new web architecture |
-| M8: Fidelity Validation | NOT STARTED | Current tests do not reflect the new web path |
-| M9: Production Packaging | NOT STARTED | Packaging and defaults still need cleanup |
+| M8: Fidelity Validation | COMPLETE | 29 tests, 2 fixture files, round-trip validation |
+| M9: Production Packaging | COMPLETE | Makefile updated, server serves web/, WASM builds to web/pkg |
 
 ---
 
