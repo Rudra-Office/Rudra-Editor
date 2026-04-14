@@ -47,14 +47,26 @@ export async function openDocx(docxBytes, api) {
   }
 
   // Build structured content from s1engine model
-  var paraCount = 0;
+  var contentIndex = 0;
   for (var i = 0; i < bodyChildren.length; i++) {
-    if (bodyChildren[i].type !== 'Paragraph') continue;
-
-    var paraInfo = JSON.parse(doc.node_info_json(bodyChildren[i].id));
-    var para = buildParagraph(logicDoc, doc, paraInfo);
-    logicDoc.Internal_Content_Add(paraCount, para);
-    paraCount++;
+    var child = bodyChildren[i];
+    try {
+      if (child.type === 'Paragraph') {
+        var paraInfo = JSON.parse(doc.node_info_json(child.id));
+        var para = buildParagraph(logicDoc, doc, paraInfo);
+        logicDoc.Internal_Content_Add(contentIndex, para);
+        contentIndex++;
+      } else if (child.type === 'Table') {
+        var table = buildTable(logicDoc, doc, child.id);
+        if (table) {
+          logicDoc.Internal_Content_Add(contentIndex, table);
+          contentIndex++;
+        }
+      }
+      // Other types (Image, Section, etc.) — skip for now
+    } catch (e) {
+      // Skip problematic elements
+    }
   }
 
   // Ensure at least one paragraph exists
@@ -233,6 +245,68 @@ function buildRun(para, wasmDoc, runInfo) {
   }
 
   return run;
+}
+
+/**
+ * Build an OnlyOffice CTable from s1engine table node.
+ * Structure: Table → TableRow[] → TableCell[] → Paragraph[]
+ */
+function buildTable(logicDoc, wasmDoc, tableId) {
+  var tableInfo = JSON.parse(wasmDoc.node_info_json(tableId));
+  if (!tableInfo.children || tableInfo.children.length === 0) return null;
+
+  // Count rows and max columns
+  var rowInfos = [];
+  var maxCols = 0;
+  for (var r = 0; r < tableInfo.children.length; r++) {
+    var rowInfo = JSON.parse(wasmDoc.node_info_json(tableInfo.children[r]));
+    if (rowInfo.type !== 'TableRow') continue;
+    rowInfos.push(rowInfo);
+    if (rowInfo.children) maxCols = Math.max(maxCols, rowInfo.children.length);
+  }
+
+  if (rowInfos.length === 0 || maxCols === 0) return null;
+
+  // Create table with CTable constructor
+  var drawDoc = logicDoc.DrawingDocument || (logicDoc.Get_DrawingDocument ? logicDoc.Get_DrawingDocument() : null);
+  var table = new AscWord.CTable(drawDoc, logicDoc, true, rowInfos.length, maxCols, [], false);
+
+  // Populate each cell
+  for (var r = 0; r < rowInfos.length; r++) {
+    var rowInfo = rowInfos[r];
+    if (!rowInfo.children) continue;
+
+    var tableRow = table.Content[r];
+    if (!tableRow) continue;
+
+    for (var c = 0; c < rowInfo.children.length; c++) {
+      var cellInfo = JSON.parse(wasmDoc.node_info_json(rowInfo.children[c]));
+      if (cellInfo.type !== 'TableCell') continue;
+
+      var tableCell = tableRow.Content[c];
+      if (!tableCell || !tableCell.Content) continue;
+
+      // Build cell content (paragraphs)
+      if (cellInfo.children && cellInfo.children.length > 0) {
+        // Remove default empty paragraph
+        while (tableCell.Content.Content.length > 0) {
+          tableCell.Content.Internal_Content_Remove(0, 1);
+        }
+
+        for (var p = 0; p < cellInfo.children.length; p++) {
+          try {
+            var cellChildInfo = JSON.parse(wasmDoc.node_info_json(cellInfo.children[p]));
+            if (cellChildInfo.type === 'Paragraph') {
+              var para = buildParagraph(tableCell.Content, wasmDoc, cellChildInfo);
+              tableCell.Content.Internal_Content_Add(p, para);
+            }
+          } catch (e) {}
+        }
+      }
+    }
+  }
+
+  return table;
 }
 
 // ──────────────────────────────────────────────────────────────────────────

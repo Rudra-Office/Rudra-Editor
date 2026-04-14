@@ -253,11 +253,11 @@ fn m5_line_break_in_text() {
 // ──────────────────────────────────────────────────────────────────
 
 #[test]
-fn scope_tables_not_yet_imported() {
-    // Tables are M5 scope. This test documents the current limitation.
-    let doc = engine().create();
-    let text = doc.to_plain_text();
-    assert!(text.trim().is_empty(), "Empty doc has no tables — M5 will add table support");
+fn m5_table_node_types_exist() {
+    // Tables are now in M5 scope — verify the model supports them
+    assert_eq!(format!("{:?}", NodeType::Table), "Table");
+    assert_eq!(format!("{:?}", NodeType::TableRow), "TableRow");
+    assert_eq!(format!("{:?}", NodeType::TableCell), "TableCell");
 }
 
 #[test]
