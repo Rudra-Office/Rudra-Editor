@@ -177,13 +177,46 @@
         window._api = api;
         window.editor = api;
 
-        // Patch ConvertCoordsFromCursor2 to always refresh editor position.
-        // Without this, the toolbar offset makes click coordinates wrong.
+        // Patch coordinate sync for the custom shell.
+        // OnlyOffice's default checkBodyOffset uses jQuery.offset(), which is
+        // fragile in this flex + custom-toolbar layout. Mouse events are in
+        // page coordinates, so derive editor offsets from rect + page scroll.
+        if (api.WordControl && api.WordControl.checkBodyOffset) {
+          api.WordControl.checkBodyOffset = function() {
+            var el = document.getElementById(this.Name);
+            if (!el) return;
+
+            var rect = el.getBoundingClientRect();
+            var x = rect.left + window.pageXOffset;
+            var y = rect.top + window.pageYOffset;
+
+            if (AscCommon.AscBrowser.isOffsetUsedZoom()) {
+              x *= AscCommon.AscBrowser.zoom;
+              y *= AscCommon.AscBrowser.zoom;
+            }
+
+            this.X = x;
+            this.Y = y;
+          };
+        }
+
+        // Refresh editor position before every cursor->document coordinate conversion.
         var dd = api.WordControl.m_oDrawingDocument;
         if (dd && dd.ConvertCoordsFromCursor2) {
           var _origConvert = dd.ConvertCoordsFromCursor2.bind(dd);
+          var _convertDbg = 0;
           dd.ConvertCoordsFromCursor2 = function(x, y, zoomVal, isRulers) {
             api.WordControl.checkBodyOffset();
+            if (_convertDbg < 5) {
+              var wc = api.WordControl;
+              var off = dd.GetMainOffset();
+              var rect = document.getElementById('editor_sdk').getBoundingClientRect();
+              console.log('[cursor] input y=' + y + ' wc.Y=' + wc.Y +
+                ' mainOff.y=' + off.y.toFixed(1) + ' rect.top=' + rect.top.toFixed(1) +
+                ' pageYOff=' + window.pageYOffset +
+                ' finalY=' + (y - wc.Y - off.y).toFixed(1));
+              _convertDbg++;
+            }
             return _origConvert(x, y, zoomVal, isRulers);
           };
         }
@@ -205,6 +238,9 @@
               api.WordControl.OnResize(true);
             } else {
               api.Resize();
+            }
+            if (AscCommon && AscCommon.g_inputContext && AscCommon.g_inputContext.onResize) {
+              AscCommon.g_inputContext.onResize('editor_sdk');
             }
           }, 200);
         });
