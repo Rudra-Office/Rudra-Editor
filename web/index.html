@@ -202,24 +202,12 @@
         }
 
         // Refresh editor position before every cursor->document coordinate conversion.
+        // Refresh editor position before every coordinate conversion.
         var dd = api.WordControl.m_oDrawingDocument;
         if (dd && dd.ConvertCoordsFromCursor2) {
           var _origConvert = dd.ConvertCoordsFromCursor2.bind(dd);
-          var _convertDbg = 0;
           dd.ConvertCoordsFromCursor2 = function(x, y, zoomVal, isRulers) {
             api.WordControl.checkBodyOffset();
-            // Only log clicks inside document area (y > toolbar+ruler)
-            if (_convertDbg < 10 && y > 80 && AscCommon.global_mouseEvent.Type === 1) {
-              var wc = api.WordControl;
-              var off = dd.GetMainOffset();
-              var totalOff = wc.Y + off.y;
-              var result = _origConvert(x, y, zoomVal, isRulers);
-              console.log('[cursor] mouseY=' + y + ' offset=' + totalOff.toFixed(1) +
-                ' canvasY=' + (y - totalOff).toFixed(1) +
-                ' → page=' + result.Page + ' docY=' + result.Y.toFixed(1) + 'mm');
-              _convertDbg++;
-              return result;
-            }
             return _origConvert(x, y, zoomVal, isRulers);
           };
         }
