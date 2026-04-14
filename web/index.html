@@ -137,14 +137,16 @@
 
       // Patch 0: Fix mouse-to-cursor coordinate sync.
       // sdkjs caches the editor div position (checkBodyOffset) only on Resize.
-      // Our toolbar shifts the editor div down, but the cached offset stays at 0.
-      // Patch: refresh offset on every mousedown so coordinates are accurate.
+      // Our toolbar shifts the editor div down, but the cached offset stays stale.
+      // Force a full resize after API creation to recalculate all positions.
+      // Also refresh on every mousedown for safety.
       var editorDiv = document.getElementById('editor_sdk');
       editorDiv.addEventListener('mousedown', function() {
-        if (window._api && window._api.WordControl && window._api.WordControl.checkBodyOffset) {
-          window._api.WordControl.checkBodyOffset();
+        if (window._api && window._api.WordControl) {
+          var wc = window._api.WordControl;
+          if (wc.checkBodyOffset) wc.checkBodyOffset();
         }
-      }, true); // capture phase — runs before sdkjs handler
+      }, true);
 
       // Patch 1: Font name lookup — g_fonts_selection_bin is empty so
       // GetFontFileWeb always returns ASCW3. Override to use g_map_font_index.
@@ -192,8 +194,16 @@
         api.asc_registerCallback('asc_onDocumentContentReady', function() {
           console.log('[rudra] Document content ready');
           try { api.put_TextPrUnderline(false); } catch(e) {}
-          // Resize after toolbar changes available height
-          setTimeout(function() { api.Resize(); }, 100);
+          // Full resize to recalculate all positions after toolbar changes layout.
+          // WordControl.OnResize(true) recalculates editor div position, ruler
+          // offsets, canvas dimensions, and cached coordinate offsets.
+          setTimeout(function() {
+            if (api.WordControl) {
+              api.WordControl.OnResize(true);
+            } else {
+              api.Resize();
+            }
+          }, 200);
         });
 
         api.asc_registerCallback('asc_onError', function(id, level) {
