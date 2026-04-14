@@ -8,7 +8,16 @@
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-  <div id="toolbar">
+  <!-- Title bar + Menu bar -->
+  <div id="titlebar" style="position:fixed;top:0;left:0;right:0;height:28px;display:flex;align-items:center;padding:0 12px;background:#fff;z-index:10001;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif">
+    <span style="font-size:16px;margin-right:8px">📝</span>
+    <span id="doc-title" style="font-size:14px;font-weight:500;margin-right:16px">Untitled document</span>
+    <div id="menubar"></div>
+    <span style="flex:1"></span>
+    <button onclick="window.rudra_save&&window.rudra_save()" style="padding:4px 16px;background:#1a73e8;color:#fff;border:none;border-radius:16px;font-size:13px;cursor:pointer;display:none" id="share-btn">Share</button>
+  </div>
+
+  <div id="toolbar" style="top:28px">
     <!-- Row 1: File, Edit, Styles, Zoom -->
     <div class="tb-row">
       <div class="tb-group">
@@ -276,6 +285,9 @@
 
         api.asc_setDocInfo(docInfo);
         api.asc_LoadDocument();
+
+        // Initialize menu bar
+        import('./menubar.js').then(function(m) { m.createMenuBar(api); }).catch(function() {});
 
         // Status bar updates
         api.asc_registerCallback('asc_onCountPages', function(count) {

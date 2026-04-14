@@ -51,9 +51,36 @@ html, body { height: 100%; overflow: hidden; }
 
 .sep { width: 1px; height: 20px; background: #dadce0; margin: 0 3px; }
 
+/* Menu bar */
+#menubar {
+  display: flex; align-items: center; height: 28px;
+  padding: 0 4px; background: #fff; border-bottom: 1px solid #eee;
+  font-size: 13px; user-select: none;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+}
+.menu-item {
+  position: relative; padding: 4px 8px; border-radius: 4px;
+  cursor: pointer; color: #444; font-size: 13px;
+}
+.menu-item:hover { background: #e8eaed; }
+.menu-dropdown {
+  position: absolute; top: 100%; left: 0; min-width: 240px;
+  background: #fff; border: 1px solid #dadce0; border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.15); padding: 4px 0; z-index: 20000;
+}
+.menu-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 6px 12px; cursor: pointer; font-size: 13px; color: #333;
+}
+.menu-row:hover { background: #e8f0fe; }
+.menu-label { flex: 1; }
+.menu-shortcut { color: #999; font-size: 11px; }
+.menu-sep { height: 1px; background: #e0e0e0; margin: 4px 8px; }
+
 /* Editor canvas area */
+/* top: 28px (title) + 32px (row1) + 32px (row2) ≈ 92px */
 #editor_sdk {
-  position: fixed; top: 66px; left: 0; right: 0; bottom: 22px;
+  position: fixed; top: 94px; left: 0; right: 0; bottom: 22px;
   overflow: hidden;
 }
 
