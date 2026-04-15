@@ -152,18 +152,9 @@ function buildParagraph(logicDoc, wasmDoc, paraInfo) {
     }
   }
 
-  // Indentation (points → twips: 1pt = 20twips for sdkjs Ind)
-  if (paraInfo.indentLeft !== undefined) para.Pr.Ind.Left = paraInfo.indentLeft * 20;
-  if (paraInfo.indentRight !== undefined) para.Pr.Ind.Right = paraInfo.indentRight * 20;
-  if (paraInfo.indentFirstLine !== undefined) para.Pr.Ind.FirstLine = paraInfo.indentFirstLine * 20;
-
-  // Spacing
-  if (paraInfo.lineSpacing !== undefined && paraInfo.lineSpacing > 0) {
-    para.Pr.Spacing.Line = paraInfo.lineSpacing;
-    para.Pr.Spacing.LineRule = 4; // linerule_Auto (multiplier)
-  }
-  if (paraInfo.spaceBefore !== undefined) para.Pr.Spacing.Before = paraInfo.spaceBefore * 20;
-  if (paraInfo.spaceAfter !== undefined) para.Pr.Spacing.After = paraInfo.spaceAfter * 20;
+  // NOTE: Indentation and spacing mapping REMOVED — was using wrong unit
+  // conversion (x20) causing 4-page docs to become 238 pages.
+  // TODO: Investigate correct units (s1engine pt vs sdkjs twips/mm) before re-adding.
 
   // Paragraph layout properties — set explicit defaults to override template
   // Default: allow paragraphs to split across pages, enable widow/orphan control
