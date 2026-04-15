@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html>
+<head><title>DOCY Binary Test</title></head>
+<body>
+<h3>DOCY Binary Format Debugger</h3>
+<button onclick="testEmpty()">Test Empty DOCY</button>
+<button onclick="testOnePara()">Test One Paragraph</button>
+<button onclick="testKnownGood()">Test Known Good (getEmpty)</button>
+<pre id="log" style="background:#f0f0f0;padding:10px;max-height:80vh;overflow:auto"></pre>
+<script>
+function log(msg) { document.getElementById('log').textContent += msg + '\n'; }
+
+// Build a DOCY binary from scratch in JS, matching sdkjs format exactly
+function buildDocy(tables) {
+    var buf = [];
+    var mtCount = tables.length;
+
+    // Main table: count + 128 items × 5 bytes
+    buf.push(mtCount);
+    var itemsStart = buf.length;
+    for (var i = 0; i < 128 * 5; i++) buf.push(0); // reserve
+
+    // Write each table
+    for (var i = 0; i < tables.length; i++) {
+        var offset = buf.length;
+        // Patch table item
+        var pos = itemsStart + i * 5;
+        buf[pos] = tables[i].type;
+        buf[pos + 1] = offset & 0xFF;
+        buf[pos + 2] = (offset >> 8) & 0xFF;
+        buf[pos + 3] = (offset >> 16) & 0xFF;
+        buf[pos + 4] = (offset >> 24) & 0xFF;
+        // Write table data
+        for (var j = 0; j < tables[i].data.length; j++) {
+            buf.push(tables[i].data[j]);
+        }
+    }
+
+    var arr = new Uint8Array(buf);
+    var b64 = btoa(String.fromCharCode.apply(null, arr));
+    return 'DOCY;v5;' + arr.length + ';' + b64;
+}
+
+// Helper: write long LE
+function longLE(v) { return [v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF]; }
+
+// Helper: write string (UTF-16LE with char count prefix)
+function writeStr16(s) {
+    var chars = [];
+    for (var i = 0; i < s.length; i++) {
+        var c = s.charCodeAt(i);
+        chars.push(c & 0xFF, (c >> 8) & 0xFF);
+    }
+    return longLE(s.length).concat(chars);
+}
+
+// Signature table (no length prefix)
+function sigTable() {
+    return { type: 0, data: [0, 4, 5, 0, 0, 0] }; // Version=5
+}
+
+// Settings table (with length prefix)
+function settingsTable() {
+    // Just default tab stop: type=9, lenType=4(Long), value=720
+    var content = [9, 4].concat(longLE(720));
+    return { type: 9, data: longLE(content.length).concat(content) };
+}
+
+// Empty style table
+function emptyStyleTable() {
+    // DefpPr(0) + empty, DefrPr(1) + empty, Styles(2) + empty
+    var content = [
+        0, 6].concat(longLE(0),  // DefpPr: Variable, length 0
+        [1, 6], longLE(0),       // DefrPr: Variable, length 0
+        [2, 6], longLE(0));      // Styles: Variable, length 0
+    return { type: 5, data: longLE(content.length).concat(content) };
+}
+
+// Empty document table
+function emptyDocTable() {
+    return { type: 6, data: longLE(0) }; // length 0 = no content
+}
+
+// Empty other table
+function emptyOtherTable() {
+    return { type: 7, data: longLE(0) };
+}
+
+function testEmpty() {
+    document.getElementById('log').textContent = '';
+    log('=== Testing Empty DOCY ===');
+    var docy = buildDocy([sigTable(), settingsTable(), emptyStyleTable(), emptyDocTable(), emptyOtherTable()]);
+    log('DOCY length: ' + docy.length);
+    log('First 60 chars: ' + docy.substring(0, 60));
+
+    try {
+        window._api.OpenDocumentFromBin('', docy);
+        log('SUCCESS: Empty DOCY opened!');
+    } catch(e) {
+        log('ERROR: ' + e.message);
+        log('Stack: ' + e.stack.split('\n').slice(0,5).join('\n'));
+    }
+}
+
+function testOnePara() {
+    document.getElementById('log').textContent = '';
+    log('=== Testing One Paragraph DOCY ===');
+
+    // Build a paragraph with "Hello World"
+    var text = 'Hello World';
+    var textContent = [0]; // type 0 = text run content
+    textContent = textContent.concat(writeStr16(text));
+
+    // Run content wrapper: type=8(Content), Variable, length, data
+    var runContent = [8, 6].concat(longLE(textContent.length), textContent);
+
+    // Run properties: type=1(rPr), Variable, length 0 (empty)
+    var runProps = [1, 6].concat(longLE(0));
+
+    // Full run: type=0(run), Variable, length, (rPr + content)
+    var runData = runProps.concat(runContent);
+    var run = [0, 6].concat(longLE(runData.length), runData);
+
+    // Paragraph content: type=2(Content), Variable, length, runs
+    var paraContent = [2, 6].concat(longLE(run.length), run);
+
+    // Paragraph properties: type=1(pPr), Variable, length 0
+    var paraProps = [1, 6].concat(longLE(0));
+
+    // Full paragraph: type=0(Par), Variable, length, (pPr + content)
+    var paraData = paraProps.concat(paraContent);
+    var para = [0, 6].concat(longLE(paraData.length), paraData);
+
+    // Document table = length prefix + paragraphs
+    var docData = longLE(para.length).concat(para);
+
+    var docy = buildDocy([
+        sigTable(),
+        settingsTable(),
+        emptyStyleTable(),
+        { type: 6, data: docData },
+        emptyOtherTable()
+    ]);
+
+    log('DOCY length: ' + docy.length);
+
+    try {
+        window._api.OpenDocumentFromBin('', docy);
+        log('SUCCESS: One paragraph DOCY opened!');
+    } catch(e) {
+        log('ERROR: ' + e.message);
+        log('Stack: ' + e.stack.split('\n').slice(0,5).join('\n'));
+    }
+}
+
+function testKnownGood() {
+    document.getElementById('log').textContent = '';
+    log('=== Testing Known Good (getEmpty) ===');
+    try {
+        var docy = AscCommon.getEmpty();
+        log('Known good length: ' + docy.length);
+        window._api.OpenDocumentFromBin('', docy);
+        log('SUCCESS: Known good DOCY opened!');
+    } catch(e) {
+        log('ERROR: ' + e.message);
+    }
+}
+</script>
+</body>
+</html>
