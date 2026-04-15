@@ -8,3 +8,7 @@ license = "AGPL-3.0-or-later"
 [dependencies]
 s1-model = { path = "../s1-model" }
 base64 = "0.22"
+
+[dev-dependencies]
+s1engine = { path = "../s1engine" }
+s1-model = { path = "../s1-model" }

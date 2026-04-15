@@ -55,14 +55,17 @@ impl DocyWriter {
         self.buf.extend_from_slice(&v.to_le_bytes());
     }
 
-    /// Write UTF-8 string with 4-byte length prefix.
+    /// Write string in DOCY format: 4-byte char count + UTF-16LE characters.
+    /// This matches sdkjs CMemory.WriteString2.
     pub fn write_string(&mut self, s: &str) {
-        let bytes = s.as_bytes();
-        self.write_long(bytes.len() as u32);
-        self.buf.extend_from_slice(bytes);
+        let utf16: Vec<u16> = s.encode_utf16().collect();
+        self.write_long(utf16.len() as u32); // char count (not byte count)
+        for ch in &utf16 {
+            self.buf.extend_from_slice(&ch.to_le_bytes());
+        }
     }
 
-    /// Write UTF-8 string without length prefix (used for String2 pattern).
+    /// Write raw UTF-8 string without any encoding (for internal use only).
     pub fn write_string_raw(&mut self, s: &str) {
         self.buf.extend_from_slice(s.as_bytes());
     }
@@ -241,10 +244,11 @@ mod tests {
     }
 
     #[test]
-    fn write_string_with_length() {
+    fn write_string_utf16le() {
         let mut w = DocyWriter::new();
         w.write_string("Hi");
-        assert_eq!(w.as_bytes(), &[2, 0, 0, 0, b'H', b'i']);
+        // 2 chars (UTF-16) + UTF-16LE bytes: H=0x0048, i=0x0069
+        assert_eq!(w.as_bytes(), &[2, 0, 0, 0, 0x48, 0x00, 0x69, 0x00]);
     }
 
     #[test]
