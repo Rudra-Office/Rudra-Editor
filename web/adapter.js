@@ -50,8 +50,14 @@ export async function openDocx(docxBytes, api) {
           AscCommon.g_oIdCounter.Set_Load(false);
           AscCommon.History.TurnOn();
         }
-        // Trigger rendering after DOCY load
+        // Debug: check what OpenDocumentFromBin created
         var logicDoc = api.WordControl.m_oLogicDocument;
+        console.log('[adapter] DOCY logicDoc.Content.length:', logicDoc ? logicDoc.Content.length : 'null');
+        if (logicDoc && logicDoc.Content.length > 0) {
+          var firstPara = logicDoc.Content[0];
+          console.log('[adapter] First element type:', firstPara ? firstPara.constructor.name : 'null');
+        }
+        // Trigger rendering after DOCY load
         if (logicDoc) {
           logicDoc.MoveCursorToStartPos(false);
           logicDoc.Recalculate();

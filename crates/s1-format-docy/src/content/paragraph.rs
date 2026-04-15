@@ -26,32 +26,35 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
 
             match child.node_type {
                 NodeType::Run => {
-                    write_run(w, model, *child_id);
+                    // Runs in paragraph Content use c_oSerParType.Run (5),
+                    // NOT c_oSerRunType.run (0).
+                    w.write_item(par::RUN, |w| {
+                        write_run_content(w, model, *child_id);
+                    });
                 }
                 NodeType::LineBreak => {
-                    // Line break as a run containing a linebreak element
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::LINEBREAK);
                         });
                     });
                 }
                 NodeType::PageBreak => {
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::PAGEBREAK);
                         });
                     });
                 }
                 NodeType::ColumnBreak => {
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::COLUMN_BREAK);
                         });
                     });
                 }
                 NodeType::Tab => {
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::TAB);
                         });
@@ -90,14 +93,14 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
                     });
                 }
                 NodeType::FootnoteRef => {
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::FOOTNOTE_REFERENCE);
                         });
                     });
                 }
                 NodeType::EndnoteRef => {
-                    w.write_item(run::RUN, |w| {
+                    w.write_item(par::RUN, |w| {
                         w.write_item(run::CONTENT, |w| {
                             w.write_byte(run::ENDNOTE_REFERENCE);
                         });
@@ -111,36 +114,34 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
     });
 }
 
-/// Write a text run: rPr + text content
-fn write_run(w: &mut DocyWriter, model: &DocumentModel, run_id: NodeId) {
+/// Write run internals: rPr + text content.
+/// Called inside a c_oSerParType.Run (5) item.
+fn write_run_content(w: &mut DocyWriter, model: &DocumentModel, run_id: NodeId) {
     let run_node = match model.node(run_id) {
         Some(n) => n,
         None => return,
     };
 
-    w.write_item(run::RUN, |w| {
-        // Run properties
-        w.write_item(run::RPR, |w| {
-            props::run_props::write(w, &run_node.attributes);
-        });
+    // Run properties (c_oSerRunType.rPr = 1)
+    w.write_item(run::RPR, |w| {
+        props::run_props::write(w, &run_node.attributes);
+    });
 
-        // Text content
-        w.write_item(run::CONTENT, |w| {
-            for child_id in &run_node.children {
-                let child = match model.node(*child_id) {
-                    Some(n) => n,
-                    None => continue,
-                };
-                if child.node_type == NodeType::Text {
-                    if let Some(ref text) = child.text_content {
-                        // Write each character as text content
-                        // In DOCY, text is written as type + string
-                        w.write_byte(run::RUN); // text content marker
-                        w.write_string(text);
-                    }
+    // Text content (c_oSerRunType.Content = 8)
+    w.write_item(run::CONTENT, |w| {
+        for child_id in &run_node.children {
+            let child = match model.node(*child_id) {
+                Some(n) => n,
+                None => continue,
+            };
+            if child.node_type == NodeType::Text {
+                if let Some(ref text) = child.text_content {
+                    // c_oSerRunType.run (0) = text content marker + WriteString2
+                    w.write_byte(run::RUN); // 0
+                    w.write_string(text);   // UTF-16LE with length prefix
                 }
             }
-        });
+        }
     });
 }
 
