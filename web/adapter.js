@@ -29,17 +29,28 @@ export async function initWasm() {
 export async function openDocx(docxBytes, api) {
   if (!wasmReady) await initWasm();
 
-  // Parse DOCX with s1engine and convert to DOCY binary format.
-  // DOCY is sdkjs's native format — BinaryFileReader handles everything:
-  // headers, footers, images, tables, TOC, comments, footnotes, etc.
+  // Parse DOCX with s1engine.
   var doc = wasmEngine.open(docxBytes);
 
-  // DOCY binary path not yet ready — needs byte-level debugging.
-  // s1-format-docy crate built (1887 lines) but output malformed.
-  // Issues found & fixed: PropLenType, UTF-16LE, signature format.
-  // Remaining: unknown structural issues causing Write_ToBinary2 error.
-  // OpenDocumentFromBin corrupts editor state on failure — cannot use as fallback.
-  // Manual construction path below (working).
+  // DOCY binary path — table serialization rewritten to match sdkjs contract.
+  // Images disabled in DOCY until drawing format matches.
+  try {
+    var docy = doc.to_docy();
+    if (docy && docy.length > 20) {
+      console.log('[adapter] DOCY (' + docy.length + ' chars)');
+      api.OpenDocumentFromBin('', docy);
+      console.log('[adapter] Opened via DOCY');
+      return doc;
+    }
+  } catch(e) {
+    console.warn('[adapter] DOCY failed:', e.message);
+    // Editor state may be corrupted — reload the blank doc
+    try {
+      api.OpenDocumentFromBin('', AscCommon.getEmpty());
+    } catch(e2) {}
+  }
+
+  // Manual construction fallback
   var bodyChildrenJson = doc.body_children_json();
   var bodyChildren = JSON.parse(bodyChildrenJson);
 

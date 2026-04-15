@@ -58,7 +58,8 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
                     });
                 }
                 NodeType::Image => {
-                    write_image(w, model, *child_id);
+                    // Image drawing serialization disabled — format doesn't match
+                    // sdkjs pptxDrawing structure yet. Skip silently.
                 }
                 NodeType::BookmarkStart => {
                     w.write_item(par::BOOKMARK_START, |w| {

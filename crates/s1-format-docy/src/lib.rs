@@ -20,8 +20,11 @@ use s1_model::DocumentModel;
 
 /// Write a DocumentModel as a DOCY binary string.
 ///
-/// Returns the complete DOCY string: `DOCY;v5;{size};{base64_data}`
-/// Ready to pass to `sdkjs OpenDocumentFromBin()`.
+/// Returns the wrapped DOCY payload string: `DOCY;v5;{size};{base64_data}`.
+///
+/// The wrapper/header format is correct, but the nested payload is still
+/// experimental and not yet safe for general `sdkjs OpenDocumentFromBin()`
+/// usage.
 pub fn write(model: &DocumentModel) -> String {
     let mut w = writer::DocyWriter::new();
 
