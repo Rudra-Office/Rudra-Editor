@@ -1,170 +1,120 @@
 <!DOCTYPE html>
-<html>
-<head><title>DOCY Binary Test</title></head>
-<body>
-<h3>DOCY Binary Format Debugger</h3>
-<button onclick="testEmpty()">Test Empty DOCY</button>
-<button onclick="testOnePara()">Test One Paragraph</button>
-<button onclick="testKnownGood()">Test Known Good (getEmpty)</button>
-<pre id="log" style="background:#f0f0f0;padding:10px;max-height:80vh;overflow:auto"></pre>
+<html><head><meta charset="utf-8"><title>DOCY Test Harness</title>
+<style>
+body{font-family:monospace;margin:20px}
+#editor_sdk{width:800px;height:400px;border:1px solid #ccc;margin:10px 0}
+button{padding:8px 16px;margin:4px;cursor:pointer}
+#log{background:#111;color:#0f0;padding:10px;height:300px;overflow:auto;white-space:pre;font-size:12px}
+</style>
+</head><body>
+<h3>DOCY Binary Test Harness (isolated sdkjs instance)</h3>
+<button onclick="testKnownGood()">1. Test getEmpty()</button>
+<button onclick="testWasmDocy()">2. Test WASM DOCY</button>
+<button onclick="reloadEditor()">Reset Editor</button>
+<div id="editor_sdk" tabindex="-1"></div>
+<div id="log"></div>
+
+<script>window['AscNotLoadAllScript']=true;</script>
+<script src="onlyoffice-sdkjs/vendor/polyfill.js"></script>
+<script src="onlyoffice-web-apps/vendor/jquery/jquery.min.js"></script>
+<script src="onlyoffice-web-apps/vendor/xregexp/xregexp-all-min.js"></script>
+<script>var sdk_scripts=[];</script>
+<script src="onlyoffice-sdkjs/develop/sdkjs/word/scripts.js"></script>
 <script>
-function log(msg) { document.getElementById('log').textContent += msg + '\n'; }
+sdk_scripts.map(function(s){return s.replace('../../../../sdkjs/','onlyoffice-sdkjs/')}).forEach(function(src){document.write('<script src="'+src+'"><\/script>')});
+document.write('<script src="onlyoffice-sdkjs/word/document/editor.js"><\/script>');
+</script>
+<script>
+var _api = null;
+var _log = document.getElementById('log');
+function log(msg){_log.textContent+=msg+'\n';_log.scrollTop=_log.scrollHeight;console.log('[docy-test]',msg)}
 
-// Build a DOCY binary from scratch in JS, matching sdkjs format exactly
-function buildDocy(tables) {
-    var buf = [];
-    var mtCount = tables.length;
-
-    // Main table: count + 128 items × 5 bytes
-    buf.push(mtCount);
-    var itemsStart = buf.length;
-    for (var i = 0; i < 128 * 5; i++) buf.push(0); // reserve
-
-    // Write each table
-    for (var i = 0; i < tables.length; i++) {
-        var offset = buf.length;
-        // Patch table item
-        var pos = itemsStart + i * 5;
-        buf[pos] = tables[i].type;
-        buf[pos + 1] = offset & 0xFF;
-        buf[pos + 2] = (offset >> 8) & 0xFF;
-        buf[pos + 3] = (offset >> 16) & 0xFF;
-        buf[pos + 4] = (offset >> 24) & 0xFF;
-        // Write table data
-        for (var j = 0; j < tables[i].data.length; j++) {
-            buf.push(tables[i].data[j]);
-        }
-    }
-
-    var arr = new Uint8Array(buf);
-    var b64 = btoa(String.fromCharCode.apply(null, arr));
-    return 'DOCY;v5;' + arr.length + ';' + b64;
+function initEditor(cb) {
+    log('Initializing editor...');
+    // Font patches
+    var orig = AscFonts.g_fontApplication.GetFontFileWeb;
+    AscFonts.g_fontApplication.GetFontFileWeb = function(name) {
+        var idx = AscFonts.g_map_font_index[name];
+        if (idx !== undefined) return {m_wsFontName:name,m_wsFontPath:'',m_lIndex:0};
+        idx = AscFonts.g_map_font_index['Arial'];
+        if (idx !== undefined) return {m_wsFontName:'Arial',m_wsFontPath:'',m_lIndex:0};
+        return orig.call(this, name);
+    };
+    // Signature fix
+    var origOpen = Asc.asc_docs_api.prototype.openDocument;
+    Asc.asc_docs_api.prototype.openDocument = function(file) {
+        if (file&&file.data&&typeof file.data==='string'&&file.data.indexOf('DOCY')===0) file.bSerFormat=true;
+        return origOpen.call(this, file);
+    };
+    _api = new Asc.asc_docs_api({'id-view':'editor_sdk'});
+    window._api = _api;
+    _api.CoAuthoringApi.onFirstLoadChangesEnd = function(){_api.asyncServerIdEndLoaded()};
+    _api.CoAuthoringApi.onFirstConnect = function(){};
+    _api.asc_registerCallback('asc_onDocumentContentReady', function(){
+        log('Editor ready');
+        if(cb) cb();
+    });
+    _api.asc_registerCallback('asc_onError', function(id,level){
+        if(id!==-25) log('ERROR: id='+id+' level='+level);
+    });
+    var docInfo = new Asc.asc_CDocInfo();
+    docInfo.put_Id('test');docInfo.put_Title('Test');docInfo.put_Format('docx');docInfo.put_OfflineApp(true);
+    _api.asc_setDocInfo(docInfo);
+    _api.asc_LoadDocument();
 }
 
-// Helper: write long LE
-function longLE(v) { return [v & 0xFF, (v>>8)&0xFF, (v>>16)&0xFF, (v>>24)&0xFF]; }
-
-// Helper: write string (UTF-16LE with char count prefix)
-function writeStr16(s) {
-    var chars = [];
-    for (var i = 0; i < s.length; i++) {
-        var c = s.charCodeAt(i);
-        chars.push(c & 0xFF, (c >> 8) & 0xFF);
-    }
-    return longLE(s.length).concat(chars);
-}
-
-// Signature table (no length prefix)
-function sigTable() {
-    return { type: 0, data: [0, 4, 5, 0, 0, 0] }; // Version=5
-}
-
-// Settings table (with length prefix)
-function settingsTable() {
-    // Just default tab stop: type=9, lenType=4(Long), value=720
-    var content = [9, 4].concat(longLE(720));
-    return { type: 9, data: longLE(content.length).concat(content) };
-}
-
-// Empty style table
-function emptyStyleTable() {
-    // DefpPr(0) + empty, DefrPr(1) + empty, Styles(2) + empty
-    var content = [
-        0, 6].concat(longLE(0),  // DefpPr: Variable, length 0
-        [1, 6], longLE(0),       // DefrPr: Variable, length 0
-        [2, 6], longLE(0));      // Styles: Variable, length 0
-    return { type: 5, data: longLE(content.length).concat(content) };
-}
-
-// Empty document table
-function emptyDocTable() {
-    return { type: 6, data: longLE(0) }; // length 0 = no content
-}
-
-// Empty other table
-function emptyOtherTable() {
-    return { type: 7, data: longLE(0) };
-}
-
-function testEmpty() {
-    document.getElementById('log').textContent = '';
-    log('=== Testing Empty DOCY ===');
-    var docy = buildDocy([sigTable(), settingsTable(), emptyStyleTable(), emptyDocTable(), emptyOtherTable()]);
-    log('DOCY length: ' + docy.length);
-    log('First 60 chars: ' + docy.substring(0, 60));
-
-    try {
-        window._api.OpenDocumentFromBin('', docy);
-        log('SUCCESS: Empty DOCY opened!');
-    } catch(e) {
-        log('ERROR: ' + e.message);
-        log('Stack: ' + e.stack.split('\n').slice(0,5).join('\n'));
-    }
-}
-
-function testOnePara() {
-    document.getElementById('log').textContent = '';
-    log('=== Testing One Paragraph DOCY ===');
-
-    // Build a paragraph with "Hello World"
-    var text = 'Hello World';
-    var textContent = [0]; // type 0 = text run content
-    textContent = textContent.concat(writeStr16(text));
-
-    // Run content wrapper: type=8(Content), Variable, length, data
-    var runContent = [8, 6].concat(longLE(textContent.length), textContent);
-
-    // Run properties: type=1(rPr), Variable, length 0 (empty)
-    var runProps = [1, 6].concat(longLE(0));
-
-    // Full run: type=0(run), Variable, length, (rPr + content)
-    var runData = runProps.concat(runContent);
-    var run = [0, 6].concat(longLE(runData.length), runData);
-
-    // Paragraph content: type=2(Content), Variable, length, runs
-    var paraContent = [2, 6].concat(longLE(run.length), run);
-
-    // Paragraph properties: type=1(pPr), Variable, length 0
-    var paraProps = [1, 6].concat(longLE(0));
-
-    // Full paragraph: type=0(Par), Variable, length, (pPr + content)
-    var paraData = paraProps.concat(paraContent);
-    var para = [0, 6].concat(longLE(paraData.length), paraData);
-
-    // Document table = length prefix + paragraphs
-    var docData = longLE(para.length).concat(para);
-
-    var docy = buildDocy([
-        sigTable(),
-        settingsTable(),
-        emptyStyleTable(),
-        { type: 6, data: docData },
-        emptyOtherTable()
-    ]);
-
-    log('DOCY length: ' + docy.length);
-
-    try {
-        window._api.OpenDocumentFromBin('', docy);
-        log('SUCCESS: One paragraph DOCY opened!');
-    } catch(e) {
-        log('ERROR: ' + e.message);
-        log('Stack: ' + e.stack.split('\n').slice(0,5).join('\n'));
-    }
+function reloadEditor() {
+    _log.textContent = '';
+    document.getElementById('editor_sdk').innerHTML = '';
+    initEditor();
 }
 
 function testKnownGood() {
-    document.getElementById('log').textContent = '';
-    log('=== Testing Known Good (getEmpty) ===');
+    log('=== Test: getEmpty() ===');
     try {
         var docy = AscCommon.getEmpty();
-        log('Known good length: ' + docy.length);
-        window._api.OpenDocumentFromBin('', docy);
-        log('SUCCESS: Known good DOCY opened!');
+        log('Known good DOCY length: ' + docy.length);
+        _api.OpenDocumentFromBin('', docy);
+        log('SUCCESS: getEmpty() opened!');
     } catch(e) {
-        log('ERROR: ' + e.message);
+        log('FAILED: ' + e.message);
+        log(e.stack.split('\n').slice(0,3).join('\n'));
     }
 }
+
+async function testWasmDocy() {
+    log('=== Test: WASM DOCY ===');
+    try {
+        var {default: init, WasmEngine} = await import('./pkg/s1engine_wasm.js');
+        await init();
+        var engine = new WasmEngine();
+        // Simple test doc
+        var doc = engine.open_as(new TextEncoder().encode('Hello World\nSecond paragraph'), 'txt');
+        var docy = doc.to_docy();
+        log('WASM DOCY length: ' + docy.length);
+
+        // Decode and dump first bytes
+        var parts = docy.split(';');
+        var binary = atob(parts[3]);
+        log('Binary size: ' + binary.length + ' Header: ' + parts[0]+';'+parts[1]+';'+parts[2]);
+        log('Table count: ' + binary.charCodeAt(0));
+        for (var i = 0; i < binary.charCodeAt(0); i++) {
+            var pos = 1 + i*5;
+            var t = binary.charCodeAt(pos);
+            var off = binary.charCodeAt(pos+1)|(binary.charCodeAt(pos+2)<<8)|(binary.charCodeAt(pos+3)<<16)|(binary.charCodeAt(pos+4)<<24);
+            var names=['Sig','Info','Media','Num','HdrFtr','Style','Doc','Other','Comments','Settings'];
+            log('  Table['+i+']: type='+t+' ('+(names[t]||'?')+') offset='+off);
+        }
+
+        log('Attempting OpenDocumentFromBin...');
+        _api.OpenDocumentFromBin('', docy);
+        log('SUCCESS: WASM DOCY opened!');
+    } catch(e) {
+        log('FAILED: ' + e.message);
+        log(e.stack.split('\n').slice(0,5).join('\n'));
+    }
+}
+
+window.addEventListener('load', function(){ initEditor(); });
 </script>
-</body>
-</html>
+</body></html>
