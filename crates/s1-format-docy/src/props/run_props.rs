@@ -63,12 +63,24 @@ pub fn write(w: &mut DocyWriter, attrs: &AttributeMap) {
         w.write_prop_long(rpr::FONT_SIZE_CS, pts_to_half_pts(size) as u32);
     }
 
-    // Color — disabled: DOCY color format creates objects missing IsAuto method.
-    // sdkjs defaults to black. Re-enable after matching BinaryStyleTableReader color format.
-    // if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::Color) { ... }
+    // Color: ReadColor expects 3 raw bytes (RGB) inside a Variable-length property.
+    // Format: [type][lenType=Variable(6)][length=3][R][G][B] → creates CDocumentColor(r,g,b)
+    if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::Color) {
+        w.write_prop_item(rpr::COLOR, |w| {
+            w.write_byte(c.r);
+            w.write_byte(c.g);
+            w.write_byte(c.b);
+        });
+    }
 
-    // Highlight — disabled for same reason.
-    // if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::HighlightColor) { ... }
+    // Highlight: same format as Color
+    if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::HighlightColor) {
+        w.write_prop_item(rpr::HIGHLIGHT, |w| {
+            w.write_byte(c.r);
+            w.write_byte(c.g);
+            w.write_byte(c.b);
+        });
+    }
 
     // Superscript / Subscript
     if let Some(true) = attrs.get_bool(&AttributeKey::Superscript) {
