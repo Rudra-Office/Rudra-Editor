@@ -40,29 +40,35 @@ export async function openDocx(docxBytes, api) {
       var docy = doc.to_docy();
       if (docy && docy.length > 20) {
         console.log('[adapter] DOCY (' + docy.length + ' chars)');
-        // Disable history during load — sdkjs develop build has classes
-        // without Write_ToBinary2 that crash during history serialization.
+        // Set flags BEFORE load — async callbacks check these
+        api.ServerIdWaitComplete = true;
+        api.ServerImagesWaitComplete = true;
+        api.DocumentType = 2;
+
         AscCommon.History.TurnOff();
         AscCommon.g_oIdCounter.Set_Load(true);
         try {
-          // OpenDocumentFromBin handles full lifecycle:
-          // BeforeOpenDocument → InitEditor → BinaryFileReader.Read → AfterOpenDocument
-          // AfterOpenDocument triggers font loading → rendering pipeline
           api.OpenDocumentFromBin('', docy);
         } finally {
           AscCommon.g_oIdCounter.Set_Load(false);
           AscCommon.History.TurnOn();
         }
-        // Set flags so _openDocumentEndCallback can fire after font loading
-        api.ServerIdWaitComplete = true;
-        api.ServerImagesWaitComplete = true;
-        api.DocumentType = 2;
 
         var logicDoc = api.WordControl.m_oLogicDocument;
         console.log('[adapter] DOCY loaded:', logicDoc ? logicDoc.Content.length + ' elements' : 'null');
-        // Don't call Recalculate manually — AfterOpenDocument triggers
-        // font loading → asyncFontsDocumentEndLoaded → _openDocumentEndCallback
-        // which handles recalculate + render with proper font data.
+
+        // Force render — AfterOpenDocument's async chain may not complete
+        try {
+          if (logicDoc) {
+            logicDoc.MoveCursorToStartPos(false);
+            logicDoc.Recalculate();
+          }
+          api.WordControl.OnResize(true);
+        } catch(renderErr) {
+          console.warn('[adapter] Render error (non-fatal):', renderErr.message);
+          // Even if Recalculate partially fails, the canvas should show content
+          try { api.WordControl.OnResize(true); } catch(e2) {}
+        }
         console.log('[adapter] Opened via DOCY');
         return doc;
       }
