@@ -49,6 +49,8 @@ export async function openDocx(docxBytes, api) {
         AscCommon.g_oIdCounter.Set_Load(true);
         try {
           api.OpenDocumentFromBin('', docy);
+        } catch(loadErr) {
+          console.error('[adapter] OpenDocumentFromBin error:', loadErr.message, loadErr.stack);
         } finally {
           AscCommon.g_oIdCounter.Set_Load(false);
           AscCommon.History.TurnOn();
@@ -57,18 +59,23 @@ export async function openDocx(docxBytes, api) {
         var logicDoc = api.WordControl.m_oLogicDocument;
         console.log('[adapter] DOCY loaded:', logicDoc ? logicDoc.Content.length + ' elements' : 'null');
 
-        // Force render — AfterOpenDocument's async chain may not complete
+        // AfterOpenDocument (called by OpenDocumentFromBin) handles font loading.
+        // Give fonts time to load asynchronously, then force re-render.
         try {
           if (logicDoc) {
             logicDoc.MoveCursorToStartPos(false);
-            logicDoc.Recalculate();
           }
           api.WordControl.OnResize(true);
         } catch(renderErr) {
           console.warn('[adapter] Render error (non-fatal):', renderErr.message);
-          // Even if Recalculate partially fails, the canvas should show content
-          try { api.WordControl.OnResize(true); } catch(e2) {}
         }
+        // Deferred recalculate after fonts load
+        setTimeout(function() {
+          try {
+            if (logicDoc) logicDoc.Recalculate();
+            api.WordControl.OnResize(true);
+          } catch(e) {}
+        }, 1000);
         console.log('[adapter] Opened via DOCY');
         return doc;
       }

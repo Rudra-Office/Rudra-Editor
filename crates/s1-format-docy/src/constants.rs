@@ -87,27 +87,34 @@ pub mod rpr {
 // Paragraph properties (c_oSerProp_pPrType)
 pub mod ppr {
     pub const CONTEXTUAL_SPACING: u8 = 0;
+    pub const IND: u8 = 1;
     pub const IND_LEFT: u8 = 2;
     pub const IND_RIGHT: u8 = 3;
+    pub const IND_FIRST_LINE: u8 = 4;
     pub const JC: u8 = 5;
     pub const KEEP_LINES: u8 = 6;
     pub const KEEP_NEXT: u8 = 7;
     pub const PAGE_BREAK_BEFORE: u8 = 8;
     pub const SPACING: u8 = 9;
     pub const SHD: u8 = 14;
-    pub const WIDOW_CONTROL: u8 = 25;
+    pub const TAB: u8 = 17;
+    pub const TAB_ITEM: u8 = 18;
     pub const PARA_STYLE: u8 = 21;
-    pub const PBDR: u8 = 32;
     pub const NUM_PR: u8 = 22;
     pub const NUM_PR_LVL: u8 = 23;
     pub const NUM_PR_ID: u8 = 24;
-    pub const TABS: u8 = 38;
-    pub const IND_FIRST_LINE: u8 = 4;
+    pub const WIDOW_CONTROL: u8 = 25;
+    pub const PPR_RPR: u8 = 26;
+    pub const PBDR: u8 = 27;
     pub const OUTLINE_LVL: u8 = 34;
-    pub const BIDI: u8 = 47;
+    pub const TAB_ITEM_LEADER: u8 = 35;
     pub const IND_LEFT_TWIPS: u8 = 36;
     pub const IND_RIGHT_TWIPS: u8 = 37;
     pub const IND_FIRST_LINE_TWIPS: u8 = 38;
+    pub const TAB_ITEM_POS_TWIPS: u8 = 42;
+    pub const TAB_ITEM_VAL: u8 = 43;
+    pub const PPR_SECT_PR: u8 = 31;
+    pub const BIDI: u8 = 47;
 }
 
 // Spacing sub-properties (c_oSerProp_pPrType spacing sub-types)
@@ -148,6 +155,9 @@ pub mod cell_pr {
     pub const CELL_W: u8 = 3;
     pub const VALIGN: u8 = 4;
     pub const VMERGE: u8 = 5;
+    pub const CELL_MAR: u8 = 6;
+    pub const TEXT_DIRECTION: u8 = 11;
+    pub const NO_WRAP: u8 = 13;
 }
 
 // Section properties (c_oSerProp_secPrType)
@@ -276,6 +286,8 @@ pub mod notes {
     pub const NOTE_TYPE: u8 = 1;
     pub const NOTE_ID: u8 = 2;
     pub const NOTE_CONTENT: u8 = 3;
+    pub const REF_CUSTOM_MARK: u8 = 4;
+    pub const REF_ID: u8 = 5;
 }
 
 // Settings types (c_oSer_SettingsType)
@@ -283,6 +295,48 @@ pub mod settings {
     pub const DEFAULT_TAB_STOP_TWIPS: u8 = 9;
     pub const TRACK_REVISIONS: u8 = 3;
     pub const COMPAT: u8 = 8;
+}
+
+// Border side types (c_oSerBordersType)
+pub mod borders_type {
+    pub const LEFT: u8 = 0;
+    pub const TOP: u8 = 1;
+    pub const RIGHT: u8 = 2;
+    pub const BOTTOM: u8 = 3;
+    pub const INSIDE_V: u8 = 4;
+    pub const INSIDE_H: u8 = 5;
+    pub const BETWEEN: u8 = 11;
+}
+
+// Single border properties (c_oSerBorderType)
+pub mod border_type {
+    pub const COLOR: u8 = 0;
+    pub const SPACE_POINT: u8 = 5;
+    pub const SIZE_8POINT: u8 = 6;
+    pub const VALUE: u8 = 3;
+    pub const VALUE_TYPE: u8 = 7;
+}
+
+// Padding types (c_oSerPaddingType)
+pub mod padding {
+    pub const LEFT_TWIPS: u8 = 4;
+    pub const TOP_TWIPS: u8 = 5;
+    pub const RIGHT_TWIPS: u8 = 6;
+    pub const BOTTOM_TWIPS: u8 = 7;
+}
+
+// Hyperlink types (c_oSer_HyperlinkType)
+pub mod hyperlink {
+    pub const CONTENT: u8 = 0;
+    pub const LINK: u8 = 1;
+    pub const ANCHOR: u8 = 2;
+    pub const TOOLTIP: u8 = 3;
+}
+
+// Bookmark types (c_oSerBookmarkType)
+pub mod bookmark {
+    pub const ID: u8 = 0;
+    pub const NAME: u8 = 1;
 }
 
 // Color types

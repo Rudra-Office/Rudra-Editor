@@ -1,7 +1,5 @@
 /* @ts-self-types="./s1engine_wasm.d.ts" */
 
-//#region exports
-
 /**
  * A collaborative document that supports CRDT-based real-time editing.
  *
@@ -10,9 +8,6 @@
  * `apply_remote_ops`.
  */
 export class WasmCollabDocument {
-    constructor() {
-        throw new Error('cannot invoke `new` directly');
-    }
     static __wrap(ptr) {
         ptr = ptr >>> 0;
         const obj = Object.create(WasmCollabDocument.prototype);
@@ -39,8 +34,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_append_paragraph(this.__wbg_ptr, ptr0, len0);
@@ -62,8 +55,6 @@ export class WasmCollabDocument {
      * @param {string} update_json
      */
     apply_awareness_update(update_json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(update_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmcollabdocument_apply_awareness_update(this.__wbg_ptr, ptr0, len0);
@@ -82,12 +73,8 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(target_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
-            _assertNum(length);
             const ret = wasm.wasmcollabdocument_apply_local_delete_text(this.__wbg_ptr, ptr0, len0, offset, length);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -113,8 +100,6 @@ export class WasmCollabDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(target_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -148,11 +133,8 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(target_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_apply_local_insert_text(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
@@ -176,8 +158,6 @@ export class WasmCollabDocument {
      * @param {string} ops_json
      */
     apply_remote_ops(ops_json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(ops_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmcollabdocument_apply_remote_ops(this.__wbg_ptr, ptr0, len0);
@@ -190,8 +170,6 @@ export class WasmCollabDocument {
      * @returns {boolean}
      */
     can_redo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_can_redo(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -200,8 +178,6 @@ export class WasmCollabDocument {
      * @returns {boolean}
      */
     can_undo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_can_undo(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -209,8 +185,6 @@ export class WasmCollabDocument {
      * Compact the operation log (merge consecutive single-char inserts).
      */
     compact_op_log() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_compact_op_log(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -225,8 +199,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_delete_node(this.__wbg_ptr, ptr0, len0);
@@ -256,14 +228,10 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_offset);
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(end_offset);
             const ret = wasm.wasmcollabdocument_delete_selection(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset);
             var ptr3 = ret[0];
             var len3 = ret[1];
@@ -284,8 +252,6 @@ export class WasmCollabDocument {
      * @returns {Uint8Array}
      */
     export(format) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmcollabdocument_export(this.__wbg_ptr, ptr0, len0);
@@ -311,14 +277,10 @@ export class WasmCollabDocument {
         let deferred6_0;
         let deferred6_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_offset);
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(end_offset);
             const ptr2 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len2 = WASM_VECTOR_LEN;
             const ptr3 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -341,8 +303,6 @@ export class WasmCollabDocument {
      * Free the document (for manual memory management from JS).
      */
     free_doc() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmcollabdocument_free_doc(this.__wbg_ptr);
     }
     /**
@@ -357,8 +317,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(state_vector_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_get_changes_since(this.__wbg_ptr, ptr0, len0);
@@ -384,8 +342,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_get_formatting_json(this.__wbg_ptr, ptr0, len0);
@@ -413,8 +369,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_get_peers_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -440,8 +394,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_get_state_vector(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -465,8 +417,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_insert_horizontal_rule(this.__wbg_ptr, ptr0, len0);
@@ -492,8 +442,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_insert_page_break(this.__wbg_ptr, ptr0, len0);
@@ -520,8 +468,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -551,12 +497,8 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(rows);
-            _assertNum(cols);
             const ret = wasm.wasmcollabdocument_insert_table(this.__wbg_ptr, ptr0, len0, rows, cols);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -582,11 +524,8 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_insert_text_in_paragraph(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
@@ -614,8 +553,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node1_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(node2_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -639,8 +576,6 @@ export class WasmCollabDocument {
      * @returns {number}
      */
     op_log_size() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_op_log_size(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -655,8 +590,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_paragraph_ids_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -682,11 +615,8 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_paste_plain_text(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
@@ -711,8 +641,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_redo(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -736,8 +664,6 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmcollabdocument_render_node_html(this.__wbg_ptr, ptr0, len0);
@@ -759,8 +685,6 @@ export class WasmCollabDocument {
      * @returns {bigint}
      */
     replica_id() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_replica_id(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -777,8 +701,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(alignment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -809,11 +731,8 @@ export class WasmCollabDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
             const ptr1 = passStringToWasm0(user_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passStringToWasm0(user_color, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -842,11 +761,8 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(level);
             const ret = wasm.wasmcollabdocument_set_heading_level(this.__wbg_ptr, ptr0, len0, level);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -872,8 +788,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -902,8 +816,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -933,13 +845,10 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(level);
             const ret = wasm.wasmcollabdocument_set_list_format(this.__wbg_ptr, ptr0, len0, ptr1, len1, level);
             var ptr3 = ret[0];
             var len3 = ret[1];
@@ -970,8 +879,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1000,8 +907,6 @@ export class WasmCollabDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(widths_csv, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1031,12 +936,8 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(col_index);
-            _assertBoolean(ascending);
             const ret = wasm.wasmcollabdocument_sort_table_by_column(this.__wbg_ptr, ptr0, len0, col_index, ascending);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -1062,11 +963,8 @@ export class WasmCollabDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(offset);
             const ret = wasm.wasmcollabdocument_split_paragraph(this.__wbg_ptr, ptr0, len0, offset);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -1089,8 +987,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_to_html(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -1113,8 +1009,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_to_plain_text(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -1134,8 +1028,6 @@ export class WasmCollabDocument {
      * @returns {number}
      */
     tombstone_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmcollabdocument_tombstone_count(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -1152,8 +1044,6 @@ export class WasmCollabDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmcollabdocument_undo(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -1175,9 +1065,6 @@ if (Symbol.dispose) WasmCollabDocument.prototype[Symbol.dispose] = WasmCollabDoc
  * A document handle for reading, editing, and exporting.
  */
 export class WasmDocument {
-    constructor() {
-        throw new Error('cannot invoke `new` directly');
-    }
     static __wrap(ptr) {
         ptr = ptr >>> 0;
         const obj = Object.create(WasmDocument.prototype);
@@ -1202,8 +1089,6 @@ export class WasmDocument {
      * keep the new formatting. All revision attributes are stripped.
      */
     accept_all_changes() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_accept_all_changes(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1214,8 +1099,6 @@ export class WasmDocument {
      * @param {string} node_id_str
      */
     accept_change(node_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_accept_change(this.__wbg_ptr, ptr0, len0);
@@ -1235,9 +1118,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(level);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_append_heading(this.__wbg_ptr, level, ptr0, len0);
@@ -1265,8 +1145,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_append_paragraph(this.__wbg_ptr, ptr0, len0);
@@ -1296,11 +1174,8 @@ export class WasmDocument {
      * @returns {number}
      */
     apply_merge_data(data_json, record_index) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(data_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(record_index);
         const ret = wasm.wasmdocument_apply_merge_data(this.__wbg_ptr, ptr0, len0, record_index);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -1318,8 +1193,6 @@ export class WasmDocument {
      * @param {string} style_name
      */
     apply_table_style(table_id_str, style_name) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(style_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1338,8 +1211,6 @@ export class WasmDocument {
      * @param {string} label
      */
     begin_batch(label) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_begin_batch(this.__wbg_ptr, ptr0, len0);
@@ -1359,8 +1230,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_begin_composition(this.__wbg_ptr, ptr0, len0);
@@ -1387,8 +1256,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_body_children_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -1408,8 +1275,6 @@ export class WasmDocument {
      * @returns {string | undefined}
      */
     body_id() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_body_id(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -1426,8 +1291,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     can_redo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_can_redo(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -1439,8 +1302,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     can_undo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_can_undo(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -1458,8 +1319,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_cancel_composition(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -1486,8 +1345,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_canvas_delete_range(this.__wbg_ptr, ptr0, len0);
@@ -1516,8 +1373,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_canvas_insert_paragraph_break(this.__wbg_ptr, ptr0, len0);
@@ -1547,8 +1402,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1580,8 +1433,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1616,8 +1467,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(mark, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1647,8 +1496,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_caret_rect(this.__wbg_ptr, ptr0, len0);
@@ -1669,8 +1516,6 @@ export class WasmDocument {
      * Clear all undo/redo history.
      */
     clear_history() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_clear_history(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1680,8 +1525,6 @@ export class WasmDocument {
      * Explicitly release document memory. The document cannot be used after this.
      */
     close() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmdocument_close(this.__wbg_ptr);
     }
     /**
@@ -1696,8 +1539,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_commit_composition(this.__wbg_ptr, ptr0, len0);
@@ -1727,8 +1568,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passArray8ToWasm0(other_bytes, wasm.__wbindgen_malloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_compare_with(this.__wbg_ptr, ptr0, len0);
@@ -1757,8 +1596,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_copy_range_html(this.__wbg_ptr, ptr0, len0);
@@ -1787,8 +1624,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_copy_range_plain_text(this.__wbg_ptr, ptr0, len0);
@@ -1810,8 +1645,6 @@ export class WasmDocument {
      * @param {string} comment_id
      */
     delete_comment(comment_id) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(comment_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_delete_comment(this.__wbg_ptr, ptr0, len0);
@@ -1827,8 +1660,6 @@ export class WasmDocument {
      * @param {string} reply_id
      */
     delete_comment_reply(reply_id) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(reply_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_delete_comment_reply(this.__wbg_ptr, ptr0, len0);
@@ -1841,8 +1672,6 @@ export class WasmDocument {
      * @param {string} image_id_str
      */
     delete_image(image_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_delete_image(this.__wbg_ptr, ptr0, len0);
@@ -1855,8 +1684,6 @@ export class WasmDocument {
      * @param {string} node_id_str
      */
     delete_node(node_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_delete_node(this.__wbg_ptr, ptr0, len0);
@@ -1877,14 +1704,10 @@ export class WasmDocument {
      * @param {number} end_offset
      */
     delete_selection(start_node_str, start_offset, end_node_str, end_offset) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
         const ret = wasm.wasmdocument_delete_selection(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1896,11 +1719,8 @@ export class WasmDocument {
      * @param {number} col_index
      */
     delete_table_column(table_id_str, col_index) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(col_index);
         const ret = wasm.wasmdocument_delete_table_column(this.__wbg_ptr, ptr0, len0, col_index);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1912,11 +1732,8 @@ export class WasmDocument {
      * @param {number} row_index
      */
     delete_table_row(table_id_str, row_index) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(row_index);
         const ret = wasm.wasmdocument_delete_table_row(this.__wbg_ptr, ptr0, len0, row_index);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1931,12 +1748,8 @@ export class WasmDocument {
      * @param {number} length
      */
     delete_text_in_paragraph(node_id_str, offset, length) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(offset);
-        _assertNum(length);
         const ret = wasm.wasmdocument_delete_text_in_paragraph(this.__wbg_ptr, ptr0, len0, offset, length);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -1950,8 +1763,6 @@ export class WasmDocument {
      * @returns {number}
      */
     document_revision() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_document_revision(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -1967,8 +1778,6 @@ export class WasmDocument {
      * @param {string} new_text
      */
     edit_comment(comment_id, new_text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(comment_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(new_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -1988,8 +1797,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_editor_capabilities(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2009,8 +1816,6 @@ export class WasmDocument {
      * a single undo step.
      */
     end_batch() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_end_batch(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -2025,8 +1830,6 @@ export class WasmDocument {
      * @returns {Uint8Array}
      */
     export(format) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_export(this.__wbg_ptr, ptr0, len0);
@@ -2057,14 +1860,10 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_offset);
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(end_offset);
             const ret = wasm.wasmdocument_export_selection_html(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset);
             var ptr3 = ret[0];
             var len3 = ret[1];
@@ -2094,8 +1893,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_fidelity_report_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2122,11 +1919,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertBoolean(case_sensitive);
             const ret = wasm.wasmdocument_find_text(this.__wbg_ptr, ptr0, len0, case_sensitive);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -2149,12 +1943,7 @@ export class WasmDocument {
      * @param {WasmFontDatabase} font_db
      */
     force_relayout(font_db) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         _assertClass(font_db, WasmFontDatabase);
-        if (font_db.__wbg_ptr === 0) {
-            throw new Error('Attempt to use a moved value');
-        }
         const ret = wasm.wasmdocument_force_relayout(this.__wbg_ptr, font_db.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -2171,8 +1960,6 @@ export class WasmDocument {
      * @param {string} value
      */
     format_run(run_id_str, key, value) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -2199,14 +1986,10 @@ export class WasmDocument {
      * @param {string} value
      */
     format_selection(start_node_str, start_offset, end_node_str, end_offset, key, value) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
         const ptr2 = passStringToWasm0(key, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
         const ptr3 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -2222,8 +2005,6 @@ export class WasmDocument {
      * After calling this, all other methods will return an error.
      */
     free() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmdocument_free(this.__wbg_ptr);
     }
     /**
@@ -2238,8 +2019,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_generate_bibliography(this.__wbg_ptr, ptr0, len0);
@@ -2270,8 +2049,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_affected_pages(this.__wbg_ptr, ptr0, len0);
@@ -2299,12 +2076,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(row);
-            _assertNum(col);
             const ret = wasm.wasmdocument_get_cell_id(this.__wbg_ptr, ptr0, len0, row, col);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -2328,8 +2101,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(cell_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_cell_text(this.__wbg_ptr, ptr0, len0);
@@ -2354,8 +2125,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_comments_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2378,8 +2147,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_document_text(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2404,8 +2171,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_endnotes_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2430,8 +2195,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_footnotes_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2459,8 +2222,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_formatting_json(this.__wbg_ptr, ptr0, len0);
@@ -2492,9 +2253,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(section_index);
             const ret = wasm.wasmdocument_get_header_footer_info(this.__wbg_ptr, section_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2520,8 +2278,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_headings_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2545,8 +2301,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_image_data_url(this.__wbg_ptr, ptr0, len0);
@@ -2575,8 +2329,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_image_wrap_mode(this.__wbg_ptr, ptr0, len0);
@@ -2603,8 +2355,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_layout_cache_stats(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2627,8 +2377,6 @@ export class WasmDocument {
      * @returns {number}
      */
     get_page_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_get_page_count(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -2644,12 +2392,7 @@ export class WasmDocument {
      * @returns {number}
      */
     get_page_count_with_fonts(font_db) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         _assertClass(font_db, WasmFontDatabase);
-        if (font_db.__wbg_ptr === 0) {
-            throw new Error('Attempt to use a moved value');
-        }
         const ret = wasm.wasmdocument_get_page_count_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -2671,9 +2414,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(page_index);
             const ret = wasm.wasmdocument_get_page_html(this.__wbg_ptr, page_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2701,13 +2441,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(page_index);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_get_page_html_with_fonts(this.__wbg_ptr, page_index, font_db.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2734,8 +2468,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_page_map_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2759,12 +2491,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_get_page_map_json_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2792,8 +2519,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_page_setup_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2817,8 +2542,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_paragraph_text(this.__wbg_ptr, ptr0, len0);
@@ -2851,8 +2574,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_reference_targets_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2878,8 +2599,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_run_formatting_json(this.__wbg_ptr, ptr0, len0);
@@ -2907,8 +2626,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(paragraph_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_run_ids(this.__wbg_ptr, ptr0, len0);
@@ -2934,8 +2651,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_run_text(this.__wbg_ptr, ptr0, len0);
@@ -2963,8 +2678,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_section_breaks_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -2990,9 +2703,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(section_index);
             const ret = wasm.wasmdocument_get_section_columns(this.__wbg_ptr, section_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -3015,8 +2725,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_sections_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -3046,14 +2754,10 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_offset);
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(end_offset);
             const ret = wasm.wasmdocument_get_selection_formatting_json(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset);
             var ptr3 = ret[0];
             var len3 = ret[1];
@@ -3077,8 +2781,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_get_table_dimensions(this.__wbg_ptr, ptr0, len0);
@@ -3106,8 +2808,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_get_used_fonts(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -3135,9 +2835,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(page_index);
             const ret = wasm.wasmdocument_hit_test(this.__wbg_ptr, page_index, x_pt, y_pt);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -3164,8 +2861,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3202,8 +2897,6 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(label, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3240,8 +2933,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(citation_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3272,8 +2963,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_insert_column_break(this.__wbg_ptr, ptr0, len0);
@@ -3304,8 +2993,6 @@ export class WasmDocument {
         let deferred6_0;
         let deferred6_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3346,14 +3033,10 @@ export class WasmDocument {
         let deferred6_0;
         let deferred6_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_offset);
             const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
-            _assertNum(end_offset);
             const ptr2 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len2 = WASM_VECTOR_LEN;
             const ptr3 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3385,8 +3068,6 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(parent_comment_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3426,11 +3107,8 @@ export class WasmDocument {
         let deferred6_0;
         let deferred6_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(_offset);
             const ptr1 = passStringToWasm0(target_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passStringToWasm0(_ref_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3464,8 +3142,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3498,8 +3174,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(latex_source, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3531,8 +3205,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3562,8 +3234,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_insert_horizontal_rule(this.__wbg_ptr, ptr0, len0);
@@ -3589,8 +3259,6 @@ export class WasmDocument {
      * @param {string} tooltip_opt
      */
     insert_hyperlink(run_id_str, url, tooltip_opt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(url, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3618,8 +3286,6 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
@@ -3649,11 +3315,8 @@ export class WasmDocument {
      * @param {number} char_offset
      */
     insert_line_break(node_id_str, char_offset) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(char_offset);
         const ret = wasm.wasmdocument_insert_line_break(this.__wbg_ptr, ptr0, len0, char_offset);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -3674,8 +3337,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(field_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3705,8 +3366,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_insert_page_break(this.__wbg_ptr, ptr0, len0);
@@ -3735,8 +3394,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3771,8 +3428,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(break_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3804,8 +3459,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(seq_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3843,8 +3496,6 @@ export class WasmDocument {
         let deferred6_0;
         let deferred6_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(shape_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -3877,11 +3528,8 @@ export class WasmDocument {
      * @param {number} char_offset
      */
     insert_tab(node_id_str, char_offset) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(char_offset);
         const ret = wasm.wasmdocument_insert_tab(this.__wbg_ptr, ptr0, len0, char_offset);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -3901,12 +3549,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(rows);
-            _assertNum(cols);
             const ret = wasm.wasmdocument_insert_table(this.__wbg_ptr, ptr0, len0, rows, cols);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -3927,11 +3571,8 @@ export class WasmDocument {
      * @param {number} col_index
      */
     insert_table_column(table_id_str, col_index) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(col_index);
         const ret = wasm.wasmdocument_insert_table_column(this.__wbg_ptr, ptr0, len0, col_index);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -3952,11 +3593,8 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(max_level);
             const ptr1 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_insert_table_of_contents(this.__wbg_ptr, ptr0, len0, max_level, ptr1, len1);
@@ -3987,8 +3625,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(after_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(label_filter, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4020,11 +3656,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(row_index);
             const ret = wasm.wasmdocument_insert_table_row(this.__wbg_ptr, ptr0, len0, row_index);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -4046,11 +3679,8 @@ export class WasmDocument {
      * @param {string} text
      */
     insert_text_in_paragraph(node_id_str, offset, text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(offset);
         const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_insert_text_in_paragraph(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
@@ -4063,8 +3693,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     is_batching() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_is_batching(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -4073,8 +3701,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     is_layout_dirty() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_is_layout_dirty(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -4083,8 +3709,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     is_track_changes_enabled() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_is_track_changes_enabled(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -4096,8 +3720,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     is_valid() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_is_valid(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -4112,8 +3734,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(latex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_latex_to_omml(this.__wbg_ptr, ptr0, len0);
@@ -4137,8 +3757,6 @@ export class WasmDocument {
      * @returns {number}
      */
     layout_revision() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_layout_revision(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -4162,9 +3780,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(page_index);
             const ret = wasm.wasmdocument_layout_single_page_json(this.__wbg_ptr, page_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -4192,8 +3807,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(side, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4221,14 +3834,8 @@ export class WasmDocument {
      * @param {number} end_col
      */
     merge_cells(table_id_str, start_row, start_col, end_row, end_col) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_row);
-        _assertNum(start_col);
-        _assertNum(end_row);
-        _assertNum(end_col);
         const ret = wasm.wasmdocument_merge_cells(this.__wbg_ptr, ptr0, len0, start_row, start_col, end_row, end_col);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -4244,8 +3851,6 @@ export class WasmDocument {
      * @param {string} second_id_str
      */
     merge_paragraphs(first_id_str, second_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(first_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(second_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4260,8 +3865,6 @@ export class WasmDocument {
      * @returns {string | undefined}
      */
     metadata_author() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_metadata_author(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -4281,8 +3884,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_metadata_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -4302,8 +3903,6 @@ export class WasmDocument {
      * @returns {string | undefined}
      */
     metadata_title() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_metadata_title(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -4322,8 +3921,6 @@ export class WasmDocument {
      * @param {string} after_id_str
      */
     move_node_after(node_id_str, after_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(after_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4339,8 +3936,6 @@ export class WasmDocument {
      * @param {string} before_id_str
      */
     move_node_before(node_id_str, before_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(before_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4360,8 +3955,6 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(direction, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4398,15 +3991,12 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(direction, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passStringToWasm0(granularity, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len2 = WASM_VECTOR_LEN;
-            _assertBoolean(extend);
             const ret = wasm.wasmdocument_move_range(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, extend);
             var ptr4 = ret[0];
             var len4 = ret[1];
@@ -4429,8 +4019,6 @@ export class WasmDocument {
      * @param {string} cursors_json
      */
     multi_cursor_delete(cursors_json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(cursors_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_multi_cursor_delete(this.__wbg_ptr, ptr0, len0);
@@ -4449,8 +4037,6 @@ export class WasmDocument {
      * @param {string} cursors_json
      */
     multi_cursor_insert(cursors_json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(cursors_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_multi_cursor_insert(this.__wbg_ptr, ptr0, len0);
@@ -4469,8 +4055,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_node_bounds(this.__wbg_ptr, ptr0, len0);
@@ -4498,8 +4082,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_node_info_json(this.__wbg_ptr, ptr0, len0);
@@ -4528,8 +4110,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(omml_xml, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_omml_to_latex(this.__wbg_ptr, ptr0, len0);
@@ -4558,9 +4138,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(page_index);
             const ret = wasm.wasmdocument_page_scene(this.__wbg_ptr, page_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -4585,13 +4162,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
-            _assertNum(page_index);
             const ret = wasm.wasmdocument_page_scene_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr, page_index);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -4611,8 +4182,6 @@ export class WasmDocument {
      * @returns {number}
      */
     paragraph_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_paragraph_count(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -4627,8 +4196,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_paragraph_ids_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -4679,11 +4246,8 @@ export class WasmDocument {
      * @param {string} runs_json
      */
     paste_formatted_runs_json(target_node_str, char_offset, runs_json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(target_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(char_offset);
         const ptr1 = passStringToWasm0(runs_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_paste_formatted_runs_json(this.__wbg_ptr, ptr0, len0, char_offset, ptr1, len1);
@@ -4704,8 +4268,6 @@ export class WasmDocument {
         let deferred4_0;
         let deferred4_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(html, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -4731,11 +4293,8 @@ export class WasmDocument {
      * @param {string} text
      */
     paste_plain_text(para_id_str, offset, text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(offset);
         const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_paste_plain_text(this.__wbg_ptr, ptr0, len0, offset, ptr1, len1);
@@ -4748,8 +4307,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     redo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_redo(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -4763,8 +4320,6 @@ export class WasmDocument {
      * restore original formatting. All revision attributes are stripped.
      */
     reject_all_changes() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_reject_all_changes(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -4775,8 +4330,6 @@ export class WasmDocument {
      * @param {string} node_id_str
      */
     reject_change(node_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_reject_change(this.__wbg_ptr, ptr0, len0);
@@ -4789,8 +4342,6 @@ export class WasmDocument {
      * @param {string} run_id_str
      */
     remove_hyperlink(run_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_remove_hyperlink(this.__wbg_ptr, ptr0, len0);
@@ -4810,8 +4361,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_render_node_html(this.__wbg_ptr, ptr0, len0);
@@ -4842,12 +4391,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(start_char);
-            _assertNum(end_char);
             const ret = wasm.wasmdocument_render_node_slice(this.__wbg_ptr, ptr0, len0, start_char, end_char);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -4879,15 +4424,12 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(row_ids_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len1 = WASM_VECTOR_LEN;
             const ptr2 = passStringToWasm0(chunk_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len2 = WASM_VECTOR_LEN;
-            _assertBoolean(is_continuation);
             const ret = wasm.wasmdocument_render_table_chunk(this.__wbg_ptr, ptr0, len0, ptr1, len1, ptr2, len2, is_continuation);
             var ptr4 = ret[0];
             var len4 = ret[1];
@@ -4912,13 +4454,10 @@ export class WasmDocument {
      * @returns {number}
      */
     replace_all(query, replacement, case_sensitive) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(replacement, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertBoolean(case_sensitive);
         const ret = wasm.wasmdocument_replace_all(this.__wbg_ptr, ptr0, len0, ptr1, len1, case_sensitive);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -4936,12 +4475,8 @@ export class WasmDocument {
      * @param {string} replacement
      */
     replace_text(node_id_str, offset, length, replacement) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(offset);
-        _assertNum(length);
         const ptr1 = passStringToWasm0(replacement, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_replace_text(this.__wbg_ptr, ptr0, len0, offset, length, ptr1, len1);
@@ -4959,12 +4494,8 @@ export class WasmDocument {
      * @param {string} replacement
      */
     replace_text_range(node_id_str, start_offset, end_offset, replacement) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
-        _assertNum(end_offset);
         const ptr1 = passStringToWasm0(replacement, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_replace_text_range(this.__wbg_ptr, ptr0, len0, start_offset, end_offset, ptr1, len1);
@@ -4979,8 +4510,6 @@ export class WasmDocument {
      * @param {number} height_pt
      */
     resize_image(image_id_str, width_pt, height_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_resize_image(this.__wbg_ptr, ptr0, len0, width_pt, height_pt);
@@ -4997,11 +4526,8 @@ export class WasmDocument {
      * @param {boolean} resolved
      */
     resolve_comment(comment_id, resolved) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(comment_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(resolved);
         const ret = wasm.wasmdocument_resolve_comment(this.__wbg_ptr, ptr0, len0, resolved);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5012,8 +4538,6 @@ export class WasmDocument {
      * @returns {number}
      */
     scene_protocol_version() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_scene_protocol_version(this.__wbg_ptr);
         return ret >>> 0;
     }
@@ -5030,8 +4554,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(_config_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_scene_summary(this.__wbg_ptr, ptr0, len0);
@@ -5058,12 +4580,7 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ptr0 = passStringToWasm0(config_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_scene_summary_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr, ptr0, len0);
@@ -5093,11 +4610,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(query, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertBoolean(case_sensitive);
             const ret = wasm.wasmdocument_search_matches(this.__wbg_ptr, ptr0, len0, case_sensitive);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -5123,8 +4637,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_selection_formatting(this.__wbg_ptr, ptr0, len0);
@@ -5152,8 +4664,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(range_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_selection_rects(this.__wbg_ptr, ptr0, len0);
@@ -5176,8 +4686,6 @@ export class WasmDocument {
      * @param {string} alignment
      */
     set_alignment(node_id_str, alignment) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(alignment, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5192,8 +4700,6 @@ export class WasmDocument {
      * @param {string} author
      */
     set_author(author) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_author(this.__wbg_ptr, ptr0, len0);
@@ -5211,11 +4717,8 @@ export class WasmDocument {
      * @param {boolean} bold
      */
     set_bold(node_id_str, bold) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(bold);
         const ret = wasm.wasmdocument_set_bold(this.__wbg_ptr, ptr0, len0, bold);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5231,15 +4734,10 @@ export class WasmDocument {
      * @param {boolean} bold
      */
     set_bold_range(start_node_str, start_offset, end_node_str, end_offset, bold) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
-        _assertBoolean(bold);
         const ret = wasm.wasmdocument_set_bold_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, bold);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5251,8 +4749,6 @@ export class WasmDocument {
      * @param {string} hex
      */
     set_cell_background(cell_id_str, hex) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(cell_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5271,8 +4767,6 @@ export class WasmDocument {
      * @param {string} text
      */
     set_cell_text(cell_id_str, text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(cell_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5288,8 +4782,6 @@ export class WasmDocument {
      * @param {string} hex
      */
     set_color(node_id_str, hex) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5308,14 +4800,10 @@ export class WasmDocument {
      * @param {string} hex
      */
     set_color_range(start_node_str, start_offset, end_node_str, end_offset, hex) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
         const ptr2 = passStringToWasm0(hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_color_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, ptr2, len2);
@@ -5329,8 +4817,6 @@ export class WasmDocument {
      * @param {string} font
      */
     set_font_family(node_id_str, font) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(font, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5349,14 +4835,10 @@ export class WasmDocument {
      * @param {string} font
      */
     set_font_family_range(start_node_str, start_offset, end_node_str, end_offset, font) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
         const ptr2 = passStringToWasm0(font, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len2 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_font_family_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, ptr2, len2);
@@ -5370,8 +4852,6 @@ export class WasmDocument {
      * @param {number} size_pt
      */
     set_font_size(node_id_str, size_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_font_size(this.__wbg_ptr, ptr0, len0, size_pt);
@@ -5388,14 +4868,10 @@ export class WasmDocument {
      * @param {number} size_pt
      */
     set_font_size_range(start_node_str, start_offset, end_node_str, end_offset, size_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
         const ret = wasm.wasmdocument_set_font_size_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, size_pt);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5417,9 +4893,6 @@ export class WasmDocument {
      * @param {string} text
      */
     set_header_footer_text(section_index, hf_kind, hf_type_str, text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(section_index);
         const ptr0 = passStringToWasm0(hf_kind, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(hf_type_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5440,11 +4913,8 @@ export class WasmDocument {
      * @param {number} level
      */
     set_heading_level(node_id_str, level) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(level);
         const ret = wasm.wasmdocument_set_heading_level(this.__wbg_ptr, ptr0, len0, level);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5456,8 +4926,6 @@ export class WasmDocument {
      * @param {string} alt
      */
     set_image_alt_text(image_id_str, alt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(alt, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5477,8 +4945,6 @@ export class WasmDocument {
      * @param {string} mode
      */
     set_image_wrap_mode(image_id_str, mode) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(image_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(mode, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5498,8 +4964,6 @@ export class WasmDocument {
      * @param {number} value_pt
      */
     set_indent(node_id_str, indent_type, value_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(indent_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5516,11 +4980,8 @@ export class WasmDocument {
      * @param {boolean} italic
      */
     set_italic(node_id_str, italic) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(italic);
         const ret = wasm.wasmdocument_set_italic(this.__wbg_ptr, ptr0, len0, italic);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5535,15 +4996,10 @@ export class WasmDocument {
      * @param {boolean} italic
      */
     set_italic_range(start_node_str, start_offset, end_node_str, end_offset, italic) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
-        _assertBoolean(italic);
         const ret = wasm.wasmdocument_set_italic_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, italic);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5557,8 +5013,6 @@ export class WasmDocument {
      * @param {string} spacing
      */
     set_line_spacing(node_id_str, spacing) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(spacing, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5577,13 +5031,10 @@ export class WasmDocument {
      * @param {number} level
      */
     set_list_format(para_id_str, format, level) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(para_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(level);
         const ret = wasm.wasmdocument_set_list_format(this.__wbg_ptr, ptr0, len0, ptr1, len1, level);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5600,8 +5051,6 @@ export class WasmDocument {
      * @param {string} json
      */
     set_page_setup(json) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_page_setup(this.__wbg_ptr, ptr0, len0);
@@ -5619,13 +5068,10 @@ export class WasmDocument {
      * @param {boolean} enabled
      */
     set_paragraph_keep(node_id_str, keep_type, enabled) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(keep_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertBoolean(enabled);
         const ret = wasm.wasmdocument_set_paragraph_keep(this.__wbg_ptr, ptr0, len0, ptr1, len1, enabled);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5641,8 +5087,6 @@ export class WasmDocument {
      * @param {number} value_pt
      */
     set_paragraph_spacing(node_id_str, spacing_type, value_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(spacing_type, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5662,8 +5106,6 @@ export class WasmDocument {
      * @param {string} style_id
      */
     set_paragraph_style_id(node_id_str, style_id) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(style_id, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5703,8 +5145,6 @@ export class WasmDocument {
      * @param {string} new_text
      */
     set_paragraph_text(node_id_str, new_text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(new_text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5725,10 +5165,6 @@ export class WasmDocument {
      * @param {number} spacing_pt
      */
     set_section_columns(section_index, columns, spacing_pt) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(section_index);
-        _assertNum(columns);
         const ret = wasm.wasmdocument_set_section_columns(this.__wbg_ptr, section_index, columns, spacing_pt);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5740,11 +5176,8 @@ export class WasmDocument {
      * @param {boolean} strikethrough
      */
     set_strikethrough(node_id_str, strikethrough) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(strikethrough);
         const ret = wasm.wasmdocument_set_strikethrough(this.__wbg_ptr, ptr0, len0, strikethrough);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5756,8 +5189,6 @@ export class WasmDocument {
      * @param {string} widths_csv
      */
     set_table_column_widths(table_id_str, widths_csv) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(widths_csv, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -5772,8 +5203,6 @@ export class WasmDocument {
      * @param {string} title
      */
     set_title(title) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_set_title(this.__wbg_ptr, ptr0, len0);
@@ -5790,10 +5219,6 @@ export class WasmDocument {
      * @param {boolean} enabled
      */
     set_title_page(section_index, enabled) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(section_index);
-        _assertBoolean(enabled);
         const ret = wasm.wasmdocument_set_title_page(this.__wbg_ptr, section_index, enabled);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5807,9 +5232,6 @@ export class WasmDocument {
      * @param {boolean} enabled
      */
     set_track_changes_enabled(enabled) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertBoolean(enabled);
         const ret = wasm.wasmdocument_set_track_changes_enabled(this.__wbg_ptr, enabled);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5821,11 +5243,8 @@ export class WasmDocument {
      * @param {boolean} underline
      */
     set_underline(node_id_str, underline) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(underline);
         const ret = wasm.wasmdocument_set_underline(this.__wbg_ptr, ptr0, len0, underline);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5840,15 +5259,10 @@ export class WasmDocument {
      * @param {boolean} underline
      */
     set_underline_range(start_node_str, start_offset, end_node_str, end_offset, underline) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(start_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(start_offset);
         const ptr1 = passStringToWasm0(end_node_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(end_offset);
-        _assertBoolean(underline);
         const ret = wasm.wasmdocument_set_underline_range(this.__wbg_ptr, ptr0, len0, start_offset, ptr1, len1, end_offset, underline);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5861,9 +5275,6 @@ export class WasmDocument {
      * @param {number} max
      */
     set_undo_history_cap(max) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(max);
         const ret = wasm.wasmdocument_set_undo_history_cap(this.__wbg_ptr, max);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5878,12 +5289,8 @@ export class WasmDocument {
      * @param {boolean} ascending
      */
     sort_table_by_column(table_id_str, col_index, ascending) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(col_index);
-        _assertBoolean(ascending);
         const ret = wasm.wasmdocument_sort_table_by_column(this.__wbg_ptr, ptr0, len0, col_index, ascending);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5899,12 +5306,8 @@ export class WasmDocument {
      * @param {number} col
      */
     split_merged_cell(table_id_str, row, col) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(table_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertNum(row);
-        _assertNum(col);
         const ret = wasm.wasmdocument_split_merged_cell(this.__wbg_ptr, ptr0, len0, row, col);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -5926,11 +5329,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(char_offset);
             const ret = wasm.wasmdocument_split_paragraph(this.__wbg_ptr, ptr0, len0, char_offset);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -5958,11 +5358,8 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(run_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
-            _assertNum(char_offset);
             const ret = wasm.wasmdocument_split_run(this.__wbg_ptr, ptr0, len0, char_offset);
             var ptr2 = ret[0];
             var len2 = ret[1];
@@ -5987,8 +5384,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     supports_password_protection() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_supports_password_protection(this.__wbg_ptr);
         return ret !== 0;
     }
@@ -6009,8 +5404,6 @@ export class WasmDocument {
         let deferred5_0;
         let deferred5_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(first_para_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ptr1 = passStringToWasm0(last_para_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -6044,8 +5437,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_docy(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6068,8 +5459,6 @@ export class WasmDocument {
      * @returns {Uint8Array}
      */
     to_epub() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_to_epub(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -6086,8 +5475,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_html(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6118,8 +5505,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_layout_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6145,12 +5530,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(config, WasmLayoutConfig);
-            if (config.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_layout_json_with_config(this.__wbg_ptr, config.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6177,12 +5557,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_layout_json_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6210,16 +5585,8 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             _assertClass(config, WasmLayoutConfig);
-            if (config.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_layout_json_with_fonts_and_config(this.__wbg_ptr, font_db.__wbg_ptr, config.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6251,8 +5618,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_paginated_html(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6278,12 +5643,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(config, WasmLayoutConfig);
-            if (config.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_paginated_html_with_config(this.__wbg_ptr, config.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6310,12 +5670,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_paginated_html_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6343,16 +5698,8 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             _assertClass(config, WasmLayoutConfig);
-            if (config.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_paginated_html_with_fonts_and_config(this.__wbg_ptr, font_db.__wbg_ptr, config.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6378,8 +5725,6 @@ export class WasmDocument {
      * @returns {Uint8Array}
      */
     to_pdf() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_to_pdf(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -6393,8 +5738,6 @@ export class WasmDocument {
      * @returns {Uint8Array}
      */
     to_pdf_a() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_to_pdf_a(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -6411,8 +5754,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_pdf_a_data_url(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6438,8 +5779,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_pdf_data_url(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6463,12 +5802,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
             const ret = wasm.wasmdocument_to_pdf_data_url_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6492,12 +5826,7 @@ export class WasmDocument {
      * @returns {Uint8Array}
      */
     to_pdf_with_fonts(font_db) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         _assertClass(font_db, WasmFontDatabase);
-        if (font_db.__wbg_ptr === 0) {
-            throw new Error('Attempt to use a moved value');
-        }
         const ret = wasm.wasmdocument_to_pdf_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -6514,8 +5843,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_to_plain_text(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6538,8 +5865,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     toggle_form_checkbox(node_id_str) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(node_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocument_toggle_form_checkbox(this.__wbg_ptr, ptr0, len0);
@@ -6553,8 +5878,6 @@ export class WasmDocument {
      * @returns {number}
      */
     tracked_changes_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_tracked_changes_count(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -6571,8 +5894,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmdocument_tracked_changes_json(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6592,8 +5913,6 @@ export class WasmDocument {
      * @returns {boolean}
      */
     undo() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_undo(this.__wbg_ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -6613,8 +5932,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_update_composition(this.__wbg_ptr, ptr0, len0);
@@ -6640,8 +5957,6 @@ export class WasmDocument {
      * @param {string} stroke_hex
      */
     update_shape(shape_id_str, width_pt, height_pt, fill_hex, stroke_hex) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(shape_id_str, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(fill_hex, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -6659,8 +5974,6 @@ export class WasmDocument {
      * Rescans headings and regenerates TOC child paragraphs.
      */
     update_table_of_contents() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmdocument_update_table_of_contents(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -6681,8 +5994,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_validate_position(this.__wbg_ptr, ptr0, len0);
@@ -6711,10 +6022,6 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(start_page);
-            _assertNum(end_page);
             const ret = wasm.wasmdocument_visible_page_scenes(this.__wbg_ptr, start_page, end_page);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6740,14 +6047,7 @@ export class WasmDocument {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             _assertClass(font_db, WasmFontDatabase);
-            if (font_db.__wbg_ptr === 0) {
-                throw new Error('Attempt to use a moved value');
-            }
-            _assertNum(start_page);
-            _assertNum(end_page);
             const ret = wasm.wasmdocument_visible_page_scenes_with_fonts(this.__wbg_ptr, font_db.__wbg_ptr, start_page, end_page);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -6773,8 +6073,6 @@ export class WasmDocument {
         let deferred3_0;
         let deferred3_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ptr0 = passStringToWasm0(position_json, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
             const len0 = WASM_VECTOR_LEN;
             const ret = wasm.wasmdocument_word_boundary(this.__wbg_ptr, ptr0, len0);
@@ -6821,9 +6119,7 @@ export class WasmDocumentBuilder {
      * @returns {WasmDocumentBuilder}
      */
     author(author) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
         const ptr = this.__destroy_into_raw();
-        _assertNum(ptr);
         const ptr0 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocumentbuilder_author(ptr, ptr0, len0);
@@ -6838,9 +6134,7 @@ export class WasmDocumentBuilder {
      * @returns {WasmDocument}
      */
     build() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
         const ptr = this.__destroy_into_raw();
-        _assertNum(ptr);
         const ret = wasm.wasmdocumentbuilder_build(ptr);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -6854,10 +6148,7 @@ export class WasmDocumentBuilder {
      * @returns {WasmDocumentBuilder}
      */
     heading(level, text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
         const ptr = this.__destroy_into_raw();
-        _assertNum(ptr);
-        _assertNum(level);
         const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocumentbuilder_heading(ptr, level, ptr0, len0);
@@ -6878,9 +6169,7 @@ export class WasmDocumentBuilder {
      * @returns {WasmDocumentBuilder}
      */
     text(text) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
         const ptr = this.__destroy_into_raw();
-        _assertNum(ptr);
         const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocumentbuilder_text(ptr, ptr0, len0);
@@ -6892,9 +6181,7 @@ export class WasmDocumentBuilder {
      * @returns {WasmDocumentBuilder}
      */
     title(title) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
         const ptr = this.__destroy_into_raw();
-        _assertNum(ptr);
         const ptr0 = passStringToWasm0(title, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmdocumentbuilder_title(ptr, ptr0, len0);
@@ -6922,8 +6209,6 @@ export class WasmEngine {
      * @returns {WasmDocument}
      */
     create() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmengine_create(this.__wbg_ptr);
         return WasmDocument.__wrap(ret);
     }
@@ -6935,9 +6220,6 @@ export class WasmEngine {
      * @returns {WasmCollabDocument}
      */
     create_collab(replica_id) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertBigInt(replica_id);
         const ret = wasm.wasmengine_create_collab(this.__wbg_ptr, replica_id);
         return WasmCollabDocument.__wrap(ret);
     }
@@ -6958,8 +6240,6 @@ export class WasmEngine {
      * @returns {WasmDocument}
      */
     open(data) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmengine_open(this.__wbg_ptr, ptr0, len0);
@@ -6977,8 +6257,6 @@ export class WasmEngine {
      * @returns {WasmDocument}
      */
     open_as(data, format) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(format, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -6998,11 +6276,8 @@ export class WasmEngine {
      * @returns {WasmCollabDocument}
      */
     open_collab(data, replica_id) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBigInt(replica_id);
         const ret = wasm.wasmengine_open_collab(this.__wbg_ptr, ptr0, len0, replica_id);
         if (ret[2]) {
             throw takeFromExternrefTable0(ret[1]);
@@ -7034,8 +6309,6 @@ export class WasmFontDatabase {
      * @returns {number}
      */
     font_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmfontdatabase_font_count(this.__wbg_ptr);
         return ret >>> 0;
     }
@@ -7045,8 +6318,6 @@ export class WasmFontDatabase {
      * @returns {boolean}
      */
     has_font(family) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmfontdatabase_has_font(this.__wbg_ptr, ptr0, len0);
@@ -7057,8 +6328,6 @@ export class WasmFontDatabase {
      * @param {Uint8Array} data
      */
     load_font(data) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray8ToWasm0(data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.wasmfontdatabase_load_font(this.__wbg_ptr, ptr0, len0);
@@ -7090,16 +6359,8 @@ export class WasmFontDatabase {
      * @returns {Uint8Array | undefined}
      */
     rasterize_glyph(family, bold, italic, glyph_id, size_px, r, g, b) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(bold);
-        _assertBoolean(italic);
-        _assertNum(glyph_id);
-        _assertNum(r);
-        _assertNum(g);
-        _assertNum(b);
         const ret = wasm.wasmfontdatabase_rasterize_glyph(this.__wbg_ptr, ptr0, len0, bold, italic, glyph_id, size_px, r, g, b);
         let v2;
         if (ret[0] !== 0) {
@@ -7127,17 +6388,10 @@ export class WasmFontDatabase {
      * @returns {Uint8Array | undefined}
      */
     rasterize_run(family, bold, italic, glyph_data, size_px, r, g, b, total_width, line_height) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(family, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
-        _assertBoolean(bold);
-        _assertBoolean(italic);
         const ptr1 = passArray8ToWasm0(glyph_data, wasm.__wbindgen_malloc);
         const len1 = WASM_VECTOR_LEN;
-        _assertNum(r);
-        _assertNum(g);
-        _assertNum(b);
         const ret = wasm.wasmfontdatabase_rasterize_run(this.__wbg_ptr, ptr0, len0, bold, italic, ptr1, len1, size_px, r, g, b, total_width, line_height);
         let v3;
         if (ret[0] !== 0) {
@@ -7171,8 +6425,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     margin_bottom() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_margin_bottom(this.__wbg_ptr);
         return ret;
     }
@@ -7181,8 +6433,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     margin_left() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_margin_left(this.__wbg_ptr);
         return ret;
     }
@@ -7191,8 +6441,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     margin_right() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_margin_right(this.__wbg_ptr);
         return ret;
     }
@@ -7201,8 +6449,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     margin_top() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_margin_top(this.__wbg_ptr);
         return ret;
     }
@@ -7223,8 +6469,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     page_height() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_page_height(this.__wbg_ptr);
         return ret;
     }
@@ -7233,8 +6477,6 @@ export class WasmLayoutConfig {
      * @returns {number}
      */
     page_width() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmlayoutconfig_page_width(this.__wbg_ptr);
         return ret;
     }
@@ -7243,8 +6485,6 @@ export class WasmLayoutConfig {
      * @param {number} margin
      */
     set_margin_bottom(margin) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_margin_bottom(this.__wbg_ptr, margin);
     }
     /**
@@ -7252,8 +6492,6 @@ export class WasmLayoutConfig {
      * @param {number} margin
      */
     set_margin_left(margin) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_margin_left(this.__wbg_ptr, margin);
     }
     /**
@@ -7261,8 +6499,6 @@ export class WasmLayoutConfig {
      * @param {number} margin
      */
     set_margin_right(margin) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_margin_right(this.__wbg_ptr, margin);
     }
     /**
@@ -7270,8 +6506,6 @@ export class WasmLayoutConfig {
      * @param {number} margin
      */
     set_margin_top(margin) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_margin_top(this.__wbg_ptr, margin);
     }
     /**
@@ -7279,8 +6513,6 @@ export class WasmLayoutConfig {
      * @param {number} height
      */
     set_page_height(height) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_page_height(this.__wbg_ptr, height);
     }
     /**
@@ -7288,8 +6520,6 @@ export class WasmLayoutConfig {
      * @param {number} width
      */
     set_page_width(width) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         wasm.wasmlayoutconfig_set_page_width(this.__wbg_ptr, width);
     }
 }
@@ -7299,9 +6529,6 @@ if (Symbol.dispose) WasmLayoutConfig.prototype[Symbol.dispose] = WasmLayoutConfi
  * PDF editor for reading, annotating, and modifying existing PDFs.
  */
 export class WasmPdfEditor {
-    constructor() {
-        throw new Error('cannot invoke `new` directly');
-    }
     static __wrap(ptr) {
         ptr = ptr >>> 0;
         const obj = Object.create(WasmPdfEditor.prototype);
@@ -7330,9 +6557,6 @@ export class WasmPdfEditor {
      * @param {number} font_size
      */
     add_freetext_annotation(page, x, y, width, height, text, font_size) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpdfeditor_add_freetext_annotation(this.__wbg_ptr, page, x, y, width, height, ptr0, len0, font_size);
@@ -7351,9 +6575,6 @@ export class WasmPdfEditor {
      * @param {string} content
      */
     add_highlight_annotation(page, quads, r, g, b, author, content) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ptr0 = passArrayF64ToWasm0(quads, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -7375,9 +6596,6 @@ export class WasmPdfEditor {
      * @param {number} width
      */
     add_ink_annotation(page, points, r, g, b, width) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ptr0 = passArrayF64ToWasm0(points, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpdfeditor_add_ink_annotation(this.__wbg_ptr, page, ptr0, len0, r, g, b, width);
@@ -7394,9 +6612,6 @@ export class WasmPdfEditor {
      * @param {number} height
      */
     add_redaction(page, x, y, width, height) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ret = wasm.wasmpdfeditor_add_redaction(this.__wbg_ptr, page, x, y, width, height);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7411,9 +6626,6 @@ export class WasmPdfEditor {
      * @param {string} content
      */
     add_text_annotation(page, x, y, author, content) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ptr0 = passStringToWasm0(author, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(content, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -7434,9 +6646,6 @@ export class WasmPdfEditor {
      * @param {number} font_size
      */
     add_text_overlay(page, x, y, width, height, text, font_size) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ptr0 = passStringToWasm0(text, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpdfeditor_add_text_overlay(this.__wbg_ptr, page, x, y, width, height, ptr0, len0, font_size);
@@ -7453,9 +6662,6 @@ export class WasmPdfEditor {
      * @param {number} height
      */
     add_white_rect(page, x, y, width, height) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ret = wasm.wasmpdfeditor_add_white_rect(this.__wbg_ptr, page, x, y, width, height);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7465,8 +6671,6 @@ export class WasmPdfEditor {
      * Apply all redaction annotations — permanently removes content.
      */
     apply_redactions() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmpdfeditor_apply_redactions(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7477,9 +6681,6 @@ export class WasmPdfEditor {
      * @param {number} page
      */
     delete_page(page) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ret = wasm.wasmpdfeditor_delete_page(this.__wbg_ptr, page);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7490,9 +6691,6 @@ export class WasmPdfEditor {
      * @param {number} page
      */
     duplicate_page(page) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
         const ret = wasm.wasmpdfeditor_duplicate_page(this.__wbg_ptr, page);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7504,8 +6702,6 @@ export class WasmPdfEditor {
      * @returns {Uint8Array}
      */
     extract_pages(pages) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray32ToWasm0(pages, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpdfeditor_extract_pages(this.__wbg_ptr, ptr0, len0);
@@ -7520,8 +6716,6 @@ export class WasmPdfEditor {
      * Flatten the form.
      */
     flatten_form() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmpdfeditor_flatten_form(this.__wbg_ptr);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7535,8 +6729,6 @@ export class WasmPdfEditor {
         let deferred2_0;
         let deferred2_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmpdfeditor_get_form_fields(this.__wbg_ptr);
             var ptr1 = ret[0];
             var len1 = ret[1];
@@ -7556,8 +6748,6 @@ export class WasmPdfEditor {
      * @param {Uint8Array} other_data
      */
     merge(other_data) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passArray8ToWasm0(other_data, wasm.__wbindgen_malloc);
         const len0 = WASM_VECTOR_LEN;
         const ret = wasm.wasmpdfeditor_merge(this.__wbg_ptr, ptr0, len0);
@@ -7571,10 +6761,6 @@ export class WasmPdfEditor {
      * @param {number} to
      */
     move_page(from, to) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(from);
-        _assertNum(to);
         const ret = wasm.wasmpdfeditor_move_page(this.__wbg_ptr, from, to);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7599,8 +6785,6 @@ export class WasmPdfEditor {
      * @returns {number}
      */
     page_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmpdfeditor_page_count(this.__wbg_ptr);
         return ret >>> 0;
     }
@@ -7610,10 +6794,6 @@ export class WasmPdfEditor {
      * @param {number} degrees
      */
     rotate_page(page, degrees) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(page);
-        _assertNum(degrees);
         const ret = wasm.wasmpdfeditor_rotate_page(this.__wbg_ptr, page, degrees);
         if (ret[1]) {
             throw takeFromExternrefTable0(ret[0]);
@@ -7624,8 +6804,6 @@ export class WasmPdfEditor {
      * @returns {Uint8Array}
      */
     save() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmpdfeditor_save(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -7640,8 +6818,6 @@ export class WasmPdfEditor {
      * @param {string} value
      */
     set_form_field_value(field_name, value) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(field_name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         const ptr1 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
@@ -7683,8 +6859,6 @@ export class WasmSpreadsheet {
      * @param {string} name
      */
     add_sheet(name) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.wasmspreadsheet_add_sheet(this.__wbg_ptr, ptr0, len0);
@@ -7695,10 +6869,6 @@ export class WasmSpreadsheet {
      * @param {number} col
      */
     delete_column(sheet, col) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(col);
         wasm.wasmspreadsheet_delete_column(this.__wbg_ptr, sheet, col);
     }
     /**
@@ -7707,10 +6877,6 @@ export class WasmSpreadsheet {
      * @param {number} row
      */
     delete_row(sheet, row) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(row);
         wasm.wasmspreadsheet_delete_row(this.__wbg_ptr, sheet, row);
     }
     /**
@@ -7718,9 +6884,6 @@ export class WasmSpreadsheet {
      * @param {number} index
      */
     delete_sheet(index) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(index);
         wasm.wasmspreadsheet_delete_sheet(this.__wbg_ptr, index);
     }
     /**
@@ -7732,9 +6895,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(sheet);
             const ret = wasm.wasmspreadsheet_dimensions(this.__wbg_ptr, sheet);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -7752,9 +6912,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(sheet);
             const ret = wasm.wasmspreadsheet_export_csv(this.__wbg_ptr, sheet);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -7768,8 +6925,6 @@ export class WasmSpreadsheet {
      * @returns {Uint8Array}
      */
     export_ods() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmspreadsheet_export_ods(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -7783,8 +6938,6 @@ export class WasmSpreadsheet {
      * @returns {Uint8Array}
      */
     export_xlsx() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmspreadsheet_export_xlsx(this.__wbg_ptr);
         if (ret[3]) {
             throw takeFromExternrefTable0(ret[2]);
@@ -7802,11 +6955,6 @@ export class WasmSpreadsheet {
      * @param {number} row
      */
     freeze_panes(sheet, col, row) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(col);
-        _assertNum(row);
         wasm.wasmspreadsheet_freeze_panes(this.__wbg_ptr, sheet, col, row);
     }
     /**
@@ -7822,11 +6970,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(sheet);
-            _assertNum(col);
-            _assertNum(row);
             const ret = wasm.wasmspreadsheet_get_cell(this.__wbg_ptr, sheet, col, row);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -7857,13 +7000,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(sheet);
-            _assertNum(start_col);
-            _assertNum(start_row);
-            _assertNum(end_col);
-            _assertNum(end_row);
             const ret = wasm.wasmspreadsheet_get_visible_range_json(this.__wbg_ptr, sheet, start_col, start_row, end_col, end_row);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -7880,10 +7016,6 @@ export class WasmSpreadsheet {
      * @param {number} after_col
      */
     insert_column(sheet, after_col) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(after_col);
         wasm.wasmspreadsheet_insert_column(this.__wbg_ptr, sheet, after_col);
     }
     /**
@@ -7894,10 +7026,6 @@ export class WasmSpreadsheet {
      * @param {number} after_row
      */
     insert_row(sheet, after_row) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(after_row);
         wasm.wasmspreadsheet_insert_row(this.__wbg_ptr, sheet, after_row);
     }
     /**
@@ -7909,9 +7037,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
-            _assertNum(sheet);
             const ret = wasm.wasmspreadsheet_merged_cells_json(this.__wbg_ptr, sheet);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -7952,9 +7077,6 @@ export class WasmSpreadsheet {
      * @param {number} sheet
      */
     recalculate(sheet) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
         wasm.wasmspreadsheet_recalculate(this.__wbg_ptr, sheet);
     }
     /**
@@ -7963,9 +7085,6 @@ export class WasmSpreadsheet {
      * @param {string} name
      */
     rename_sheet(index, name) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(index);
         const ptr0 = passStringToWasm0(name, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.wasmspreadsheet_rename_sheet(this.__wbg_ptr, index, ptr0, len0);
@@ -7978,11 +7097,6 @@ export class WasmSpreadsheet {
      * @param {string} value
      */
     set_cell(sheet, col, row, value) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(col);
-        _assertNum(row);
         const ptr0 = passStringToWasm0(value, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.wasmspreadsheet_set_cell(this.__wbg_ptr, sheet, col, row, ptr0, len0);
@@ -7995,11 +7109,6 @@ export class WasmSpreadsheet {
      * @param {string} formula
      */
     set_formula(sheet, col, row, formula) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(col);
-        _assertNum(row);
         const ptr0 = passStringToWasm0(formula, wasm.__wbindgen_malloc, wasm.__wbindgen_realloc);
         const len0 = WASM_VECTOR_LEN;
         wasm.wasmspreadsheet_set_formula(this.__wbg_ptr, sheet, col, row, ptr0, len0);
@@ -8009,8 +7118,6 @@ export class WasmSpreadsheet {
      * @returns {number}
      */
     sheet_count() {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
         const ret = wasm.wasmspreadsheet_sheet_count(this.__wbg_ptr);
         return ret >>> 0;
     }
@@ -8022,8 +7129,6 @@ export class WasmSpreadsheet {
         let deferred1_0;
         let deferred1_1;
         try {
-            if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-            _assertNum(this.__wbg_ptr);
             const ret = wasm.wasmspreadsheet_sheet_names_json(this.__wbg_ptr);
             deferred1_0 = ret[0];
             deferred1_1 = ret[1];
@@ -8041,11 +7146,6 @@ export class WasmSpreadsheet {
      * @param {boolean} ascending
      */
     sort_by_column(sheet, col, ascending) {
-        if (this.__wbg_ptr == 0) throw new Error('Attempt to use a moved value');
-        _assertNum(this.__wbg_ptr);
-        _assertNum(sheet);
-        _assertNum(col);
-        _assertBoolean(ascending);
         wasm.wasmspreadsheet_sort_by_column(this.__wbg_ptr, sheet, col, ascending);
     }
 }
@@ -8102,17 +7202,13 @@ export function detect_format(data) {
     }
 }
 
-//#endregion
-
-//#region wasm imports
-
 function __wbg_get_imports() {
     const import0 = {
         __proto__: null,
-        __wbg_Error_83742b46f01ce22d: function() { return logError(function (arg0, arg1) {
+        __wbg_Error_83742b46f01ce22d: function(arg0, arg1) {
             const ret = Error(getStringFromWasm0(arg0, arg1));
             return ret;
-        }, arguments); },
+        },
         __wbg___wbindgen_throw_6ddd609b62940d55: function(arg0, arg1) {
             throw new Error(getStringFromWasm0(arg0, arg1));
         },
@@ -8132,8 +7228,6 @@ function __wbg_get_imports() {
     };
 }
 
-
-//#endregion
 const WasmCollabDocumentFinalization = (typeof FinalizationRegistry === 'undefined')
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmcollabdocument_free(ptr >>> 0, 1));
@@ -8159,26 +7253,10 @@ const WasmSpreadsheetFinalization = (typeof FinalizationRegistry === 'undefined'
     ? { register: () => {}, unregister: () => {} }
     : new FinalizationRegistry(ptr => wasm.__wbg_wasmspreadsheet_free(ptr >>> 0, 1));
 
-
-//#region intrinsics
-function _assertBigInt(n) {
-    if (typeof(n) !== 'bigint') throw new Error(`expected a bigint argument, found ${typeof(n)}`);
-}
-
-function _assertBoolean(n) {
-    if (typeof(n) !== 'boolean') {
-        throw new Error(`expected a boolean argument, found ${typeof(n)}`);
-    }
-}
-
 function _assertClass(instance, klass) {
     if (!(instance instanceof klass)) {
         throw new Error(`expected instance of ${klass.name}`);
     }
-}
-
-function _assertNum(n) {
-    if (typeof(n) !== 'number') throw new Error(`expected a number argument, found ${typeof(n)}`);
 }
 
 function getArrayU8FromWasm0(ptr, len) {
@@ -8215,22 +7293,6 @@ function getUint8ArrayMemory0() {
     return cachedUint8ArrayMemory0;
 }
 
-function logError(f, args) {
-    try {
-        return f.apply(this, args);
-    } catch (e) {
-        let error = (function () {
-            try {
-                return e instanceof Error ? `${e.message}\n\nStack:\n${e.stack}` : e.toString();
-            } catch(_) {
-                return "<failed to stringify thrown value>";
-            }
-        }());
-        console.error("wasm-bindgen: imported JS function that was not marked as `catch` threw an error:", error);
-        throw e;
-    }
-}
-
 function passArray32ToWasm0(arg, malloc) {
     const ptr = malloc(arg.length * 4, 4) >>> 0;
     getUint32ArrayMemory0().set(arg, ptr / 4);
@@ -8253,7 +7315,6 @@ function passArrayF64ToWasm0(arg, malloc) {
 }
 
 function passStringToWasm0(arg, malloc, realloc) {
-    if (typeof(arg) !== 'string') throw new Error(`expected a string argument, found ${typeof(arg)}`);
     if (realloc === undefined) {
         const buf = cachedTextEncoder.encode(arg);
         const ptr = malloc(buf.length, 1) >>> 0;
@@ -8281,7 +7342,7 @@ function passStringToWasm0(arg, malloc, realloc) {
         ptr = realloc(ptr, len, len = offset + arg.length * 3, 1) >>> 0;
         const view = getUint8ArrayMemory0().subarray(ptr + offset, ptr + len);
         const ret = cachedTextEncoder.encodeInto(arg, view);
-        if (ret.read !== arg.length) throw new Error('failed to pass whole string');
+
         offset += ret.written;
         ptr = realloc(ptr, len, offset, 1) >>> 0;
     }
@@ -8325,10 +7386,6 @@ if (!('encodeInto' in cachedTextEncoder)) {
 
 let WASM_VECTOR_LEN = 0;
 
-
-//#endregion
-
-//#region wasm loading
 let wasmModule, wasm;
 function __wbg_finalize_init(instance, module) {
     wasm = instance.exports;
@@ -8422,5 +7479,3 @@ async function __wbg_init(module_or_path) {
 }
 
 export { initSync, __wbg_init as default };
-//#endregion
-export { wasm as __wasm }

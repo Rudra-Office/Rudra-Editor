@@ -1,97 +1,88 @@
 //! s1-format-docy — OnlyOffice DOCY binary format writer.
 //!
 //! Transforms s1engine DocumentModel into DOCY binary format that
-//! sdkjs BinaryFileReader can parse natively, enabling full-fidelity
-//! rendering of headers, footers, images, tables, TOC, comments, etc.
-//!
-//! Architecture:
-//! ```text
-//! DOCX → s1-format-docx::read() → DocumentModel → s1-format-docy::write() → DOCY → sdkjs
-//! ```
+//! sdkjs BinaryFileReader can parse natively.
 
 mod constants;
 mod writer;
-mod tables;
+pub mod tables;
 mod props;
-mod content;
+pub mod content;
 
 use base64::engine::Engine as _;
 use s1_model::DocumentModel;
 
 /// Write a DocumentModel as a DOCY binary string.
-///
-/// Returns the wrapped DOCY payload string: `DOCY;v5;{size};{base64_data}`.
-///
-/// The wrapper/header format is correct, but the nested payload is still
-/// experimental and not yet safe for general `sdkjs OpenDocumentFromBin()`
-/// usage.
 pub fn write(model: &DocumentModel) -> String {
     let mut w = writer::DocyWriter::new();
 
-    // Count mandatory tables (Signature, Settings, Style, Document, Other)
-    let mut table_count = 5;
-    if tables::numbering::has_content(model) { table_count += 1; }
-    if tables::headers_footers::has_content(model) { table_count += 1; }
-    if tables::comments::has_content(model) { table_count += 1; }
-    if tables::footnotes::has_content(model) { table_count += 1; }
-    if tables::endnotes::has_content(model) { table_count += 1; }
+    let has_numbering = tables::numbering::has_content(model);
+    let has_hdrftr = tables::headers_footers::has_content(model);
+    let has_comments = tables::comments::has_content(model);
+    let has_footnotes = tables::footnotes::has_content(model);
+    let has_endnotes = tables::endnotes::has_content(model);
 
-    // Main table
+    let mut table_count: u8 = 5; // Sig + Other + Settings + Style + Doc
+    if has_numbering { table_count += 1; }
+    if has_hdrftr { table_count += 1; }
+    if has_comments { table_count += 1; }
+    if has_footnotes { table_count += 1; }
+    if has_endnotes { table_count += 1; }
+
     let mut mt = w.begin_main_table(table_count);
 
-    // Table 1: Signature (required)
+    // Signature
     w.register_table(&mut mt, constants::table_type::SIGNATURE);
     tables::signature::write(&mut w);
 
-    // Table 2: Settings (required)
+    // Settings
     w.register_table(&mut mt, constants::table_type::SETTINGS);
     tables::settings::write(&mut w, model);
 
-    // Table 3: Numbering (if lists exist)
-    if tables::numbering::has_content(model) {
+    // Other (empty theme)
+    w.register_table(&mut mt, constants::table_type::OTHER);
+    tables::other::write(&mut w);
+
+    // Numbering
+    if has_numbering {
         w.register_table(&mut mt, constants::table_type::NUMBERING);
         tables::numbering::write(&mut w, model);
     }
 
-    // Table 4: Styles (required)
-    w.register_table(&mut mt, constants::table_type::STYLE);
-    tables::styles::write(&mut w, model);
-
-    // Table 5: Document content (required)
-    w.register_table(&mut mt, constants::table_type::DOCUMENT);
-    tables::document::write(&mut w, model);
-
-    // Table 6: Headers/Footers (if present)
-    if tables::headers_footers::has_content(model) {
-        w.register_table(&mut mt, constants::table_type::HDR_FTR);
-        tables::headers_footers::write(&mut w, model);
-    }
-
-    // Table 7: Comments (if present)
-    if tables::comments::has_content(model) {
+    // Comments
+    if has_comments {
         w.register_table(&mut mt, constants::table_type::COMMENTS);
         tables::comments::write(&mut w, model);
     }
 
-    // Table 8: Footnotes (if present)
-    if tables::footnotes::has_content(model) {
+    // Footnotes
+    if has_footnotes {
         w.register_table(&mut mt, constants::table_type::FOOTNOTES);
         tables::footnotes::write(&mut w, model);
     }
 
-    // Table 9: Endnotes (if present)
-    if tables::endnotes::has_content(model) {
+    // Endnotes
+    if has_endnotes {
         w.register_table(&mut mt, constants::table_type::ENDNOTES);
         tables::endnotes::write(&mut w, model);
     }
 
-    // Table 10: Other (theme — can be empty)
-    w.register_table(&mut mt, constants::table_type::OTHER);
-    tables::other::write(&mut w);
+    // Styles
+    w.register_table(&mut mt, constants::table_type::STYLE);
+    tables::styles::write(&mut w, model);
+
+    // Headers/Footers
+    if has_hdrftr {
+        w.register_table(&mut mt, constants::table_type::HDR_FTR);
+        tables::headers_footers::write(&mut w, model);
+    }
+
+    // Document (main content)
+    w.register_table(&mut mt, constants::table_type::DOCUMENT);
+    tables::document::write(&mut w, model);
 
     w.end_main_table(&mt);
 
-    // Encode as DOCY string
     let binary = w.into_bytes();
     let b64 = base64::engine::general_purpose::STANDARD.encode(&binary);
     format!(
@@ -103,5 +94,4 @@ pub fn write(model: &DocumentModel) -> String {
     )
 }
 
-// Re-export for WASM integration
 pub use writer::DocyWriter;

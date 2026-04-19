@@ -1,8 +1,15 @@
 use crate::constants::*;
 use crate::writer::DocyWriter;
 use s1_model::{PageOrientation, SectionBreakType, SectionProperties};
+use crate::tables::headers_footers::HdrFtrEntry;
 
-pub fn write(w: &mut DocyWriter, sec: &SectionProperties) {
+/// Write section properties with optional header/footer index references.
+pub fn write_with_hdr_ftr(
+    w: &mut DocyWriter,
+    sec: &SectionProperties,
+    all_headers: &[HdrFtrEntry],
+    all_footers: &[HdrFtrEntry],
+) {
     w.write_item(sec_pr::PG_SZ, |w| write_page_size(w, sec));
     w.write_item(sec_pr::PG_MAR, |w| write_page_margins(w, sec));
     w.write_item(sec_pr::SETTINGS, |w| write_settings(w, sec));
@@ -10,6 +17,39 @@ pub fn write(w: &mut DocyWriter, sec: &SectionProperties) {
     if sec.columns > 1 || !sec.equal_width {
         w.write_item(sec_pr::COLS, |w| write_columns(w, sec));
     }
+
+    // Header references — indices into the flat headers array
+    if !sec.headers.is_empty() {
+        w.write_item(sec_pr::HEADERS, |w| {
+            for hf_ref in &sec.headers {
+                // Find index of this header in the flat array
+                if let Some(idx) = all_headers.iter().position(|e| e.node_id == hf_ref.node_id) {
+                    w.write_item(sec_pr::HDR_FTR_ELEM, |w| {
+                        w.write_long(idx as u32);
+                    });
+                }
+            }
+        });
+    }
+
+    // Footer references — indices into the flat footers array
+    if !sec.footers.is_empty() {
+        w.write_item(sec_pr::FOOTERS, |w| {
+            for hf_ref in &sec.footers {
+                if let Some(idx) = all_footers.iter().position(|e| e.node_id == hf_ref.node_id) {
+                    w.write_item(sec_pr::HDR_FTR_ELEM, |w| {
+                        w.write_long(idx as u32);
+                    });
+                }
+            }
+        });
+    }
+}
+
+/// Write section properties without header/footer references.
+#[allow(dead_code)]
+pub fn write(w: &mut DocyWriter, sec: &SectionProperties) {
+    write_with_hdr_ftr(w, sec, &[], &[]);
 }
 
 fn write_page_size(w: &mut DocyWriter, sec: &SectionProperties) {

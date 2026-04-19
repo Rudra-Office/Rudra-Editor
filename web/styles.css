@@ -83,6 +83,7 @@ html, body { height: 100%; overflow: hidden; font-family: 'Google Sans', Roboto,
 
 /* Color palette dropdown — z-index must beat editor_sdk (10000) and toolbar (10000) */
 .color-palette {
+  display: none;
   position: absolute; top: 100%; left: 0; z-index: 30000;
   grid-template-columns: repeat(10, 18px); gap: 2px;
   padding: 6px; background: #fff; border-radius: 8px;

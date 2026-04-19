@@ -1,6 +1,7 @@
 use crate::constants::*;
 use crate::writer::DocyWriter;
-use s1_model::{AttributeKey, AttributeMap, AttributeValue, Alignment, LineSpacing, DocumentDefaults};
+use crate::props::borders;
+use s1_model::{AttributeKey, AttributeMap, AttributeValue, Alignment, LineSpacing, DocumentDefaults, TabAlignment, TabLeader};
 
 /// Write paragraph properties (pPr) from an attribute map.
 pub fn write(w: &mut DocyWriter, attrs: &AttributeMap) {
@@ -16,15 +17,22 @@ pub fn write(w: &mut DocyWriter, attrs: &AttributeMap) {
         w.write_prop_byte(ppr::JC, val);
     }
 
-    // Indentation (points → twips)
-    if let Some(v) = attrs.get_f64(&AttributeKey::IndentLeft) {
-        w.write_prop_long_signed(ppr::IND_LEFT_TWIPS, pts_to_twips(v));
-    }
-    if let Some(v) = attrs.get_f64(&AttributeKey::IndentRight) {
-        w.write_prop_long_signed(ppr::IND_RIGHT_TWIPS, pts_to_twips(v));
-    }
-    if let Some(v) = attrs.get_f64(&AttributeKey::IndentFirstLine) {
-        w.write_prop_long_signed(ppr::IND_FIRST_LINE_TWIPS, pts_to_twips(v));
+    // Indentation — must be wrapped in Ind container (pPrType.Ind=1)
+    let has_indent = attrs.get_f64(&AttributeKey::IndentLeft).is_some()
+        || attrs.get_f64(&AttributeKey::IndentRight).is_some()
+        || attrs.get_f64(&AttributeKey::IndentFirstLine).is_some();
+    if has_indent {
+        w.write_prop_item(ppr::IND, |w| {
+            if let Some(v) = attrs.get_f64(&AttributeKey::IndentLeft) {
+                w.write_prop_long_signed(ppr::IND_LEFT_TWIPS, pts_to_twips(v));
+            }
+            if let Some(v) = attrs.get_f64(&AttributeKey::IndentRight) {
+                w.write_prop_long_signed(ppr::IND_RIGHT_TWIPS, pts_to_twips(v));
+            }
+            if let Some(v) = attrs.get_f64(&AttributeKey::IndentFirstLine) {
+                w.write_prop_long_signed(ppr::IND_FIRST_LINE_TWIPS, pts_to_twips(v));
+            }
+        });
     }
 
     // Spacing
@@ -99,10 +107,10 @@ pub fn write(w: &mut DocyWriter, attrs: &AttributeMap) {
         });
     }
 
-    // Outline level
+    // Outline level — sdkjs uses Long (GetLongLE), not Byte
     if let Some(AttributeValue::Int(lvl)) = attrs.get(&AttributeKey::OutlineLevel) {
         if *lvl >= 0 && *lvl <= 8 {
-            w.write_prop_byte(ppr::OUTLINE_LVL, *lvl as u8);
+            w.write_prop_long(ppr::OUTLINE_LVL, *lvl as u32);
         }
     }
 
@@ -116,11 +124,54 @@ pub fn write(w: &mut DocyWriter, attrs: &AttributeMap) {
         w.write_prop_bool(ppr::CONTEXTUAL_SPACING, true);
     }
 
-    // Background/shading
+    // Background/shading — Read2 format: ShdType.Color(1) + lenType=Three(3) + RGB
     if let Some(AttributeValue::Color(c)) = attrs.get(&AttributeKey::Background) {
         w.write_prop_item(ppr::SHD, |w| {
-            w.write_byte(color::RGB);
+            // c_oSerShdType.Value = 0, Byte
+            w.write_prop_byte(0, 1); // ShdClear
+            // c_oSerShdType.Color = 1, Three bytes (RGB)
+            w.write_byte(1);  // type
+            w.write_byte(3);  // lenType = Three
             w.write_color_rgb(c.r, c.g, c.b);
+        });
+    }
+
+    // Tab stops
+    if let Some(tabs) = attrs.get_tab_stops(&AttributeKey::TabStops) {
+        if !tabs.is_empty() {
+            w.write_prop_item(ppr::TAB, |w| {
+                for tab in tabs {
+                    w.write_prop_item(ppr::TAB_ITEM, |w| {
+                        // Position in twips
+                        w.write_prop_long(ppr::TAB_ITEM_POS_TWIPS, pts_to_twips(tab.position) as u32);
+                        // Value (tab type): Left=8, Center=1, Right=7, Decimal=3
+                        let val = match tab.alignment {
+                            TabAlignment::Left => 8u8,
+                            TabAlignment::Center => 1,
+                            TabAlignment::Right => 7,
+                            TabAlignment::Decimal => 3,
+                            _ => 8,
+                        };
+                        w.write_prop_byte(ppr::TAB_ITEM_VAL, val);
+                        // Leader: Dot=0, Heavy=1, Hyphen=2, MiddleDot=3, None=4, Underscore=5
+                        let leader = match tab.leader {
+                            TabLeader::Dot => 0u8,
+                            TabLeader::Dash => 2,
+                            TabLeader::Underscore => 5,
+                            TabLeader::None => 4,
+                            _ => 4,
+                        };
+                        w.write_prop_byte(ppr::TAB_ITEM_LEADER, leader);
+                    });
+                }
+            });
+        }
+    }
+
+    // Paragraph borders
+    if let Some(brd) = attrs.get_borders(&AttributeKey::ParagraphBorders) {
+        w.write_prop_item(ppr::PBDR, |w| {
+            borders::write_borders(w, brd);
         });
     }
 }

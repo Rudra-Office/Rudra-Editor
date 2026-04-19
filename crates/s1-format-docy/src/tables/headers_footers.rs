@@ -1,50 +1,60 @@
 use crate::constants::hdr_ftr;
 use crate::writer::DocyWriter;
 use crate::content;
-use s1_model::{DocumentModel, NodeType, NodeId};
+use s1_model::{DocumentModel, NodeType, NodeId, HeaderFooterType};
+
+/// Collected header/footer entries with their DOCY type and global index.
+pub struct HdrFtrEntry {
+    pub node_id: NodeId,
+    pub docy_type: u8, // HdrFtr_First=2, HdrFtr_Even=3, HdrFtr_Odd=4
+}
+
+/// Collect all headers and footers from all sections into flat lists.
+/// Returns (headers, footers) — the index in each list is what section properties reference.
+pub fn collect(model: &DocumentModel) -> (Vec<HdrFtrEntry>, Vec<HdrFtrEntry>) {
+    let mut headers = Vec::new();
+    let mut footers = Vec::new();
+
+    for sec in model.sections() {
+        for hf_ref in &sec.headers {
+            let dt = match hf_ref.hf_type {
+                HeaderFooterType::First => hdr_ftr::FIRST,
+                HeaderFooterType::Even => hdr_ftr::EVEN,
+                HeaderFooterType::Default => hdr_ftr::ODD,
+                _ => hdr_ftr::ODD,
+            };
+            headers.push(HdrFtrEntry { node_id: hf_ref.node_id, docy_type: dt });
+        }
+        for hf_ref in &sec.footers {
+            let dt = match hf_ref.hf_type {
+                HeaderFooterType::First => hdr_ftr::FIRST,
+                HeaderFooterType::Even => hdr_ftr::EVEN,
+                HeaderFooterType::Default => hdr_ftr::ODD,
+                _ => hdr_ftr::ODD,
+            };
+            footers.push(HdrFtrEntry { node_id: hf_ref.node_id, docy_type: dt });
+        }
+    }
+
+    (headers, footers)
+}
 
 pub fn has_content(model: &DocumentModel) -> bool {
-    let root = match model.root_node() {
-        Some(n) => n,
-        None => return false,
-    };
-    root.children.iter().any(|id| {
-        model.node(*id).map_or(false, |n| {
-            n.node_type == NodeType::Header || n.node_type == NodeType::Footer
-        })
-    })
+    let (h, f) = collect(model);
+    !h.is_empty() || !f.is_empty()
 }
 
 pub fn write(w: &mut DocyWriter, model: &DocumentModel) {
     let len_pos = w.begin_length_block();
-
-    // Collect headers and footers from document root children
-    let root = match model.root_node() {
-        Some(n) => n,
-        None => { w.end_length_block(len_pos); return; }
-    };
-
-    let mut headers: Vec<NodeId> = Vec::new();
-    let mut footers: Vec<NodeId> = Vec::new();
-
-    for child_id in &root.children {
-        if let Some(child) = model.node(*child_id) {
-            match child.node_type {
-                NodeType::Header => headers.push(*child_id),
-                NodeType::Footer => footers.push(*child_id),
-                _ => {}
-            }
-        }
-    }
+    let (headers, footers) = collect(model);
 
     // Write headers
     if !headers.is_empty() {
         w.write_item(hdr_ftr::HEADER, |w| {
-            // Write as "odd" (default) header
-            for hdr_id in &headers {
-                w.write_item(hdr_ftr::ODD, |w| {
+            for entry in &headers {
+                w.write_item(entry.docy_type, |w| {
                     w.write_item(hdr_ftr::CONTENT, |w| {
-                        write_hdr_ftr_content(w, model, *hdr_id);
+                        write_hdr_ftr_content(w, model, entry.node_id);
                     });
                 });
             }
@@ -54,10 +64,10 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel) {
     // Write footers
     if !footers.is_empty() {
         w.write_item(hdr_ftr::FOOTER, |w| {
-            for ftr_id in &footers {
-                w.write_item(hdr_ftr::ODD, |w| {
+            for entry in &footers {
+                w.write_item(entry.docy_type, |w| {
                     w.write_item(hdr_ftr::CONTENT, |w| {
-                        write_hdr_ftr_content(w, model, *ftr_id);
+                        write_hdr_ftr_content(w, model, entry.node_id);
                     });
                 });
             }
@@ -72,13 +82,20 @@ fn write_hdr_ftr_content(w: &mut DocyWriter, model: &DocumentModel, node_id: Nod
         Some(n) => n,
         None => return,
     };
-    // Header/footer children are paragraphs
     for child_id in &node.children {
         if let Some(child) = model.node(*child_id) {
-            if child.node_type == NodeType::Paragraph {
-                w.write_item(crate::constants::par::PAR, |w| {
-                    content::paragraph::write(w, model, *child_id);
-                });
+            match child.node_type {
+                NodeType::Paragraph => {
+                    w.write_item(crate::constants::par::PAR, |w| {
+                        content::paragraph::write(w, model, *child_id);
+                    });
+                }
+                NodeType::Table => {
+                    w.write_item(crate::constants::par::TABLE, |w| {
+                        content::table::write(w, model, *child_id);
+                    });
+                }
+                _ => {}
             }
         }
     }

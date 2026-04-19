@@ -1,9 +1,8 @@
 use crate::constants::{sig, DOCY_VERSION};
 use crate::writer::DocyWriter;
 
-/// Signature table: NO length prefix. Just raw property bytes.
-/// Known-working format: [00][04][05000000] = 6 bytes
+/// Signature table — sdkjs skips this but we write it for completeness.
+/// The sdkjs writer uses Read2 format (WriteByte+lenType+WriteLong).
 pub fn write(w: &mut DocyWriter) {
-    // NO begin_length_block here — signature has no length prefix
     w.write_prop_long(sig::VERSION, DOCY_VERSION);
 }

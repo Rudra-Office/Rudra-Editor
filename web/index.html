@@ -253,7 +253,34 @@
       // checkBodyOffset() but only on Resize. We patch ConvertCoordsFromCursor2
       // to always refresh the offset before conversion.
 
-      // Patch 1: Font name lookup — g_fonts_selection_bin is empty so
+      // Patch: Prevent AddLoadFonts crash for unknown font names
+      var _origAddLoadFonts = AscCommon.g_font_loader.AddLoadFonts;
+      AscCommon.g_font_loader.AddLoadFonts = function(name, need_styles) {
+        var fi = AscFonts.g_fontApplication.GetFontInfo(name);
+        if (!fi) {
+          // Unknown font — use Arial's fontinfo as fallback
+          fi = AscFonts.g_fontApplication.GetFontInfo("Arial");
+          if (!fi) return undefined;
+          this.fonts_loading.push(fi);
+          fi.NeedStyles = (need_styles === undefined) ? 0x0F : need_styles;
+          return fi;
+        }
+        return _origAddLoadFonts.call(this, name, need_styles);
+      };
+
+      // Patch: Prevent LoadFont crash for missing g_font_infos entries
+      var _origLoadFont = AscFonts.g_fontApplication.LoadFont;
+      if (_origLoadFont) {
+        AscFonts.g_fontApplication.LoadFont = function() {
+          try { return _origLoadFont.apply(this, arguments); }
+          catch(e) {
+            try { return _origLoadFont.call(this, "Arial", arguments[1], arguments[2], arguments[3], arguments[4], arguments[5], arguments[6]); }
+            catch(e2) { return null; }
+          }
+        };
+      }
+
+      // Patch: Font name lookup — g_fonts_selection_bin is empty so
       // GetFontFileWeb always returns ASCW3. Override to use g_map_font_index.
       var origGetFontFileWeb = AscFonts.g_fontApplication.GetFontFileWeb;
       AscFonts.g_fontApplication.GetFontFileWeb = function(name, lStyle) {
@@ -263,14 +290,12 @@
           this.FontPickerMap[name] = result;
           return result;
         }
-        // Fallback unknown fonts to Arial
-        idx = AscFonts.g_map_font_index["Arial"];
-        if (idx !== undefined) {
-          var result = { m_wsFontName: "Arial", m_wsFontPath: "", m_lIndex: 0 };
-          this.FontPickerMap[name] = result;
-          return result;
-        }
-        return origGetFontFileWeb.call(this, name, lStyle);
+        // Fallback unknown fonts to Arial Unicode MS (index 29) for CJK support
+        var fallbackIdx = AscFonts.g_map_font_index["Arial Unicode MS"];
+        var fallback = (fallbackIdx !== undefined) ? 29 : 0;
+        var result = { m_wsFontName: "Arial Unicode MS", m_wsFontPath: "", m_lIndex: fallback };
+        this.FontPickerMap[name] = result;
+        return result;
       };
 
       // Patch 2: checkStreamSignature fails for strings — getEmpty() returns

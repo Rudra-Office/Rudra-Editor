@@ -40,8 +40,11 @@ fn write_default_normal_style(w: &mut DocyWriter, model: &DocumentModel) {
     w.write_item(style::STYLE, |w| {
         w.write_string_item(style::STYLE_ID, "Normal");
         w.write_string_item(style::STYLE_NAME, "Normal");
-        w.write_prop_byte(style::STYLE_TYPE, 3); // paragraph
-        w.write_prop_bool(style::STYLE_DEFAULT, true);
+        // Style fields use Read1 (WriteItem), NOT Read2 (WriteProp)
+        w.write_item(style::STYLE_TYPE, |w| w.write_byte(3)); // paragraph
+        w.write_item(style::STYLE_DEFAULT, |w| w.write_bool(true));
+        w.write_item(style::STYLE_Q_FORMAT, |w| w.write_bool(true));
+        w.write_item(style::STYLE_UI_PRIORITY, |w| w.write_long(0));
 
         // Default paragraph props
         w.write_item(style::STYLE_PARA_PR, |w| {
@@ -65,13 +68,15 @@ fn write_heading_styles(w: &mut DocyWriter) {
             let name = format!("heading {}", level);
             w.write_string_item(style::STYLE_ID, &id);
             w.write_string_item(style::STYLE_NAME, &name);
-            w.write_prop_byte(style::STYLE_TYPE, 3); // paragraph
+            w.write_item(style::STYLE_TYPE, |w| w.write_byte(3)); // paragraph
             w.write_string_item(style::STYLE_BASED_ON, "Normal");
             w.write_string_item(style::STYLE_NEXT, "Normal");
+            w.write_item(style::STYLE_Q_FORMAT, |w| w.write_bool(true));
+            w.write_item(style::STYLE_UI_PRIORITY, |w| w.write_long(9));
 
             // Paragraph props: outline level
             w.write_item(style::STYLE_PARA_PR, |w| {
-                w.write_prop_byte(ppr::OUTLINE_LVL, level - 1);
+                w.write_prop_long(ppr::OUTLINE_LVL, (level - 1) as u32);
                 w.write_prop_bool(ppr::KEEP_NEXT, true);
                 w.write_prop_bool(ppr::KEEP_LINES, true);
             });
@@ -90,42 +95,45 @@ fn write_heading_styles(w: &mut DocyWriter) {
 
 fn write_style(w: &mut DocyWriter, s: &s1_model::Style) {
     w.write_item(style::STYLE, |w| {
-        // Style ID
+        // Style ID (WriteString2)
         w.write_string_item(style::STYLE_ID, &s.id);
 
-        // Style name
+        // Style name (WriteString2)
         w.write_string_item(style::STYLE_NAME, &s.name);
 
-        // Type (1=Char, 2=Num, 3=Para, 4=Tbl)
+        // Type — WriteItem (Read1), NOT WriteProp (Read2)
         let type_byte = match s.style_type {
             s1_model::StyleType::Character => 1,
             s1_model::StyleType::List => 2,
             s1_model::StyleType::Paragraph => 3,
             s1_model::StyleType::Table => 4, _ => 3,
         };
-        w.write_prop_byte(style::STYLE_TYPE, type_byte);
+        w.write_item(style::STYLE_TYPE, |w| w.write_byte(type_byte));
 
-        // Based on
+        // Based on (WriteString2)
         if let Some(ref parent) = s.parent_id {
             w.write_string_item(style::STYLE_BASED_ON, parent);
         }
 
-        // Next style
+        // Next style (WriteString2)
         if let Some(ref next) = s.next_style_id {
             w.write_string_item(style::STYLE_NEXT, next);
         }
 
-        // Default flag
+        // Default flag — WriteItem (Read1)
         if s.is_default {
-            w.write_prop_bool(style::STYLE_DEFAULT, true);
+            w.write_item(style::STYLE_DEFAULT, |w| w.write_bool(true));
         }
 
-        // Paragraph properties from style attributes
+        // qFormat — WriteItem (Read1)
+        w.write_item(style::STYLE_Q_FORMAT, |w| w.write_bool(true));
+
+        // Paragraph properties (WriteItem → content uses Read2 for props)
         w.write_item(style::STYLE_PARA_PR, |w| {
             props::para_props::write(w, &s.attributes);
         });
 
-        // Run/text properties from style attributes
+        // Run/text properties (WriteItem → content uses Read2 for props)
         w.write_item(style::STYLE_TEXT_PR, |w| {
             props::run_props::write(w, &s.attributes);
         });

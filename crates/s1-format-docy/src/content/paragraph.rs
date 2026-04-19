@@ -1,11 +1,27 @@
 use crate::constants::*;
 use crate::writer::DocyWriter;
 use crate::props;
-use s1_model::{AttributeKey, DocumentModel, NodeType, NodeId};
+use s1_model::{AttributeKey, AttributeValue, DocumentModel, NodeType, NodeId};
 use base64::engine::Engine as _;
 
+use crate::tables::headers_footers::HdrFtrEntry;
+use s1_model::SectionProperties;
+
 /// Write a complete paragraph: pPr + content (runs, breaks, images, etc.)
+/// If `sect_pr` is Some, the section properties are written inside pPr
+/// (this is how sdkjs handles mid-document section breaks).
 pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
+    write_with_section(w, model, para_id, None, &[], &[]);
+}
+
+pub fn write_with_section(
+    w: &mut DocyWriter,
+    model: &DocumentModel,
+    para_id: NodeId,
+    sect_pr: Option<&SectionProperties>,
+    all_headers: &[HdrFtrEntry],
+    all_footers: &[HdrFtrEntry],
+) {
     let para = match model.node(para_id) {
         Some(n) => n,
         None => return,
@@ -14,22 +30,64 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
     // Paragraph properties
     w.write_item(par::PPR, |w| {
         props::para_props::write(w, &para.attributes);
+        // Mid-document section properties inside pPr (sdkjs c_oSerProp_pPrType.SectPr=31)
+        if let Some(sec) = sect_pr {
+            w.write_prop_item(ppr::PPR_SECT_PR, |w| {
+                crate::content::section::write_with_hdr_ftr(w, sec, all_headers, all_footers);
+            });
+        }
     });
 
-    // Content
+    // Content — group consecutive runs with the same HyperlinkUrl
     w.write_item(par::CONTENT, |w| {
-        for child_id in &para.children {
-            let child = match model.node(*child_id) {
+        let children: Vec<NodeId> = para.children.clone();
+        let mut i = 0;
+        while i < children.len() {
+            let child_id = children[i];
+            let child = match model.node(child_id) {
                 Some(n) => n,
-                None => continue,
+                None => { i += 1; continue; }
             };
 
             match child.node_type {
                 NodeType::Run => {
-                    // Runs in paragraph Content use c_oSerParType.Run (5),
-                    // NOT c_oSerRunType.run (0).
+                    // Check for hyperlink
+                    if let Some(url) = child.attributes.get_string(&AttributeKey::HyperlinkUrl) {
+                        let url = url.to_string();
+                        let start = i;
+                        // Collect consecutive runs with same URL
+                        while i < children.len() {
+                            if let Some(n) = model.node(children[i]) {
+                                if n.node_type == NodeType::Run
+                                    && n.attributes.get_string(&AttributeKey::HyperlinkUrl)
+                                        == Some(&url)
+                                {
+                                    i += 1;
+                                    continue;
+                                }
+                            }
+                            break;
+                        }
+                        // Write hyperlink wrapper
+                        w.write_item(par::HYPERLINK, |w| {
+                            if url.starts_with('#') {
+                                w.write_string_item(hyperlink::ANCHOR, &url[1..]);
+                            } else {
+                                w.write_string_item(hyperlink::LINK, &url);
+                            }
+                            w.write_item(hyperlink::CONTENT, |w| {
+                                for &run_id in &children[start..i] {
+                                    w.write_item(par::RUN, |w| {
+                                        write_run_content(w, model, run_id);
+                                    });
+                                }
+                            });
+                        });
+                        continue; // i already advanced
+                    }
+                    // Normal run (not a hyperlink)
                     w.write_item(par::RUN, |w| {
-                        write_run_content(w, model, *child_id);
+                        write_run_content(w, model, child_id);
                     });
                 }
                 NodeType::LineBreak => {
@@ -64,22 +122,75 @@ pub fn write(w: &mut DocyWriter, model: &DocumentModel, para_id: NodeId) {
                     // Image drawing serialization disabled — format doesn't match
                     // sdkjs pptxDrawing structure yet. Skip silently.
                 }
-                NodeType::BookmarkStart => {}
-                NodeType::BookmarkEnd => {}
-                NodeType::CommentStart => {}
-                NodeType::CommentEnd => {}
+                NodeType::BookmarkStart => {
+                    // Bookmark: Read1 format. ID=WriteItem(0, Long), Name=WriteByte(1)+WriteString2
+                    if let Some(name) = child.attributes.get_string(&AttributeKey::BookmarkName) {
+                        w.write_item(par::BOOKMARK_START, |w| {
+                            w.write_item(bookmark::ID, |w| {
+                                w.write_long(child_id.counter as u32);
+                            });
+                            w.write_string_item(bookmark::NAME, name);
+                        });
+                    }
+                }
+                NodeType::BookmarkEnd => {
+                    w.write_item(par::BOOKMARK_END, |w| {
+                        w.write_item(bookmark::ID, |w| {
+                            w.write_long(child_id.counter as u32);
+                        });
+                    });
+                }
+                NodeType::CommentStart => {
+                    // Comment anchor: Read1 format. c_oSer_CommentsType.Id = 1
+                    if let Some(AttributeValue::Int(cid)) = child.attributes.get(&AttributeKey::CommentId) {
+                        w.write_item(par::COMMENT_START, |w| {
+                            w.write_item(comments::ID, |w| {
+                                w.write_long(*cid as u32);
+                            });
+                        });
+                    }
+                }
+                NodeType::CommentEnd => {
+                    if let Some(AttributeValue::Int(cid)) = child.attributes.get(&AttributeKey::CommentId) {
+                        w.write_item(par::COMMENT_END, |w| {
+                            w.write_item(comments::ID, |w| {
+                                w.write_long(*cid as u32);
+                            });
+                        });
+                    }
+                }
                 NodeType::FootnoteRef => {
-                    // Note references need a stable DOCY note-id mapping. Skip until
-                    // the serializer and note tables share that mapping.
+                    // Note ref: Read1 format. c_oSerNotes.RefId = 5
+                    if let Some(AttributeValue::Int(note_id)) = child.attributes.get(&AttributeKey::FootnoteNumber) {
+                        w.write_item(par::RUN, |w| {
+                            w.write_item(run::CONTENT, |w| {
+                                w.write_item(run::FOOTNOTE_REFERENCE, |w| {
+                                    w.write_item(notes::REF_ID, |w| {
+                                        w.write_long(*note_id as u32);
+                                    });
+                                });
+                            });
+                        });
+                    }
                 }
                 NodeType::EndnoteRef => {
-                    // Note references need a stable DOCY note-id mapping. Skip until
-                    // the serializer and note tables share that mapping.
+                    if let Some(AttributeValue::Int(note_id)) = child.attributes.get(&AttributeKey::EndnoteNumber) {
+                        w.write_item(par::RUN, |w| {
+                            w.write_item(run::CONTENT, |w| {
+                                w.write_item(run::ENDNOTE_REFERENCE, |w| {
+                                    w.write_item(notes::REF_ID, |w| {
+                                        w.write_long(*note_id as u32);
+                                    });
+                                });
+                            });
+                        });
+                    }
                 }
                 _ => {
                     // Skip unsupported inline elements
                 }
             }
+            i += 1;
         }
     });
 }
